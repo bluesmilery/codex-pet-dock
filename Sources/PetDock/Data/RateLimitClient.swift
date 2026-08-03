@@ -21,8 +21,8 @@ protocol RateLimitFetching {
 ///   进程提前退出时快速失败，**不崩**；
 /// - 结束时仅 `isRunning` 才 `terminate` + `waitUntilExit`，回收子进程。
 final class RateLimitClient: RateLimitFetching {
-    /// 启动 codex app-server 的命令。默认经 login shell 以继承用户 PATH（nvm / homebrew 等）。
-    let launchCommand: [String]
+    /// codex 可执行文件解析器（不依赖交互 shell；适配 launchd 启动的 .app 环境找不到 nvm codex 的问题）。
+    let resolver: CodexExecutableResolver
     /// 单次请求超时（秒）。
     let timeout: TimeInterval
 
@@ -30,13 +30,20 @@ final class RateLimitClient: RateLimitFetching {
     private var currentProc: Process?
     private var cancelled = false
 
-    init(launchCommand: [String]? = nil, timeout: TimeInterval = 20) {
-        self.launchCommand = launchCommand ?? ["/bin/sh", "-lc", "exec codex app-server"]
+    init(resolver: CodexExecutableResolver = CodexExecutableResolver(), timeout: TimeInterval = 20) {
+        self.resolver = resolver
         self.timeout = timeout
     }
 
     func readWeekLeft() throws -> WeekLeft {
-        let result = try rpc(method: "account/rateLimits/read", params: [:], id: 2)
+        let exec: URL
+        switch resolver.resolve() {
+        case .success(let url): exec = url
+        case .failure(let e):
+            // 找不到 codex 时返回可解释错误（WEEK TOKENS 不受影响，仍由本机日志独立工作）。
+            throw DataError.msg("找不到 codex 可执行文件：\(e)（可设置环境变量 \(CodexExecutableResolver.envOverride) 为绝对路径）")
+        }
+        let result = try rpc(executable: exec, method: "account/rateLimits/read", params: [:], id: 2)
         return try Self.parse(result)
     }
 
@@ -107,11 +114,11 @@ final class RateLimitClient: RateLimitFetching {
     // MARK: - stdio JSON-RPC
 
     /// 发起一次「initialize 握手 → 目标请求」的 JSON-RPC 会话并返回目标 result。
-    private func rpc(method: String, params: Any, id: Int) throws -> Any {
-        guard launchCommand.count >= 1 else { throw DataError.msg("launchCommand 为空") }
+    /// 用绝对 `executableURL` 直接启动 codex（不经 /bin/sh -lc，避免 launchd 环境找不到 nvm codex）。
+    private func rpc(executable: URL, method: String, params: Any, id: Int) throws -> Any {
         let proc = Process()
-        proc.launchPath = launchCommand[0]
-        proc.arguments = Array(launchCommand.dropFirst())
+        proc.executableURL = executable
+        proc.arguments = ["app-server"]
         let stdin = Pipe(), stdout = Pipe()
         proc.standardInput = stdin
         proc.standardOutput = stdout

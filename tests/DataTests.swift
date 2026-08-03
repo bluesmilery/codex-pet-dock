@@ -310,6 +310,75 @@ struct DataTestRunner {
         check("C4 refresh 在途 pause/resume 不死锁（最终完成）", pok, "")
         section("并发")
 
+        // ---- T-resolver: CodexExecutableResolver（env优先/PATH/nvm多版本/不可执行/缺失）----
+        do {
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-resolver-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: tmp)
+            try! FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+            // 在指定 home 下造可执行 / 不可执行文件
+            func makeExec(_ home: URL, _ rel: String) -> URL {
+                let u = home.appendingPathComponent(rel)
+                try! FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: u.path, contents: Data("#!/bin/sh\n".utf8))
+                try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: u.path)
+                return u
+            }
+            func makeNoExec(_ home: URL, _ rel: String) -> URL {
+                let u = home.appendingPathComponent(rel)
+                try! FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: u.path, contents: Data())   // 0644 无 +x
+                return u
+            }
+            func home(_ name: String) -> URL {
+                let h = tmp.appendingPathComponent(name)
+                try! FileManager.default.createDirectory(at: h, withIntermediateDirectories: true)
+                return h
+            }
+
+            // T-r1: env 优先（候选也存在仍选 env）
+            let envHome = home("env")
+            let envExec = makeExec(envHome, "custom/codex")
+            _ = makeExec(envHome, ".local/bin/codex")
+            let r1 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: envExec.path], homeDirectory: envHome)
+            if case .success(let u) = r1.resolve() { check("T-r1 env 优先", u == envExec, "") } else { check("T-r1 env 优先", false) }
+
+            // T-r2: env 不可执行 → overrideNotExecutable（不回退）
+            let noExec = makeNoExec(envHome, "noexec/codex")
+            let r2 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: noExec.path], homeDirectory: envHome)
+            if case .failure = r2.resolve() { check("T-r2 env 不可执行→overrideNotExecutable", true) } else { check("T-r2", false) }
+
+            // T-r3: PATH 命中（home 无候选）
+            let pathHome = home("path")
+            let pathExec = makeExec(pathHome, "pathdir/codex")
+            let r3 = CodexExecutableResolver(environment: ["PATH": pathHome.appendingPathComponent("pathdir").path], homeDirectory: home("empty1"))
+            if case .success(let u) = r3.resolve() { check("T-r3 PATH 命中", u == pathExec, "") } else { check("T-r3 PATH 命中", false) }
+
+            // T-r4: nvm 多版本选最新（语义版本降序；home 无 .local/bin）
+            let nvmHome = home("nvm")
+            _ = makeExec(nvmHome, ".nvm/versions/node/v20.10.0/bin/codex")
+            let newV = makeExec(nvmHome, ".nvm/versions/node/v22.21.1/bin/codex")
+            let r4 = CodexExecutableResolver(environment: [:], homeDirectory: nvmHome)
+            if case .success(let u) = r4.resolve() { check("T-r4 nvm 选最新 v22.21.1", u == newV, u.path) } else { check("T-r4", false) }
+
+            // T-r5: 均缺失 → notFound（依赖本机无 brew codex；codex 实装在 nvm）
+            let r5 = CodexExecutableResolver(environment: [:], homeDirectory: home("empty2"))
+            if case .failure = r5.resolve() { check("T-r5 均缺失→notFound", true) } else { check("T-r5", false) }
+
+            // T-r6: 不可执行文件不被选中（isExecutableFile=false）
+            let badHome = home("bad")
+            let badLocal = makeNoExec(badHome, ".local/bin/codex")
+            check("T-r6 不可执行 isExecutableFile=false",
+                  !CodexExecutableResolver(environment: [:], homeDirectory: badHome).isExecutableFile(badLocal), "")
+
+            // T-r7: compareVersion / versionKey 纯函数
+            check("T-r7a compareVersion v22.21.1>v20.10.0", CodexExecutableResolver.compareVersion("v22.21.1", "v20.10.0") > 0, "")
+            check("T-r7b versionKey v22.21.1=[22,21,1]", CodexExecutableResolver.versionKey("v22.21.1") == [22, 21, 1], "")
+
+            try? FileManager.default.removeItem(at: tmp)
+        }
+        section("codex 路径解析")
+
         print("\n[DataTests] 全部通过")
         exit(fail == 0 ? 0 : 1)
     }

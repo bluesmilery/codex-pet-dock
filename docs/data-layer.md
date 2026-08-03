@@ -54,7 +54,8 @@
 
 | 文件 | 角色 |
 | --- | --- |
-| `RateLimitClient.swift` | `RateLimitFetching` 协议 + `RateLimitClient`（Process + stdio JSON-RPC）。`parse(_:)` 纯函数。 |
+| `CodexExecutableResolver.swift` | codex 绝对路径解析（env 覆盖 > PATH > ~/.local/bin / nvm / volta / brew），不依赖交互 shell。 |
+| `RateLimitClient.swift` | `RateLimitFetching` 协议 + `RateLimitClient`（resolver + Process executableURL + stdio JSON-RPC）。`parse(_:)` 纯函数。 |
 | `TokenUsageLogReader.swift` | `TokenLogReading` 协议 + `TokenUsageLogReader`（按日期桶扫描、只取数值、增量缓存）。`parseLine`/`parseISO` 纯函数。 |
 | `PetDockDataService.swift` | 顶层服务：组合两数据源、各自退避计数、`pause()`/`resume()`（宠物不可见时暂停）。 |
 
@@ -108,8 +109,11 @@ make test-data    # 数据层测试（独立入口 tests/DataTests.swift + tests
 1. **app-server 为 experimental**：协议（`account/rateLimits/read` 字段、`experimentalApi` 握手）可能随
    codex 版本变化；`RateLimitClient.parse` 只取稳定子集（`usedPercent`/`resetsAt`/`windowDurationMins`/`planType`），
    缺失字段降级（`usedPercent` 缺省 0、`resetsAt`/`windowMinutes` 为 nil）。
-2. **codex 不在默认 PATH**：`RateLimitClient` 默认经 login shell（`/bin/sh -lc "exec codex app-server"`）
-   继承 nvm/homebrew PATH；极端环境可注入 `launchCommand`（含完整路径）。
+2. **codex 不在默认 PATH（.app 由 launchd 启动）**：`RateLimitClient` 经 `CodexExecutableResolver`
+   解析 codex 绝对路径（env `CODEX_PET_DOCK_CODEX_PATH` 覆盖 > `PATH` > `~/.local/bin` /
+   `~/.nvm/versions/node/*/bin`（语义版本降序）/ `~/.volta/bin` / `/opt/homebrew/bin` / `/usr/local/bin`），
+   用 `Process.executableURL` 直接启动（**不经 `/bin/sh -lc`**，规避 launchd 环境无 nvm、非交互 shell
+   不读 `~/.zshrc`）。找不到时返回可解释错误（WEEK TOKENS 不受影响，仍由本机日志独立工作）。
 3. **日志格式漂移**：`last_token_usage.total_tokens` 路径或 `timestamp` 精度变化时，`parseLine` 返回 nil
    并跳过（不崩溃）；`parseISO` 已兼容纳秒精度与无小数秒两种形态。
 4. **TCC / 进程权限**：数据层本身不需屏幕录制权限；但 WEEK LEFT 依赖 codex 已登录（`auth.json` 有效），

@@ -11,12 +11,12 @@
 
 ## 测试（已验证，全绿）
 
-`make test` = test-ui + test-data + test-shell，**191 项全部通过，0 failed**。
+`make test` = test-ui + test-data + test-shell，**199 项全部通过，0 failed**。
 
 | 套件 | 项数 | 覆盖 |
 | --- | --- | --- |
 | test-ui | 26 | selectPet 识别 11（Mascot 优先 / 不误绑主窗口 / 滞回 / petShaped）+ Geometry 坐标 4（多屏 / 负坐标）+ Follower 状态机 11（静止 / 移动 / 稳定 / 隐藏 / 重捕 / 频率阶） |
-| test-data | 74 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全 |
+| test-data | 82 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、**codex 路径解析（env/PATH/nvm 多版本/不可执行/缺失）** |
 | test-shell | 91 | Theme 内置 / 外部安全解析（颜色 / 字体 / 徽标 / 危险关键字）、Settings 持久化、ThemeStore fixture 热加载、AutoStart 状态映射 |
 
 纯函数测试（不依赖屏幕录制权限 / 不联网），用 `swiftc` 编译真实源码运行。
@@ -30,6 +30,7 @@ Remove historical SHA, private ref, and internal worker/task provenance while pr
 Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
+- `public-history checkpoint`（base 761a653）：`CodexExecutableResolver` 解析 codex 绝对路径（env 覆盖 > PATH > nvm/volta/brew），`RateLimitClient` 用 `executableURL` 直接启动，修复 .app（launchd 环境）找不到 nvm codex 致 WEEK LEFT 占位。
 
 隐私边界经 fixture 测试固化：结果不含会话正文诱饵、不读 auth / 凭证。
 
@@ -75,3 +76,8 @@ Rewrite matched statement as a synthetic, number-free runtime verification state
 2. 屏幕录制权限是硬前提。
 3. `codex app-server` 为 experimental，协议字段可能随版本变化（已做稳定子集 + 降级）。
 4. 跨应用窗口相对 z-order 不可控（`.floating` level + 几何不重叠降级）。
+5. **codex 路径解析（已修复）**：.app 由 launchd 启动时进程 PATH 无 nvm，`/bin/sh -lc`（非交互 shell
+   不读 `~/.zshrc`）找不到 codex → WEEK LEFT 永久占位。已由 `CodexExecutableResolver`（文件系统查找：
+   env 覆盖 > `PATH` > `~/.local/bin` / `~/.nvm/versions/node/*/bin` / `~/.volta/bin` /
+   `/opt/homebrew/bin` / `/usr/local/bin`，nvm 多版本语义版本降序）+ `RateLimitClient`（`executableURL`
+   直接启动，不经 `/bin/sh -lc`）修复。解析器测试 8 项（env / PATH / nvm 多版本 / 不可执行 / 缺失）。
