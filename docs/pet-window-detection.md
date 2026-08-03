@@ -3,9 +3,9 @@
 > 目标：用公开 API（`CGWindowListCopyWindowInfo` / AppKit）从 `com.openai.codex` 进程名下的窗口里，
 > **选出桌面宠物窗口**，且**绝不误绑主聊天窗口**。规则必须可解释、可记录、可测试。
 >
-> 状态说明：本文档的规则为**候选规则**，基于 Codex 桌面宠物（ChatGPT.app，bundle id `com.openai.codex`）
-> 的公开可观测窗口特征推导。文末「实测确认」表在运行诊断（拿到真实窗口数据）后回填。
-> 阈值常量集中定义在源码 `PetHeuristics`，与本文档一一对应，便于校准与单测。
+> 状态说明：本文档规则**已用真实窗口数据校准**（授权后诊断：`preflight=true`，全局 <N> 窗口、
+> codex 主进程 PID <pid> 名下 18 窗口）。阈值与 R4.0「title 含 Mascot 优先」均经实测确认，见文末「实测确认」。
+> 阈值常量集中定义在源码 `PetHeuristics`，与本文档一一对应。
 
 ## 0. 关键事实（已实测）
 
@@ -68,8 +68,9 @@
 ## 4. 可测试性
 
 `selectPet(candidates, lastWID)` 是纯函数：给定窗口列表，输出唯一选择 + 理由。
-可用构造的 `WinCandidate` 数组做单测（如：主窗口+宠物并存→选宠物；仅主窗口→选 nil；
-两个 layer>0 候选→选 layer 高者）。P0 以诊断输出人工确认，单测留作 P1 固化。
+已用构造的 `WinCandidate` 数组实现纯函数测试 `tests/main.swift`（swiftc 编译真实 `PetTracker`+`Geometry` 源码）：
+主窗口+宠物并存→选宠物、仅主窗口→选 nil、两个 layer>0 候选→选 layer 高者、**Mascot 优先于高 layer 辅助窗**等。
+**本轮 P0 已跑通 selectPet 11/11 + Geometry 4/4**，退出码 0。
 
 ## 5. 实测确认（授权后真实诊断：preflight=true，全局 <N> 窗口，codex 主进程 PID <pid> 名下 18 窗口）
 

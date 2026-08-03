@@ -49,5 +49,5 @@ pkill -f PetDock  # 停止
 
 ## 识别规则（摘要）
 
-归属过滤 → 排除主窗口（layer0 + 大尺寸）→ 滞回沿用上次 → 高 layer 优先 → 宠物尺寸范围。
+归属过滤 → 排除主窗口（layer0 + 大尺寸）→ 滞回沿用上次 → **title 含 "Mascot" 优先（吉祥物本体）** → 高 layer → 宠物尺寸范围；明确排除 Voice Controls Backing / Composition Surface 等辅助窗（实测：吉祥物本体 layer=2 低于其 layer=3 子窗口，单纯"高 layer 优先"会误选）。
 详见 `docs/pet-window-detection.md`。
