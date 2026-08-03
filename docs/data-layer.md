@@ -55,7 +55,7 @@
 | 文件 | 角色 |
 | --- | --- |
 | `CodexExecutableResolver.swift` | codex 绝对路径解析，不依赖交互 shell：env 覆盖（先展开 `~`，随后必须绝对，否则 `overrideNotAbsolute`）> `PATH`（仅绝对目录，跳过空/相对）> `~/.local/bin` / nvm(语义版本降序) / `~/.volta/bin` / 可注入系统候选(brew)；符号链接跟随到目标。 |
-| `RateLimitClient.swift` | `RateLimitFetching` 协议 + `RateLimitClient`（resolver + Process executableURL + stdio JSON-RPC）。`parse(_:)` 纯函数。 |
+| `RateLimitClient.swift` | `RateLimitFetching` 协议 + `RateLimitClient`（resolver + Process executableURL + stdio JSON-RPC）。`parse(_:)`、`childEnvironment(_:)` 纯函数。 |
 | `TokenUsageLogReader.swift` | `TokenLogReading` 协议 + `TokenUsageLogReader`（按日期桶扫描、只取数值、增量缓存）。`parseLine`/`parseISO` 纯函数。 |
 | `PetDockDataService.swift` | 顶层服务：组合两数据源、各自退避计数、`pause()`/`resume()`（宠物不可见时暂停）。 |
 
@@ -114,6 +114,9 @@ make test-data    # 数据层测试（独立入口 tests/DataTests.swift + tests
    `~/.nvm/versions/node/*/bin`（语义版本降序）/ `~/.volta/bin` / `/opt/homebrew/bin` / `/usr/local/bin`），
    用 `Process.executableURL` 直接启动（**不经 `/bin/sh -lc`**，规避 launchd 环境无 nvm、非交互 shell
    不读 `~/.zshrc`）。找不到时返回可解释错误（WEEK TOKENS 不受影响，仍由本机日志独立工作）。
+   **子进程 PATH prepend**：`RateLimitClient.childEnvironment` 把 codex 父目录 prepend 到子进程 `PATH`
+   （去重、保留原 PATH），使 codex 脚本 `#!/usr/bin/env node` 能在子进程找到同目录的 node（nvm：
+   codex 与 node 同在 `~/.nvm/versions/node/*/bin`）。
 3. **日志格式漂移**：`last_token_usage.total_tokens` 路径或 `timestamp` 精度变化时，`parseLine` 返回 nil
    并跳过（不崩溃）；`parseISO` 已兼容纳秒精度与无小数秒两种形态。
 4. **TCC / 进程权限**：数据层本身不需屏幕录制权限；但 WEEK LEFT 依赖 codex 已登录（`auth.json` 有效），

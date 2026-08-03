@@ -405,6 +405,61 @@ struct DataTestRunner {
         }
         section("codex 路径解析")
 
+        // ---- T-env: RateLimitClient.childEnvironment（prepend codex 父目录到 PATH，去重；端到端复现 env node）----
+        do {
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-env-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: tmp)
+            try! FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+            func writeExec(_ url: URL, _ content: String) {
+                try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: url.path, contents: Data(content.utf8))
+                try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            }
+            // 用给定环境运行 exec，返回 stdout（同步等待退出）。
+            func runWithEnv(_ exec: URL, _ env: [String: String]) -> String {
+                let p = Process()
+                p.executableURL = exec
+                p.environment = env
+                let pipe = Pipe(); p.standardOutput = pipe; p.standardError = Pipe()
+                try? p.run(); p.waitUntilExit()
+                return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            }
+
+            // T-env1: prepend 到空 PATH
+            let bin1 = tmp.appendingPathComponent("bin1/codex")
+            let e1 = RateLimitClient.childEnvironment(codexExecutable: bin1, baseEnvironment: ["PATH": ""])
+            check("T-env1 空 PATH→prepend codex 父目录", e1["PATH"] == bin1.deletingLastPathComponent().path, e1["PATH"] ?? "")
+
+            // T-env2: prepend 到已有 PATH（不含 codex 父目录）
+            let bin2 = tmp.appendingPathComponent("bin2/codex")
+            let e2 = RateLimitClient.childEnvironment(codexExecutable: bin2, baseEnvironment: ["PATH": "/usr/bin:/bin"])
+            check("T-env2 prepend 到已有 PATH（去重）",
+                  e2["PATH"] == "\(bin2.deletingLastPathComponent().path):/usr/bin:/bin", e2["PATH"] ?? "")
+
+            // T-env3: 已含 codex 父目录 → 不重复
+            let bin3Dir = tmp.appendingPathComponent("bin3")
+            let bin3 = bin3Dir.appendingPathComponent("codex")
+            let e3 = RateLimitClient.childEnvironment(codexExecutable: bin3, baseEnvironment: ["PATH": "\(bin3Dir.path):/usr/bin"])
+            check("T-env3 已含 codex 父目录→不重复", e3["PATH"] == "\(bin3Dir.path):/usr/bin", e3["PATH"] ?? "")
+
+            // T-env4: 端到端复现 — 假 codex shebang #!/usr/bin/env fake-node + 同目录 fake-node
+            let fakeBin = tmp.appendingPathComponent("fakebin")
+            let fakeCodex = fakeBin.appendingPathComponent("codex")
+            writeExec(fakeCodex, "#!/usr/bin/env fake-node\n")                       // shebang 找 fake-node
+            writeExec(fakeBin.appendingPathComponent("fake-node"), "#!/bin/sh\necho FAKE_NODE_OK\n")
+            // 基线 PATH 不含 fakeBin → env fake-node 找不到 → 失败
+            let baselineOut = runWithEnv(fakeCodex, ["PATH": "/usr/bin:/bin"])
+            check("T-env4b 基线PATH不含→env fake-node 失败", !baselineOut.contains("FAKE_NODE_OK"), baselineOut)
+            // childEnvironment prepend fakeBin → env fake-node 找到同目录 fake-node
+            let childEnv = RateLimitClient.childEnvironment(codexExecutable: fakeCodex, baseEnvironment: ["PATH": "/usr/bin:/bin"])
+            let childOut = runWithEnv(fakeCodex, childEnv)
+            check("T-env4 prepend后 env 找到同目录 fake-node", childOut.contains("FAKE_NODE_OK"), childOut)
+
+            try? FileManager.default.removeItem(at: tmp)
+        }
+        section("子进程环境 prepend")
+
         print("\n[DataTests] 全部通过")
         exit(fail == 0 ? 0 : 1)
     }

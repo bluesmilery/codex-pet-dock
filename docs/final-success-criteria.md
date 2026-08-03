@@ -11,12 +11,12 @@
 
 ## 测试（已验证，全绿）
 
-`make test` = test-ui + test-data + test-shell，**203 项全部通过，0 failed**。
+`make test` = test-ui + test-data + test-shell，**208 项全部通过，0 failed**。
 
 | 套件 | 项数 | 覆盖 |
 | --- | --- | --- |
 | test-ui | 26 | selectPet 识别 11（Mascot 优先 / 不误绑主窗口 / 滞回 / petShaped）+ Geometry 坐标 4（多屏 / 负坐标）+ Follower 状态机 11（静止 / 移动 / 稳定 / 隐藏 / 重捕 / 频率阶） |
-| test-data | 86 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、**codex 路径解析 12 项（env 优先/不可执行/tilde 展开/相对拒绝、PATH 仅绝对跳过空相对、nvm 多版本、缺失、不可执行、symlink）** |
+| test-data | 91 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、**codex 路径解析 12 项 + 子进程 PATH prepend 5 项** |
 | test-shell | 91 | Theme 内置 / 外部安全解析（颜色 / 字体 / 徽标 / 危险关键字）、Settings 持久化、ThemeStore fixture 热加载、AutoStart 状态映射 |
 
 纯函数测试（不依赖屏幕录制权限 / 不联网），用 `swiftc` 编译真实源码运行。
@@ -31,6 +31,7 @@ Remove historical SHA, private ref, and internal worker/task provenance while pr
 Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 - `public-history checkpoint`（base 761a653）：`CodexExecutableResolver` 解析 codex 绝对路径（env 覆盖 > PATH > nvm/volta/brew），`RateLimitClient` 用 `executableURL` 直接启动，修复 .app（launchd 环境）找不到 nvm codex 致 WEEK LEFT 占位。
+- `public-history checkpoint` 子进程 PATH（追加）：`RateLimitClient.childEnvironment` 把 codex 父目录 prepend 到子进程 `PATH`（去重、保留原 PATH），修复 codex 脚本 `#!/usr/bin/env node` 在子进程找不到同目录 node（nvm codex/node 同目录）致 app-server 立即退出。launchd 等价环境（`env -i HOME=~/<user> PATH=/usr/bin:/bin`）脱敏实测 `account/rateLimits/read` 成功。
 
 隐私边界经 fixture 测试固化：结果不含会话正文诱饵、不读 auth / 凭证。
 

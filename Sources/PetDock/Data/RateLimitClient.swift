@@ -111,6 +111,21 @@ final class RateLimitClient: RateLimitFetching {
         return x as? Int64
     }
 
+    // MARK: - 子进程环境构造
+
+    /// 构造 codex 子进程环境：复制 `baseEnvironment`，把 codex 可执行文件**父目录** prepend 到
+    /// `PATH`（去重，保留原 PATH）。使 codex 脚本的 `#!/usr/bin/env node` 能在子进程找到同目录的
+    /// node（nvm：codex 与 node 同在 `~/.nvm/versions/node/*/bin`）。纯函数，便于测试。
+    static func childEnvironment(codexExecutable: URL, baseEnvironment: [String: String]) -> [String: String] {
+        var env = baseEnvironment
+        let binDir = codexExecutable.deletingLastPathComponent().path
+        let existing = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        if !existing.contains(binDir) {
+            env["PATH"] = ([binDir] + existing).joined(separator: ":")
+        }
+        return env
+    }
+
     // MARK: - stdio JSON-RPC
 
     /// 发起一次「initialize 握手 → 目标请求」的 JSON-RPC 会话并返回目标 result。
@@ -119,6 +134,10 @@ final class RateLimitClient: RateLimitFetching {
         let proc = Process()
         proc.executableURL = executable
         proc.arguments = ["app-server"]
+        // 复制当前环境并把 codex 父目录 prepend 到 PATH（去重）：codex 脚本 shebang 经
+        // /usr/bin/env node，需让 env 在子进程找到与 codex 同目录的 node（nvm: 两者同在 .../bin）。
+        proc.environment = Self.childEnvironment(codexExecutable: executable,
+                                                 baseEnvironment: ProcessInfo.processInfo.environment)
         let stdin = Pipe(), stdout = Pipe()
         proc.standardInput = stdin
         proc.standardOutput = stdout
