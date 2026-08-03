@@ -4,18 +4,25 @@ import Foundation
 
 /// 真实数据 Provider：桥接 `PetDockDataService`（WEEK LEFT / WEEK TOKENS）与展示层 `DockSnapshot`。
 ///
-/// **主线程安全**：`currentSnapshot()` 同步返回**主线程缓存**（O(1)，不触发 IO）；真实抓取在
-/// `refresh()` 内以全局队列异步进行（`RateLimitClient` 经 stdio JSON-RPC 可能阻塞数秒乃至超时，
-/// 绝不在主线程调用），完成后切回主线程更新缓存并回调 `onUpdated`，由集成层重渲染 AppKit UI。
+/// **线程安全（单一 serial queue）**：所有共享状态——`cached` 快照、`refreshInFlight`、
+/// `hasPending` / `pendingCompletions`、`isStopped`——与 `PetDockDataService` 共用**同一** private
+/// serial queue（`service.queue`）。慢 IO（RateLimitClient stdio）在 queue 外执行，不阻塞主线程的
+/// `currentSnapshot()` / pause / delay 读取。
 ///
-/// **占位策略**：单源失败时，该源对应字段为 nil（渲染为 `DockSnapshot.placeholder`「—」），
-/// 另一源若成功仍正常展示；两源全失败亦仅全占位，绝不崩溃。
+/// **refresh 合并**：刷新在途（`refreshInFlight`）时，新请求仅置 `hasPending` 并缓存其 completion，
+/// 不再发起并发抓取（`maxConcurrent == 1`）；在途完成后若有 pending，则发起一次「最终刷新」并补发
+/// 所有 pending 的 completion。`stop()`（quit）后拒绝任何新刷新，在途任务完成时不再有 UI 副作用。
 ///
-/// **退避 / 暂停**：刷新间隔与暂停语义直接转发 `PetDockDataService`（两源各自独立计数 / pause-resume）。
+/// **占位策略**：单源失败时该源字段为 nil（渲染为 `DockSnapshot.placeholder`「—」），另一源仍正常展示。
 final class LiveDockProvider: DockModelProvider {
     private let service: PetDockDataService
-    /// 仅在主线程读写的缓存快照（`currentSnapshot()` 直接返回它）。
+    /// 经 queue 保护的缓存快照。
     private var cached: DockSnapshot
+    /// 经 queue 保护的刷新控制状态。
+    private var refreshInFlight = false
+    private var hasPending = false
+    private var pendingCompletions: [() -> Void] = []
+    private var isStopped = false
     /// 主线程回调：缓存更新后通知集成层重渲染（由调用方管理生命周期）。
     var onUpdated: ((DockSnapshot) -> Void)?
 
@@ -24,22 +31,62 @@ final class LiveDockProvider: DockModelProvider {
         self.cached = LiveDockProvider.emptySnapshot
     }
 
-    /// 同步返回缓存（主线程，O(1)，不阻塞）。
-    func currentSnapshot() -> DockSnapshot { cached }
+    /// 与 service 共用的单一 serial queue。
+    private var queue: DispatchQueue { service.queue }
 
-    /// 后台抓取两源 → 切回主线程更新缓存 + 回调。`completion` 恒在主线程调用一次。
+    /// 同步返回缓存（经 queue，O(1)；不触发 IO，不阻塞于慢额度抓取）。
+    func currentSnapshot() -> DockSnapshot { queue.sync { cached } }
+
+    /// 后台抓取两源 → 经 queue 提交缓存 → 切回主线程回调。`completion` 恒在主线程调用一次。
+    /// 在途时合并为 pending（保证 maxConcurrent==1）。
     func refresh(completion: @escaping () -> Void = {}) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            if self.isStopped { self.onMain(completion); return }
+            if self.refreshInFlight {
+                self.hasPending = true
+                self.pendingCompletions.append(completion)
+                return
+            }
+            self.refreshInFlight = true
+            self.startFetch(completion: completion)
+        }
+    }
+
+    /// 停止：拒绝后续刷新；在途任务完成时不再有 UI 副作用。供 quit 调用。
+    func stop() { queue.sync { isStopped = true } }
+
+    /// 执行一次抓取（慢 IO 在 queue 外）并在 queue 内提交结果 / 处理 pending。
+    private func startFetch(completion: @escaping () -> Void) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self = self else { DispatchQueue.main.async { completion() }; return }
+            guard let self else { return }
+            // service.fetch* 各自内部 queue.sync（本线程为 global，非 queue 线程 → 不嵌套死锁）。
             let left = self.service.fetchWeekLeft()
             let tokens = self.service.fetchWeekTokens()
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { completion(); return }
+            self.queue.async { [weak self] in
+                guard let self else { return }
+                let stopped = self.isStopped
                 self.cached = LiveDockProvider.buildSnapshot(left: left, tokens: tokens)
-                self.onUpdated?(self.cached)
-                completion()
+                let snap = self.cached
+                let pending = self.hasPending
+                let pendings = self.pendingCompletions
+                self.hasPending = false
+                self.pendingCompletions.removeAll()
+                self.refreshInFlight = false
+                self.onMain {
+                    if !stopped { self.onUpdated?(snap) }
+                    completion()
+                    pendings.forEach { $0() }   // 补发所有 pending 的 completion
+                }
+                // pending 最终刷新（在途期间数据可能已变）；仍在 queue 线程，refresh 内为 async 不嵌套。
+                if pending && !stopped { self.refresh(completion: {}) }
             }
         }
+    }
+
+    /// 在主线程执行 block（已是主线程则直执）。
+    private func onMain(_ block: @escaping () -> Void) {
+        if Thread.isMainThread { block() } else { DispatchQueue.main.async(execute: block) }
     }
 
     // MARK: - 退避 / 暂停（转发 service）

@@ -8,6 +8,24 @@ struct MockOKRateLimit: RateLimitFetching {
     func readWeekLeft() throws -> WeekLeft { WeekLeft(usedPercent: 30, resetsAt: nil, windowMinutes: 10080, planType: "fixture-plan", fetchedAt: Date()) }
 }
 
+/// 可控慢源：阻塞指定时长，记录并发抓取峰值（maxActive）与总调用次数，用于断言 refreshInFlight 合并。
+final class SlowRateLimit: RateLimitFetching {
+    let delay: TimeInterval
+    private let lock = NSLock()
+    private var active = 0
+    private(set) var maxActive = 0
+    private(set) var callCount = 0
+    init(delay: TimeInterval) { self.delay = delay }
+    func readWeekLeft() throws -> WeekLeft {
+        lock.lock(); active += 1; callCount += 1
+        if active > maxActive { maxActive = active }
+        lock.unlock()
+        Thread.sleep(forTimeInterval: delay)
+        lock.lock(); active -= 1; lock.unlock()
+        return WeekLeft(usedPercent: 40, resetsAt: nil, windowMinutes: 10080, planType: "fixture-plan", fetchedAt: Date())
+    }
+}
+
 @main
 struct DataTestRunner {
     static var pass = 0
@@ -20,6 +38,16 @@ struct DataTestRunner {
     static func section(_ name: String) {
         print("\n[\(name)] \(pass) passed, \(fail) failed")
         pass = 0; fail = 0
+    }
+
+    /// 在主线程 pump RunLoop 的同时轮询 pred（completion 经 main 派发，避免死锁）。超时返回 pred()。
+    static func waitPumpingMain(_ pred: () -> Bool, timeout: TimeInterval = 10) -> Bool {
+        let end = Date(timeIntervalSinceNow: timeout)
+        while Date() < end {
+            if pred() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.005))
+        }
+        return pred()
     }
 
     static func main() {
@@ -176,6 +204,35 @@ struct DataTestRunner {
               && LiveDockProvider.formatTokens(1_590_000_000) == "1.59B", "")
         check("T12r formatPercent=25%", LiveDockProvider.formatPercent(250, of: 1000) == "25%", "")
         section("LiveDockProvider 映射")
+
+        // ---- C: 并发（refreshInFlight 合并 / maxConcurrent=1 / pending 最终刷新 / pause-resume 安全）----
+        // completion 经 main 派发，故用 waitPumpingMain 在主线程 pump RunLoop 等待，避免死锁。
+        let slow = SlowRateLimit(delay: 0.15)
+        let svcC = PetDockDataService(rateLimit: slow, tokenLog: TokenUsageLogReader(sessionsRoot: fixtureRoot))
+        let prov = LiveDockProvider(service: svcC)
+        let cg = DispatchGroup()
+        for _ in 0..<3 {
+            cg.enter()
+            prov.refresh { cg.leave() }   // 三连 refresh：首次在途，后两次合并 pending
+        }
+        let cok = Self.waitPumpingMain({ cg.wait(timeout: .now()) == .success }, timeout: 10)
+        check("C1 三连 refresh completion 全部到达（无悬挂）", cok, "")
+        check("C2 maxConcurrent==1（refreshInFlight 合并）", slow.maxActive == 1, "maxActive=\(slow.maxActive)")
+        // C3: pending 最终刷新是异步的（C1 完成后才启动 startFetch#2），轮询等待其 readWeekLeft 发生。
+        let c3ok = Self.waitPumpingMain({ slow.callCount >= 2 }, timeout: 10)
+        check("C3 pending 最终刷新 callCount>=2", c3ok, "callCount=\(slow.callCount)")
+
+        // C4: refresh 在途期间 pause/resume（经同一 queue，不阻塞慢 IO、不死锁），最终仍完成。
+        let slow2 = SlowRateLimit(delay: 0.2)
+        let svcP = PetDockDataService(rateLimit: slow2, tokenLog: TokenUsageLogReader(sessionsRoot: fixtureRoot))
+        let provP = LiveDockProvider(service: svcP)
+        var pDone = false
+        provP.refresh { pDone = true }
+        provP.pause()
+        provP.resume()
+        let pok = Self.waitPumpingMain({ pDone }, timeout: 10)
+        check("C4 refresh 在途 pause/resume 不死锁（最终完成）", pok, "")
+        section("并发")
 
         print("\n[DataTests] 全部通过")
         exit(fail == 0 ? 0 : 1)

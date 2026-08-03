@@ -155,10 +155,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 退出：停止热加载与数据探测后真正终止进程。
+    /// 退出：停止热加载、取消数据调度、停止数据探测（拒绝后续刷新 / 在途任务无 UI 副作用）后终止进程。
     private func quit() {
         themeStore?.stop()
-        provider.pause()
+        stopDataRefresh()
+        provider.stop()
         log("quit")
         NSApplication.shared.terminate(nil)
     }
