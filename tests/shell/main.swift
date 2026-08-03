@@ -26,8 +26,8 @@ check("含 holographic/warmGold/circuit",
       ids == ["builtin.holographic", "builtin.warmGold", "builtin.circuit"], "\(ids)")
 check("全部 isBuiltin", Theme.builtins.allSatisfy { $0.isBuiltin })
 check("defaultID 指向 holographic", Theme.defaultID == "builtin.holographic")
-check("共享 dockWidth=180", ThemeMetrics.dockWidth == 180)
-check("共享 dockHeight=30", ThemeMetrics.dockHeight == 30)
+check("共享 dockWidth=200（与 DockPanel 一致）", ThemeMetrics.dockWidth == 200)
+check("共享 dockHeight=48（与 DockPanel 一致）", ThemeMetrics.dockHeight == 48)
 check("共享 gap=2", ThemeMetrics.gap == 2)
 check("3 款背景 alpha 一致(0.55)", Theme.builtins.allSatisfy { abs($0.metrics.background.a - 0.55) < 1e-9 })
 check("3 款颜色分量均 ∈[0,1]", Theme.builtins.allSatisfy {

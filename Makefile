@@ -2,7 +2,7 @@ BINARY := .build/release/PetDock
 APP    := build/PetDock.app
 IDENT  := io.github.bluesmilery.codexpetdock
 
-.PHONY: build app run diagnose clean clean-logs test-data
+.PHONY: build app run diagnose clean clean-logs test test-ui test-data test-shell
 
 build:
 	swift build -c release
@@ -35,8 +35,23 @@ clean:
 clean-logs:
 	rm -f /tmp/petdock.log /tmp/petdock-diagnose.txt
 
+# UI 测试：selectPet 识别 + Geometry 坐标 + Follower 状态机（纯函数，需 Cocoa）。
+test-ui:
+	swiftc tests/main.swift Sources/PetDock/PetTracker.swift Sources/PetDock/Geometry.swift Sources/PetDock/Follower.swift -framework Cocoa -o /tmp/petdock-uitests
+	/tmp/petdock-uitests
+
 # 数据层测试（独立入口 + fixture，不依赖屏幕录制权限 / 不联网）。
-# 注意：tests/DataTests.swift 用 @main，须作为编译入口与 Sources/PetDock/Data/*.swift 一同编译。
+# 注意：tests/DataTests.swift 用 @main，须作为编译入口与 Sources/PetDock/Data/*.swift + DockModel.swift
+# （LiveDockProvider 映射测试依赖 DockSnapshot）一同编译。
 test-data:
-	swiftc Sources/PetDock/Data/*.swift tests/DataTests.swift -o /tmp/petdock-datatests
+	swiftc Sources/PetDock/Data/*.swift Sources/PetDock/DockModel.swift tests/DataTests.swift -o /tmp/petdock-datatests
 	/tmp/petdock-datatests
+
+# Shell 测试：Theme/Settings/ThemeStore/AutoStart 纯函数 + fixture（需 Cocoa + ServiceManagement）。
+test-shell:
+	swiftc tests/shell/main.swift Sources/PetDock/Theme.swift Sources/PetDock/Settings.swift Sources/PetDock/AutoStart.swift -framework Cocoa -framework ServiceManagement -o /tmp/petdock-shelltests
+	/tmp/petdock-shelltests
+
+# 全量测试：UI + 数据(含 LiveDockProvider 映射) + Shell。
+test: test-ui test-data test-shell
+	@echo "全部测试通过"

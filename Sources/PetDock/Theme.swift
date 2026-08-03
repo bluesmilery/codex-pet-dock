@@ -47,9 +47,9 @@ struct ThemeMetrics: Equatable {
     let borderWidth: Double
     let font: ThemeFont
 
-    /// 共享几何槽位（与 DockPanel 常量一致）。主题不得改变它。
-    static let dockWidth: Double = 180
-    static let dockHeight: Double = 30
+    /// 共享几何槽位（与 DockPanel / DockView 实际尺寸一致）。主题不得改变它。
+    static let dockWidth: Double = 200
+    static let dockHeight: Double = 48
     static let gap: Double = 2
 }
 

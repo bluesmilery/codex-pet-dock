@@ -53,11 +53,18 @@ final class PetDockDataService {
         do {
             // 协议要求非 mutating；底层 mutating 实现在 existential 副本上运行，
             // 增量缓存经落盘文件跨次 / 跨进程生效，进程内副本无需写回。
-            let points = try tokenLog.readPoints(from: from, to: to)
-            let total = points.reduce(Int64(0)) { $0 + $1.tokens }
+            let window = try tokenLog.readPoints(from: from, to: to)
+            let pts = window.points
             weekTokensFailures = 0
-            return .success(WeekTokens(totalTokens: total, windowStart: from, windowEnd: to,
-                                       sampleCount: points.count, fetchedAt: to))
+            return .success(WeekTokens(
+                totalTokens: pts.reduce(Int64(0)) { $0 + $1.tokens },
+                inputTokens: pts.reduce(Int64(0)) { $0 + $1.input },
+                cachedInputTokens: pts.reduce(Int64(0)) { $0 + $1.cached },
+                outputTokens: pts.reduce(Int64(0)) { $0 + $1.output },
+                windowStart: from, windowEnd: to,
+                sampleCount: pts.count,
+                sessionFileCount: window.sessionFileCount,
+                fetchedAt: to))
         } catch {
             weekTokensFailures += 1
             return .failure(DataError(message: "WEEK TOKENS 获取失败", underlying: error))

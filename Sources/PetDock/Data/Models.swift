@@ -42,24 +42,43 @@ struct WeekLeft {
 
 // MARK: - WEEK TOKENS（本机周统计）
 
-/// WEEK TOKENS：本机本周累计 token。来自会话日志 Σ `last_token_usage.total_tokens`
+/// WEEK TOKENS：本机本周累计 token。来自会话日志 Σ `last_token_usage.*`
 /// （单次增量，已验证 Σ last = 会话累计，跨会话求和不重复）。**不含任何会话正文**。
 struct WeekTokens {
-    /// 窗口内累计 token。
+    /// 窗口内累计 total_tokens。
     let totalTokens: Int64
+    /// Σ input_tokens（缺字段按 0）。
+    let inputTokens: Int64
+    /// Σ cached_input_tokens（缺字段按 0）。
+    let cachedInputTokens: Int64
+    /// Σ output_tokens（缺字段按 0）。
+    let outputTokens: Int64
     /// 统计窗口起（now - weekWindowDays）。
     let windowStart: Date
     /// 统计窗口止（now）。
     let windowEnd: Date
-    /// 纳入统计的 event_msg 条数。
+    /// 含 token 的事件点数（**非会话数**：一次会话可产生多点）。
     let sampleCount: Int
+    /// 本周含 token 事件的**唯一会话文件**数（真实会话数）。
+    let sessionFileCount: Int
     let fetchedAt: Date
 }
 
-/// 单条 token 增量：仅 timestamp + last_token_usage.total_tokens。不含正文，可安全缓存。
+/// 本机 token 窗口聚合：事件点 + 唯一会话文件数（供 Service 组装 WeekTokens）。
+struct TokenWindow {
+    /// 窗口内 [from, to] 的 token 事件点。
+    let points: [TokenUsagePoint]
+    /// 贡献了至少一个窗口内点的唯一 rollout 文件数。
+    let sessionFileCount: Int
+}
+
+/// 单条 token 增量：仅 timestamp + last_token_usage 的 4 个数值字段。不含正文，可安全缓存。
 struct TokenUsagePoint: Codable, Equatable {
     let timestamp: Date
-    let tokens: Int64
+    let tokens: Int64           // total_tokens（缺则 0）
+    let input: Int64            // input_tokens（缺则 0）
+    let cached: Int64           // cached_input_tokens（缺则 0）
+    let output: Int64           // output_tokens（缺则 0）
 }
 
 // MARK: - 退避（纯函数，便于测试）

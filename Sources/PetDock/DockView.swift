@@ -52,11 +52,44 @@ final class DockView: NSView {
         tokensValue.stringValue = s.rendered(s.weekTokens)
     }
 
+    /// 应用主题指标（背景/圆角/边框/文字色/字体），即时换皮不改变几何。
+    func applyTheme(_ m: ThemeMetrics) {
+        layer?.backgroundColor = m.background.nsColor.cgColor
+        layer?.cornerRadius = m.cornerRadius
+        layer?.borderWidth = m.borderWidth
+        layer?.borderColor = m.accent.nsColor.cgColor
+        let label = m.label.nsColor
+        let dim = label.withAlphaComponent(0.6)
+        leftCaption.textColor = dim
+        tokensCaption.textColor = dim
+        leftValue.textColor = label
+        tokensValue.textColor = label
+        leftCaption.font = DockView.font(m.font, caption: true)
+        tokensCaption.font = DockView.font(m.font, caption: true)
+        leftValue.font = DockView.font(m.font, caption: false)
+        tokensValue.font = DockView.font(m.font, caption: false)
+    }
+
     override func mouseDown(with event: NSEvent) {
         onTap?()
     }
 
     // MARK: - 工厂
+
+    /// 主题字体 token → 系统字体（system/rounded/monospace），caption 与 value 区分字号/字重。
+    private static func font(_ token: ThemeFont, caption: Bool) -> NSFont {
+        let size: CGFloat = caption ? 9 : 15
+        let weight: NSFont.Weight = caption ? .medium : .semibold
+        switch token {
+        case .system:     return .systemFont(ofSize: size, weight: weight)
+        case .monospace:  return .monospacedSystemFont(ofSize: size, weight: weight)
+        case .rounded:
+            let desc = NSFont.systemFont(ofSize: size, weight: weight)
+                .fontDescriptor.withDesign(.rounded)
+            return desc.flatMap { NSFont(descriptor: $0, size: size) }
+                ?? .systemFont(ofSize: size, weight: weight)
+        }
+    }
 
     private static func captionLabel(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)

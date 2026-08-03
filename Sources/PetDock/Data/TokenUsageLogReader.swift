@@ -4,9 +4,9 @@ import Foundation
 
 /// 本机会话日志 token 读取接口，便于注入 fixture 目录测试。
 protocol TokenLogReading {
-    /// 读取 [from, to] 时间窗口内的 token 增量点（仅 timestamp + total_tokens）。不含正文。
+    /// 读取 [from, to] 时间窗口内的 token 聚合（事件点 + 唯一会话文件数）。不含正文。
     /// 标记 mutating：实现维护进程内增量缓存（按文件 size 复用解析结果）。
-    mutating func readPoints(from: Date, to: Date) throws -> [TokenUsagePoint]
+    mutating func readPoints(from: Date, to: Date) throws -> TokenWindow
 }
 
 /// 解析 `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`。
@@ -45,22 +45,29 @@ struct TokenUsageLogReader: TokenLogReading {
         self.memCache = loaded
     }
 
-    mutating func readPoints(from: Date, to: Date) throws -> [TokenUsagePoint] {
+    mutating func readPoints(from: Date, to: Date) throws -> TokenWindow {
         var all: [TokenUsagePoint] = []
+        var filesWithPoints = Set<String>()
         let fm = FileManager.default
         for file in candidateFiles(from: from, to: to) {
             let size = ((try? fm.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value ?? -1
+            let points: [TokenUsagePoint]
             if size >= 0, let hit = memCache[file.path], hit.size == size {
-                all.append(contentsOf: hit.points)   // size 未变 → 复用缓存
-                continue
+                points = hit.points           // size 未变 → 复用缓存
+            } else {
+                points = parseFile(file)
+                debugFilesParsed += 1
+                memCache[file.path] = CacheEntry(size: size, points: points)
             }
-            let points = parseFile(file)
-            debugFilesParsed += 1
-            memCache[file.path] = CacheEntry(size: size, points: points)
-            all.append(contentsOf: points)
+            // 仅纳入窗口内点；该文件贡献了至少一个窗口内点 → 计入唯一会话文件数。
+            let inWindow = points.filter { $0.timestamp >= from && $0.timestamp <= to }
+            if !inWindow.isEmpty {
+                filesWithPoints.insert(file.path)
+                all.append(contentsOf: inWindow)
+            }
         }
         persist()
-        return all.filter { $0.timestamp >= from && $0.timestamp <= to }
+        return TokenWindow(points: all, sessionFileCount: filesWithPoints.count)
     }
 
     private func persist() {
@@ -103,8 +110,8 @@ struct TokenUsageLogReader: TokenLogReading {
         return pts
     }
 
-    /// 解析单行，提取 (timestamp, last_token_usage.total_tokens)。
-    /// 忽略无 token 字段、无 timestamp 或损坏的行。**只取数值字段，不触碰正文**。
+    /// 解析单行，提取 (timestamp, last_token_usage.{total,input,cached,output}_tokens)。
+    /// 4 个数值字段缺失一律按 0；忽略无 last_token_usage / 无 timestamp / 损坏的行。**只取数值，不触碰正文**。
     static func parseLine(_ line: String) -> TokenUsagePoint? {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -112,9 +119,13 @@ struct TokenUsageLogReader: TokenLogReading {
               let ts = parseISO(tsStr) else { return nil }
         guard let payload = obj["payload"] as? [String: Any],
               let info = payload["info"] as? [String: Any],
-              let usage = info["last_token_usage"] as? [String: Any],
-              let tokens = (usage["total_tokens"] as? NSNumber)?.int64Value else { return nil }
-        return TokenUsagePoint(timestamp: ts, tokens: tokens)
+              let usage = info["last_token_usage"] as? [String: Any] else { return nil }
+        func i64(_ k: String) -> Int64 { (usage[k] as? NSNumber)?.int64Value ?? 0 }
+        return TokenUsagePoint(timestamp: ts,
+                               tokens: i64("total_tokens"),
+                               input: i64("input_tokens"),
+                               cached: i64("cached_input_tokens"),
+                               output: i64("output_tokens"))
     }
 
     /// 宽容解析 ISO8601（兼容纳秒精度与无小数秒两种形态）。

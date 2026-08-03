@@ -41,6 +41,9 @@ final class DockPanel {
     /// 用展示快照刷新底座 WEEK LEFT / WEEK TOKENS。
     func render(_ s: DockSnapshot) { dockView.render(s) }
 
+    /// 应用主题指标（转发给 DockView），即时换皮。
+    func applyTheme(_ m: ThemeMetrics) { dockView.applyTheme(m) }
+
     var frame: NSRect { panel.frame }
     var isVisible: Bool { panel.isVisible }
 
