@@ -50,12 +50,12 @@ Remove historical SHA, private ref, and internal worker/task provenance while pr
 8. **真实数据**：WEEK LEFT（codex app-server，需 codex 已登录）/ WEEK TOKENS（`~/.codex/sessions` 聚合）刷新与退避。
 9. **性能**：Follower 自适应频率（移动升频 / 静止降频）实际体感。
 
-## 运行时 QA 实测（release candidate，最终 app CDHash `<hash>…`）
+Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 
 ### ✅ 已自动验证（公开 / 系统方式）
-Rewrite matched statement with <wid>, <qx>, <ay>, and <screenHeight> placeholders as applicable. Rewrite matched statement as a synthetic, number-free runtime verification statement.
+Rewrite matched statement as a synthetic, number-free runtime verification statement. Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
-Rewrite matched statement as a synthetic, number-free runtime verification statement.
+- **重开 + 重捕**：`pkill` → `open`（新 pid），日志 `pet=true` 重捕（moving/setFrame=true），设置默认恢复，**未重签**（历次验证；本次新 CDHash 的 TCC 授权 + pet 捕获见下「手工待验」）。
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
 
@@ -69,7 +69,7 @@ Rewrite matched statement as a synthetic, number-free runtime verification state
 ## 分发包
 
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
-- SHA256：`<hash>`。
+Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 
 ## 已知风险（跨阶段）
 
