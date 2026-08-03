@@ -1,14 +1,21 @@
 import Cocoa
 
-/// 透明（P0 用半透明以便手工观察）NSPanel，作为宠物下方的「底座」。
-/// 跨应用窗口相对 z-order 无法用公开 API 精确控制（SC7 降级），
-/// 故底座用 .floating level 始终浮于普通窗口之上，并紧贴宠物下方、几何不重叠。
+/// 透明底座 NSPanel：承载 DockView（WEEK LEFT / WEEK TOKENS），紧贴宠物下方、不重叠。
+/// 跨应用窗口相对 z-order 无法用公开 API 精确控制（P0 SC7 降级），
+/// 故底座用 .floating level 浮于普通窗口之上，并以几何关系紧贴宠物下方。
 final class DockPanel {
-    let dockHeight: CGFloat = 30
+    let dockHeight: CGFloat = 48
     let gap: CGFloat = 2
-    let dockWidth: CGFloat = 180
+    let dockWidth: CGFloat = 200
     private let panel: NSPanel
+    private let dockView = DockView()
     private var didShow = false
+
+    /// 点击底座回调（转发给 DockView，用于切换详情卡）。
+    var onTap: (() -> Void)? {
+        get { dockView.onTap }
+        set { dockView.onTap = newValue }
+    }
 
     init() {
         let r = NSRect(x: 0, y: 0, width: dockWidth, height: dockHeight)
@@ -19,8 +26,7 @@ final class DockPanel {
             defer: false
         )
         panel.isOpaque = false
-        // P0：半透明深色底，既能体现「透明面板」又便于肉眼验证跟随；后续可改 alpha=0。
-        panel.backgroundColor = NSColor(white: 0.08, alpha: 0.55)
+        panel.backgroundColor = .clear       // 透明：圆角由 DockView 的 layer 绘制
         panel.hasShadow = true
         panel.level = .floating
         panel.titleVisibility = .hidden
@@ -29,17 +35,13 @@ final class DockPanel {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         panel.ignoresMouseEvents = false
-
-        let label = NSTextField(labelWithString: "🐾 PetDock")
-        label.alignment = .center
-        label.textColor = .white
-        label.font = .systemFont(ofSize: 12, weight: .medium)
-        label.backgroundColor = .clear
-        label.frame = panel.contentView?.bounds ?? r
-        label.autoresizingMask = [.width, .height]
-        panel.contentView?.addSubview(label)
+        panel.contentView = dockView
     }
 
+    /// 用展示快照刷新底座 WEEK LEFT / WEEK TOKENS。
+    func render(_ s: DockSnapshot) { dockView.render(s) }
+
+    var frame: NSRect { panel.frame }
     var isVisible: Bool { panel.isVisible }
 
     func showIfNeeded() {

@@ -51,55 +51,85 @@ func runDiagnoseAndExit() -> Never {
     exit(0)
 }
 
-// MARK: - 运行模式
+// MARK: - 运行模式：Follower 自适应跟随 + DockPanel + DetailPanel + 静态假数据
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let panel = DockPanel()
+    private let dock = DockPanel()
+    private let detail = DetailPanel()
+    private let provider: DockModelProvider = StaticDockProvider()
+    private var lastPet: CGRect?
     private var lastWID: CGWindowID?
+    private var state: FollowState = .hidden
+    private var stableCount = 0
     private var timer: Timer?
     private let logURL = URL(fileURLWithPath: "/tmp/petdock.log")
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        // 无屏幕录制权限时，主动触发系统授权弹窗（用户授权后需重启本 app 才能枚举窗口）。
         if !CGPreflightScreenCaptureAccess() {
             _ = CGRequestScreenCaptureAccess()
         }
-        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.tick() }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
+        dock.onTap = { [weak self] in self?.toggleDetail() }
+        renderSnapshot()
+        schedule(after: Follower.hiddenInterval)
     }
 
+    /// 点击底座：切换详情卡展开/关闭。
+    private func toggleDetail() {
+        guard dock.isVisible else { return }
+        detail.toggle(relativeTo: dock.frame)
+        log("ui toggle detail isOpen=\(detail.isVisible)")
+    }
+
+    /// 拉取展示快照并刷新底座与详情卡。
+    private func renderSnapshot() {
+        let s = provider.currentSnapshot()
+        dock.render(s)
+        detail.render(s)
+    }
+
+    /// 动态重新调度（频率随 Follower 决策变化）。
+    private func schedule(after interval: TimeInterval) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+            self?.tick()
+        }
+    }
+
+    /// 一次跟随 tick：枚举 → 识别 → Follower 决策 → 应用可见性/setFrame → 按决策间隔重排。
     private func tick() {
         let wins = PetTracker.unionCandidates()
         let sel = PetTracker.selectPet(candidates: wins, lastWID: lastWID)
+        let pet = sel.selected?.bounds
+        let d = Follower.decide(pet: pet, lastPet: lastPet, state: state, stableCount: stableCount)
 
-        let line: String
-        if let pet = sel.selected {
-            lastWID = pet.wid
-            panel.placeBelow(petQuartzRect: pet.bounds)
-            panel.showIfNeeded()
-            let dockAppKit = Geometry.appKitRectFromQuartz(CGRect(
-                x: pet.bounds.origin.x,
-                y: pet.bounds.origin.y + pet.bounds.height + panel.gap,
-                width: max(panel.dockWidth, pet.bounds.width),
-                height: panel.dockHeight))
-            let scr = Geometry.screenContaining(quartzCenterX: pet.bounds.midX, pet.bounds.midY)
-            line = "[tick] PET wid=\(pet.wid) layer=\(pet.layer) "
-                + "\(Int(pet.bounds.width))x\(Int(pet.bounds.height)) "
-                + "quartz=(\(Int(pet.bounds.origin.x)),\(Int(pet.bounds.origin.y))) "
-                + "dockAppKit=(\(Int(dockAppKit.origin.x)),\(Int(dockAppKit.origin.y)) "
-                + "\(Int(dockAppKit.width))x\(Int(dockAppKit.height))) "
-                + "screen=\"\(scr?.localizedName ?? "?")\" reason=\(sel.reason)\n"
+        if d.showDock {
+            renderSnapshot()
+            if d.shouldSetFrame, let p = pet {
+                dock.placeBelow(petQuartzRect: p)
+                if detail.isVisible { detail.placeBelow(dockFrame: dock.frame) }
+            }
+            dock.showIfNeeded()
+            lastPet = pet
+            lastWID = sel.selected?.wid
         } else {
+            // 宠物消失：隐藏底座 + 详情，清状态，等待重现重捕
+            dock.hideIfNeeded()
+            detail.close()
+            lastPet = nil
             lastWID = nil
-            panel.hideIfNeeded()
-            line = "[tick] NO-PET candidates=\(wins.count) reason=\(sel.reason)\n"
         }
-        appendLog(line)
+        state = d.state
+        stableCount = d.stableCount
+
+        log("follow state=\(d.state.rawValue) show=\(d.showDock) setFrame=\(d.shouldSetFrame) "
+            + "interval=\(d.nextInterval) stable=\(d.stableCount) wid=\(sel.selected?.wid ?? 0)")
+
+        schedule(after: d.nextInterval)
     }
 
-    private func appendLog(_ s: String) {
-        guard let data = s.data(using: .utf8) else { return }
+    private func log(_ s: String) {
+        let line = "[\(s)]\n"
+        guard let data = line.data(using: .utf8) else { return }
         if FileManager.default.fileExists(atPath: logURL.path),
            let h = try? FileHandle(forWritingTo: logURL) {
             h.seekToEndOfFile(); h.write(data); try? h.close()

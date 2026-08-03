@@ -63,7 +63,7 @@ check("T11 无Mascot→回退高layer选wid2", r11.selected?.wid == 2, r11.selec
 print("\n[selectPet] \(pass) passed, \(fail) failed")
 
 // ---- Geometry 坐标转换（多屏/负坐标）----
-pass = 0; fail = 0
+let gBase = fail, gPass = pass
 guard let main = NSScreen.screens.first else { fatalError("无屏幕") }
 let mh = main.frame.height
 for s in NSScreen.screens {
@@ -76,6 +76,39 @@ for s in NSScreen.screens {
     let scr = Geometry.screenContaining(quartzCenterX: q.midX, q.midY)
     check("屏中心落回本屏 screen=\"\(s.localizedName)\"", scr?.localizedName == s.localizedName, "")
 }
-print("\n[Geometry] \(pass) passed, \(fail) failed")
+print("\n[Geometry] \(pass - gPass) passed, \(fail - gBase) failed")
 
+// ---- Follower 自适应跟随状态机（纯函数 decide）----
+let fBase = fail, fPass = pass
+let petA = CGRect(x: 100, y: 100, width: 172, height: 179)
+let petB = CGRect(x: 200, y: 100, width: 172, height: 179)  // 移动后位置
+
+let d1 = Follower.decide(pet: nil, lastPet: petA, state: .stable, stableCount: 10)
+check("F1 无宠物→hidden/show=false/setFrame=false", d1.state == .hidden && d1.showDock == false && d1.shouldSetFrame == false)
+
+let d2 = Follower.decide(pet: petA, lastPet: nil, state: .hidden, stableCount: 0)
+check("F2 首次捕获→moving/setFrame=true/count=0", d2.state == .moving && d2.shouldSetFrame == true && d2.stableCount == 0)
+
+let d3 = Follower.decide(pet: petA, lastPet: petA, state: .moving, stableCount: 0)
+check("F3 位置不变(过渡)→moving/setFrame=false/count=1", d3.state == .moving && d3.shouldSetFrame == false && d3.stableCount == 1)
+
+let d4 = Follower.decide(pet: petA, lastPet: petA, state: .moving, stableCount: Follower.stableThreshold)
+check("F4 达阈值→stable/setFrame=false", d4.state == .stable && d4.shouldSetFrame == false)
+
+let d5 = Follower.decide(pet: petB, lastPet: petA, state: .stable, stableCount: 100)
+check("F5 stable后移动→moving/setFrame=true/count=0", d5.state == .moving && d5.shouldSetFrame == true && d5.stableCount == 0)
+
+let d6 = Follower.decide(pet: petA, lastPet: nil, state: .hidden, stableCount: 0)
+check("F6 隐藏后重现→moving/setFrame=true(重捕)", d6.state == .moving && d6.shouldSetFrame == true)
+
+check("F7 频率阶 moving<stable<hidden",
+      Follower.movingInterval < Follower.stableInterval && Follower.stableInterval < Follower.hiddenInterval)
+check("F8 hidden间隔=hiddenInterval", d1.nextInterval == Follower.hiddenInterval)
+check("F9 moving间隔=movingInterval", d2.nextInterval == Follower.movingInterval)
+check("F10 stable间隔=stableInterval", d4.nextInterval == Follower.stableInterval)
+// 隐藏决策应同步隐藏底座（详情由调用方跟随 showDock 关闭）
+check("F11 隐藏时showDock=false(底座+详情隐藏)", d1.showDock == false)
+print("\n[Follower] \(pass - fPass) passed, \(fail - fBase) failed")
+
+print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)
