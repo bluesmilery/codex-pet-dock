@@ -2,7 +2,7 @@ BINARY := .build/release/PetDock
 APP    := build/PetDock.app
 IDENT  := io.github.bluesmilery.codexpetdock
 
-.PHONY: build app run diagnose clean clean-logs
+.PHONY: build app run diagnose clean clean-logs test-data
 
 build:
 	swift build -c release
@@ -34,3 +34,9 @@ clean:
 
 clean-logs:
 	rm -f /tmp/petdock.log /tmp/petdock-diagnose.txt
+
+# 数据层测试（独立入口 + fixture，不依赖屏幕录制权限 / 不联网）。
+# 注意：tests/DataTests.swift 用 @main，须作为编译入口与 Sources/PetDock/Data/*.swift 一同编译。
+test-data:
+	swiftc Sources/PetDock/Data/*.swift tests/DataTests.swift -o /tmp/petdock-datatests
+	/tmp/petdock-datatests
