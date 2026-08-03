@@ -11,12 +11,12 @@
 
 ## 测试（已验证，全绿）
 
-`make test` = test-ui + test-data + test-shell，**199 项全部通过，0 failed**。
+`make test` = test-ui + test-data + test-shell，**203 项全部通过，0 failed**。
 
 | 套件 | 项数 | 覆盖 |
 | --- | --- | --- |
 | test-ui | 26 | selectPet 识别 11（Mascot 优先 / 不误绑主窗口 / 滞回 / petShaped）+ Geometry 坐标 4（多屏 / 负坐标）+ Follower 状态机 11（静止 / 移动 / 稳定 / 隐藏 / 重捕 / 频率阶） |
-| test-data | 82 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、**codex 路径解析（env/PATH/nvm 多版本/不可执行/缺失）** |
+| test-data | 86 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、**codex 路径解析 12 项（env 优先/不可执行/tilde 展开/相对拒绝、PATH 仅绝对跳过空相对、nvm 多版本、缺失、不可执行、symlink）** |
 | test-shell | 91 | Theme 内置 / 外部安全解析（颜色 / 字体 / 徽标 / 危险关键字）、Settings 持久化、ThemeStore fixture 热加载、AutoStart 状态映射 |
 
 纯函数测试（不依赖屏幕录制权限 / 不联网），用 `swiftc` 编译真实源码运行。
@@ -80,4 +80,6 @@ Rewrite matched statement as a synthetic, number-free runtime verification state
    不读 `~/.zshrc`）找不到 codex → WEEK LEFT 永久占位。已由 `CodexExecutableResolver`（文件系统查找：
    env 覆盖 > `PATH` > `~/.local/bin` / `~/.nvm/versions/node/*/bin` / `~/.volta/bin` /
    `/opt/homebrew/bin` / `/usr/local/bin`，nvm 多版本语义版本降序）+ `RateLimitClient`（`executableURL`
-   直接启动，不经 `/bin/sh -lc`）修复。解析器测试 8 项（env / PATH / nvm 多版本 / 不可执行 / 缺失）。
+   直接启动，不经 `/bin/sh -lc`）修复。env 覆盖先展开 `~` 且必须为绝对路径（否则 `overrideNotAbsolute`），
+   PATH 仅接受绝对目录（跳过空 / 相对），系统候选目录可注入（测试传空隔离）；解析器测试 12 项
+   （env 优先 / 不可执行 / tilde 展开 / 相对拒绝、PATH 仅绝对 / 跳过空相对、nvm 多版本、缺失、不可执行、symlink）。

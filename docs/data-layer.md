@@ -54,7 +54,7 @@
 
 | 文件 | 角色 |
 | --- | --- |
-| `CodexExecutableResolver.swift` | codex 绝对路径解析（env 覆盖 > PATH > ~/.local/bin / nvm / volta / brew），不依赖交互 shell。 |
+| `CodexExecutableResolver.swift` | codex 绝对路径解析，不依赖交互 shell：env 覆盖（先展开 `~`，随后必须绝对，否则 `overrideNotAbsolute`）> `PATH`（仅绝对目录，跳过空/相对）> `~/.local/bin` / nvm(语义版本降序) / `~/.volta/bin` / 可注入系统候选(brew)；符号链接跟随到目标。 |
 | `RateLimitClient.swift` | `RateLimitFetching` 协议 + `RateLimitClient`（resolver + Process executableURL + stdio JSON-RPC）。`parse(_:)` 纯函数。 |
 | `TokenUsageLogReader.swift` | `TokenLogReading` 协议 + `TokenUsageLogReader`（按日期桶扫描、只取数值、增量缓存）。`parseLine`/`parseISO` 纯函数。 |
 | `PetDockDataService.swift` | 顶层服务：组合两数据源、各自退避计数、`pause()`/`resume()`（宠物不可见时暂停）。 |

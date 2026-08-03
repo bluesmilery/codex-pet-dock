@@ -340,40 +340,66 @@ struct DataTestRunner {
             let envHome = home("env")
             let envExec = makeExec(envHome, "custom/codex")
             _ = makeExec(envHome, ".local/bin/codex")
-            let r1 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: envExec.path], homeDirectory: envHome)
+            let r1 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: envExec.path], homeDirectory: envHome, systemCandidates: [])
             if case .success(let u) = r1.resolve() { check("T-r1 env 优先", u == envExec, "") } else { check("T-r1 env 优先", false) }
 
             // T-r2: env 不可执行 → overrideNotExecutable（不回退）
             let noExec = makeNoExec(envHome, "noexec/codex")
-            let r2 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: noExec.path], homeDirectory: envHome)
-            if case .failure = r2.resolve() { check("T-r2 env 不可执行→overrideNotExecutable", true) } else { check("T-r2", false) }
+            let r2 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: noExec.path], homeDirectory: envHome, systemCandidates: [])
+            if case .failure(let e) = r2.resolve(), case .overrideNotExecutable = e { check("T-r2 env 不可执行→overrideNotExecutable", true) } else { check("T-r2", false) }
 
             // T-r3: PATH 命中（home 无候选）
             let pathHome = home("path")
             let pathExec = makeExec(pathHome, "pathdir/codex")
-            let r3 = CodexExecutableResolver(environment: ["PATH": pathHome.appendingPathComponent("pathdir").path], homeDirectory: home("empty1"))
+            let r3 = CodexExecutableResolver(environment: ["PATH": pathHome.appendingPathComponent("pathdir").path], homeDirectory: home("empty1"), systemCandidates: [])
             if case .success(let u) = r3.resolve() { check("T-r3 PATH 命中", u == pathExec, "") } else { check("T-r3 PATH 命中", false) }
 
             // T-r4: nvm 多版本选最新（语义版本降序；home 无 .local/bin）
             let nvmHome = home("nvm")
             _ = makeExec(nvmHome, ".nvm/versions/node/v20.10.0/bin/codex")
             let newV = makeExec(nvmHome, ".nvm/versions/node/v22.21.1/bin/codex")
-            let r4 = CodexExecutableResolver(environment: [:], homeDirectory: nvmHome)
+            let r4 = CodexExecutableResolver(environment: [:], homeDirectory: nvmHome, systemCandidates: [])
             if case .success(let u) = r4.resolve() { check("T-r4 nvm 选最新 v22.21.1", u == newV, u.path) } else { check("T-r4", false) }
 
-            // T-r5: 均缺失 → notFound（依赖本机无 brew codex；codex 实装在 nvm）
-            let r5 = CodexExecutableResolver(environment: [:], homeDirectory: home("empty2"))
-            if case .failure = r5.resolve() { check("T-r5 均缺失→notFound", true) } else { check("T-r5", false) }
+            // T-r5: 均缺失 → notFound（systemCandidates=[] 隔离系统 brew，不依赖本机环境）
+            let r5 = CodexExecutableResolver(environment: [:], homeDirectory: home("empty2"), systemCandidates: [])
+            if case .failure(let e) = r5.resolve(), case .notFound = e { check("T-r5 均缺失→notFound", true) } else { check("T-r5", false) }
 
             // T-r6: 不可执行文件不被选中（isExecutableFile=false）
             let badHome = home("bad")
             let badLocal = makeNoExec(badHome, ".local/bin/codex")
             check("T-r6 不可执行 isExecutableFile=false",
-                  !CodexExecutableResolver(environment: [:], homeDirectory: badHome).isExecutableFile(badLocal), "")
+                  !CodexExecutableResolver(environment: [:], homeDirectory: badHome, systemCandidates: []).isExecutableFile(badLocal), "")
 
             // T-r7: compareVersion / versionKey 纯函数
             check("T-r7a compareVersion v22.21.1>v20.10.0", CodexExecutableResolver.compareVersion("v22.21.1", "v20.10.0") > 0, "")
             check("T-r7b versionKey v22.21.1=[22,21,1]", CodexExecutableResolver.versionKey("v22.21.1") == [22, 21, 1], "")
+
+            // T-r8: PATH 跳过空 / 相对元素，命中绝对目录
+            let safeHome = home("safe")
+            let safeExec = makeExec(safeHome, "codex")
+            let r8 = CodexExecutableResolver(environment: ["PATH": "::relative:\(safeHome.path)"], homeDirectory: home("empty3"), systemCandidates: [])
+            if case .success(let u) = r8.resolve() { check("T-r8 PATH 跳过空/相对命中绝对", u == safeExec, u.path) } else { check("T-r8", false) }
+
+            // T-r9: env ~ 展开 → 绝对命中
+            let tildeHome = home("tilde")
+            let tildeExec = makeExec(tildeHome, "custom/codex")
+            let r9 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: "~/custom/codex"], homeDirectory: tildeHome, systemCandidates: [])
+            if case .success(let u) = r9.resolve() { check("T-r9 env ~ 展开命中", u == tildeExec, u.path) } else { check("T-r9", false) }
+
+            // T-r10: env 相对路径 → overrideNotAbsolute（不允许相对 CWD）
+            let r10 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: "custom/codex"], homeDirectory: home("rel"), systemCandidates: [])
+            if case .failure(let e) = r10.resolve(), case .overrideNotAbsolute = e { check("T-r10 env 相对→overrideNotAbsolute", true) } else { check("T-r10", false) }
+
+            // T-r11: 符号链接到可执行目标 → 命中（isExecutableFile 跟随 symlink）
+            let linkHome = home("link")
+            let realExec = makeExec(linkHome, "real/codex")
+            let linkPath = linkHome.appendingPathComponent("link/codex")
+            try! FileManager.default.createDirectory(at: linkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: linkPath)
+            try! FileManager.default.createSymbolicLink(at: linkPath, withDestinationURL: realExec)
+            let r11 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: linkPath.path], homeDirectory: linkHome, systemCandidates: [])
+            if case .success(let u) = r11.resolve() { check("T-r11 symlink→可执行目标命中", u.path == linkPath.path, u.path) } else { check("T-r11", false) }
 
             try? FileManager.default.removeItem(at: tmp)
         }
