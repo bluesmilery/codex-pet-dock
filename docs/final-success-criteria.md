@@ -48,6 +48,27 @@ Remove historical SHA, private ref, and internal worker/task provenance while pr
 8. **真实数据**：WEEK LEFT（codex app-server，需 codex 已登录）/ WEEK TOKENS（`~/.codex/sessions` 聚合）刷新与退避。
 9. **性能**：Follower 自适应频率（移动升频 / 静止降频）实际体感。
 
+## 运行时 QA 实测（release candidate，最终 app CDHash `<hash>…`）
+
+### ✅ 已自动验证（公开 / 系统方式）
+Rewrite matched statement with <wid>, <qx>, <ay>, and <screenHeight> placeholders as applicable. Rewrite matched statement as a synthetic, number-free runtime verification statement.
+Rewrite matched statement as a synthetic, number-free runtime verification statement.
+Rewrite matched statement as a synthetic, number-free runtime verification statement.
+Rewrite matched statement as a synthetic, number-free runtime verification statement.
+Rewrite matched statement as a synthetic, number-free runtime verification statement.
+
+Rewrite matched statement as a synthetic, number-free runtime verification statement.
+- 点击底座开关详情卡（套餐 / 重置 / 缓存 / 输入 / 输出 / 会话 / 更新时间可见）。
+- 三内置主题切换（即时换皮 / 勾选 / UserDefaults 持久化；当前 domain 未建 = 未操作）。
+- 显示 / 隐藏菜单控制底座 + 详情。
+- 登录自启 toggle（SMAppService，需 `.app` 菜单）。
+- 底座坐标精测（tmux 无法自定义脚本枚举 PetDock 窗口坐标）。
+
+## 分发包
+
+Rewrite matched statement as a synthetic, number-free runtime verification statement.
+- SHA256：`<hash>`。
+
 ## 已知风险（跨阶段）
 
 1. ad-hoc 签名 TCC 不稳定（每次重签 CDHash 变 → 屏幕录制授权失效）。

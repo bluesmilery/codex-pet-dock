@@ -32,6 +32,10 @@ make app          # 组装并 ad-hoc 签名 build/PetDock.app
 make test         # UI + 数据 + Shell 全量测试
 ```
 
+## 分发
+
+最终包：`dist/CodexPetDock-1.0.0-macOS-arm64.zip`（SHA256 `<hash>…`，ad-hoc 签名、未 notarized；用 `ditto` 打包，未改签名）。
+
 ## 运行
 
 ```sh
