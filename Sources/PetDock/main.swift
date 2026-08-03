@@ -180,12 +180,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         detail.render(s)
     }
 
-    /// 跟随 timer 动态重新调度（频率随 Follower 决策变化）。
+    /// 跟随 timer 动态重新调度（频率随 Follower 决策变化）。加入 .common 模式，
+    /// 使事件跟踪 / 模态等非 default 模式下仍能触发，避免跟随卡顿。
     private func schedule(after interval: TimeInterval) {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            self?.tick()
-        }
+        let t = Timer(timeInterval: interval, repeats: false) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     /// 数据刷新：后台抓取两源（不阻塞主线程），完成后按退避间隔重排。
@@ -193,13 +194,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         provider.refresh { [weak self] in self?.scheduleDataRefresh() }
     }
 
-    /// 数据刷新调度：取两源退避间隔较大者（任一失败即拉长；正常均 5min）。
+    /// 数据刷新调度：取两源退避间隔较大者（任一失败即拉长；正常均 5min）。加入 .common 模式。
     private func scheduleDataRefresh() {
         dataTimer?.invalidate()
         let interval = max(provider.weekLeftNextDelay, provider.weekTokensNextDelay)
-        dataTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            self?.refreshData()
-        }
+        let t = Timer(timeInterval: interval, repeats: false) { [weak self] _ in self?.refreshData() }
+        RunLoop.main.add(t, forMode: .common)
+        dataTimer = t
     }
 
     private func stopDataRefresh() {

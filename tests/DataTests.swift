@@ -3,9 +3,19 @@ import Foundation
 // 数据层测试：纯函数 + 依赖注入（fixture 目录），无需屏幕录制权限、不联网。
 // 编译运行：make test-data （= swiftc Sources/PetDock/Data/*.swift tests/DataTests.swift -o /tmp/petdock-datatests && /tmp/petdock-datatests）
 
-struct MockFailRateLimit: RateLimitFetching { func readWeekLeft() throws -> WeekLeft { throw DataError.msg("mock-fail") } }
+struct MockFailRateLimit: RateLimitFetching {
+    func readWeekLeft() throws -> WeekLeft { throw DataError.msg("mock-fail") }
+    func cancel() {}
+}
 struct MockOKRateLimit: RateLimitFetching {
     func readWeekLeft() throws -> WeekLeft { WeekLeft(usedPercent: 30, resetsAt: nil, windowMinutes: 10080, planType: "fixture-plan", fetchedAt: Date()) }
+    func cancel() {}
+}
+/// 记录 cancel 调用次数的 mock，用于断言 service.cancelInFlight 转发。
+final class MockCancelRateLimit: RateLimitFetching {
+    private(set) var cancelCount = 0
+    func readWeekLeft() throws -> WeekLeft { WeekLeft(usedPercent: 1, resetsAt: nil, windowMinutes: 10080, planType: "fixture-plan", fetchedAt: Date()) }
+    func cancel() { cancelCount += 1 }
 }
 
 /// 可控慢源：阻塞指定时长，记录并发抓取峰值（maxActive）与总调用次数，用于断言 refreshInFlight 合并。
@@ -24,6 +34,7 @@ final class SlowRateLimit: RateLimitFetching {
         lock.lock(); active -= 1; lock.unlock()
         return WeekLeft(usedPercent: 40, resetsAt: nil, windowMinutes: 10080, planType: "fixture-plan", fetchedAt: Date())
     }
+    func cancel() {}
 }
 
 @main
@@ -87,6 +98,40 @@ struct DataTestRunner {
         check("T3c 缓存往返聚合一致", pts2.reduce(Int64(0)) { $0 + $1.tokens } == 710, "")
         section("增量缓存")
 
+        // ---- T-evict: 缓存淘汰（范围外 / 已删除 / 过期）----
+        do {
+            var r = TokenUsageLogReader(sessionsRoot: fixtureRoot)
+            _ = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))   // a(08-03)+b(08-02)
+            check("T-evict1 首次 parse a,b=2", r.debugFilesParsed == 2, "实际=\(r.debugFilesParsed)")
+            _ = try! r.readPoints(from: D("2026-08-03T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))   // 只 a 在范围
+            check("T-evict2 窄范围 a 命中不重parse（仍2），b 移出范围", r.debugFilesParsed == 2, "实际=\(r.debugFilesParsed)")
+            _ = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))   // a 命中；b 已淘汰→重 parse
+            check("T-evict3 b 被淘汰后重 parse（=3）", r.debugFilesParsed == 3, "实际=\(r.debugFilesParsed)")
+        }
+
+        // 删除场景：临时副本，scan → 删 → scan → 恢复 → scan，验证删除即淘汰、不崩。
+        do {
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("pd-evict-del", isDirectory: true)
+            try? FileManager.default.removeItem(at: tmp)
+            let src = fixtureRoot.appendingPathComponent("2026/08/03/rollout-test-a.jsonl")
+            let dst = tmp.appendingPathComponent("2026/08/03/rollout-test-a.jsonl")
+            try! FileManager.default.createDirectory(at: tmp.appendingPathComponent("2026/08/03", isDirectory: true),
+                                                     withIntermediateDirectories: true)
+            try! FileManager.default.copyItem(at: src, to: dst)
+            var r = TokenUsageLogReader(sessionsRoot: tmp)
+            _ = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))
+            check("T-evict4 临时副本首次 parse=1", r.debugFilesParsed == 1, "实际=\(r.debugFilesParsed)")
+            try! FileManager.default.removeItem(at: dst)
+            let win5 = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))
+            check("T-evict5 删除后 scan 不崩且 0 点", win5.points.isEmpty, "count=\(win5.points.count)")
+            try! FileManager.default.copyItem(at: src, to: dst)
+            let win6 = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))
+            check("T-evict6 删除时淘汰→恢复后重 parse（=2）且非空",
+                  r.debugFilesParsed == 2 && !win6.points.isEmpty, "parsed=\(r.debugFilesParsed)")
+            try? FileManager.default.removeItem(at: tmp)
+        }
+        section("缓存淘汰")
+
         // ---- T4: parseLine 纯函数鲁棒性 ----
         check("T4a 损坏行→nil", TokenUsageLogReader.parseLine("{bad") == nil)
         check("T4b 无 token 行→nil", TokenUsageLogReader.parseLine("{\"type\":\"response_item\",\"timestamp\":\"2026-08-03T11:00:00.000Z\",\"payload\":{}}") == nil)
@@ -110,6 +155,37 @@ struct DataTestRunner {
         let r2res: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 10, "windowDurationMins": 1440]]]
         check("T5e windowMins=1440(日)→非周", try! RateLimitClient.parse(r2res).isWeekly == false, "")
         section("WeekLeft 解析")
+
+        // ---- T-rl: weekly 窗口选择 / resetsAt 秒-毫秒 / cancel 转发 ----
+        // weekly closest 10080：primary(日1440)+secondary(周10080) → 选 secondary
+        let rl1: [String: Any] = ["rateLimits": [
+            "primary": ["usedPercent": 10, "windowDurationMins": 1440] as [String: Any],
+            "secondary": ["usedPercent": 45, "windowDurationMins": 10080] as [String: Any]]]
+        let wl1 = try! RateLimitClient.parse(rl1)
+        check("T-rl1 weekly 选 closest10080（secondary）", wl1.usedPercent == 45 && wl1.windowMinutes == 10080 && wl1.isWeekly,
+              "used=\(wl1.usedPercent) mins=\(wl1.windowMinutes ?? -1)")
+        // 单窗兜底：只 primary 且无 windowDurationMins → 兜底 primary
+        let rl2: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 30] as [String: Any]]]
+        let wl2 = try! RateLimitClient.parse(rl2)
+        check("T-rl2 单窗兜底 primary（无 windowMins）", wl2.usedPercent == 30 && wl2.windowMinutes == nil, "")
+        // resetsAt 秒
+        let rl3: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 5, "resetsAt": Int64(1723104120)] as [String: Any]]]
+        check("T-rl3 resetsAt 秒", try! RateLimitClient.parse(rl3).resetsAt == Date(timeIntervalSince1970: 1723104120), "")
+        // resetsAt 毫秒（13 位）→ /1000
+        let rl4: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 5, "resetsAt": Int64(1723104120000)] as [String: Any]]]
+        check("T-rl4 resetsAt 毫秒兼容（/1000 后同秒）", try! RateLimitClient.parse(rl4).resetsAt == Date(timeIntervalSince1970: 1723104120), "")
+        // 多桶 rateLimitsByLimitId：选桶内 weekly primary
+        let rl5: [String: Any] = ["rateLimits": [
+            "primary": ["usedPercent": 10, "windowDurationMins": 1440] as [String: Any],
+            "rateLimitsByLimitId": ["codex": ["primary": ["usedPercent": 55, "windowDurationMins": 10080] as [String: Any]] as [String: Any]]] as [String: Any]]
+        let wl5 = try! RateLimitClient.parse(rl5)
+        check("T-rl5 多桶选 weekly primary", wl5.usedPercent == 55 && wl5.isWeekly, "used=\(wl5.usedPercent)")
+        // cancel 转发：service.cancelInFlight → rateLimit.cancel
+        let mc = MockCancelRateLimit()
+        let svcRl = PetDockDataService(rateLimit: mc, tokenLog: TokenUsageLogReader(sessionsRoot: fixtureRoot))
+        svcRl.cancelInFlight()
+        check("T-rl6 cancelInFlight 转发→cancelCount=1", mc.cancelCount == 1, "count=\(mc.cancelCount)")
+        section("WeekLeft 窗口/重置/cancel")
 
         // ---- T6: 退避 ----
         check("T6a 0失败→300", Backoff.nextDelay(afterFailures: 0) == 300, "")

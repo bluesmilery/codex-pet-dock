@@ -62,7 +62,7 @@ let badTokens = ["http://x", "https://x", "file:///etc", "ftp://x",   // URL/外
                  "url(", "eval(", "expression(", "import x", "a(b)",  // 脚本/函数调用
                  "\"q\"", "'q'",                                      // 引号
                  "", String(repeating: "a", count: 65)]               // 空/超长
-for t in badTokens { check("拒绝 token: \(t)", !ThemeManifest.isSafeToken(t), "未拒绝") }
+for t in badTokens { check("拒绝 token: \(t)", !ThemeManifest.isSafeToken(t)) }
 
 // ============ isSafeBadgeName ============
 mark("isSafeBadgeName")
@@ -72,7 +72,7 @@ for n in ["logo.png", "a-b_1.png", "Logo.PNG", "pet.dock.png"] {
 let badBadges = ["logo.jpg", ".png", "..png",
                  "../x.png", "/abs/x.png", "C:\\x.png",
                  "a b.png", String(repeating: "a", count: 61) + ".png"]
-for n in badBadges { check("拒绝徽标名: \(n)", !ThemeManifest.isSafeBadgeName(n), "未拒绝") }
+for n in badBadges { check("拒绝徽标名: \(n)", !ThemeManifest.isSafeBadgeName(n)) }
 
 // ============ ThemeManifest.parse 合法 ============
 mark("parse 合法")

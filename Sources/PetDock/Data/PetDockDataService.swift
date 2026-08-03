@@ -94,4 +94,8 @@ final class PetDockDataService {
 
     func pause() { queue.sync { isPausedStorage = true } }
     func resume() { queue.sync { isPausedStorage = false } }
+
+    /// 取消当前在途的官方额度抓取（quit 时终止 codex 子进程，不留孤儿）。不经数据队列：
+    /// RateLimitClient 持自身锁，与 queue 外的额度 IO 不嵌套。
+    func cancelInFlight() { rateLimit.cancel() }
 }

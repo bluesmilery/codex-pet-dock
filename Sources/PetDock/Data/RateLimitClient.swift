@@ -5,17 +5,30 @@ import Foundation
 /// 官方额度获取接口，便于注入 mock 测试。
 protocol RateLimitFetching {
     func readWeekLeft() throws -> WeekLeft
+    /// 取消当前在途请求（quit 时调用），终止 codex 子进程避免孤儿。mock 可空实现。
+    func cancel()
 }
 
 /// 通过 `codex app-server`（stdio JSON-RPC）调用 `account/rateLimits/read` 获取官方周额度。
 ///
 /// 合规边界：本类型**不读取 / 复制 auth.json、token、邮箱**；鉴权完全由 `codex` 进程在其
 /// 可信环境内完成。本进程仅经 stdio 收发 JSON-RPC 文本，且只解析状态 / 比例 / 重置时间字段。
-struct RateLimitClient: RateLimitFetching {
+///
+/// 健壮性：
+/// - `cancel()` 经内部锁置取消标志并 `terminate` 当前 codex 子进程，`rpc` 的等待循环检测到后
+///   立即抛错，quit 时不留孤儿进程；
+/// - `proc.run()` 启动失败抛 Swift error（由上层 catch）；`stdin` 写入用 `try?` 忽略管道破裂，
+///   进程提前退出时快速失败，**不崩**；
+/// - 结束时仅 `isRunning` 才 `terminate` + `waitUntilExit`，回收子进程。
+final class RateLimitClient: RateLimitFetching {
     /// 启动 codex app-server 的命令。默认经 login shell 以继承用户 PATH（nvm / homebrew 等）。
     let launchCommand: [String]
     /// 单次请求超时（秒）。
     let timeout: TimeInterval
+
+    private let lock = NSLock()
+    private var currentProc: Process?
+    private var cancelled = false
 
     init(launchCommand: [String]? = nil, timeout: TimeInterval = 20) {
         self.launchCommand = launchCommand ?? ["/bin/sh", "-lc", "exec codex app-server"]
@@ -27,22 +40,57 @@ struct RateLimitClient: RateLimitFetching {
         return try Self.parse(result)
     }
 
-    /// 解析 `account/rateLimits/read` 的 result，提取脱敏字段。纯函数，便于用 fixture 测试。
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let p = currentProc
+        lock.unlock()
+        if let p = p, p.isRunning { p.terminate() }
+    }
+
+    // MARK: - 解析（纯函数，便于 fixture 测试）
+
+    /// 解析 `account/rateLimits/read` 的 result，提取脱敏字段。
+    /// 窗口选择：从所有 snapshot 的 primary/secondary 中取 `windowDurationMins` 最接近 10080（周）者；
+    /// 均无 `windowDurationMins` 时兜底 primary。`resetsAt` 兼容秒（10 位）与毫秒（13 位）。
     static func parse(_ result: Any) throws -> WeekLeft {
         guard let dict = result as? [String: Any],
               let rateLimits = dict["rateLimits"] as? [String: Any] else {
             throw DataError.msg("rateLimits 字段缺失")
         }
-        let primary = rateLimits["primary"] as? [String: Any]
-        let usedPercent = Self.asInt(primary?["usedPercent"]) ?? 0
-        let windowMinutes = Self.asInt(primary?["windowDurationMins"])
+        let window = pickWeeklyWindow(rateLimits)
+        let usedPercent = asInt(window?["usedPercent"]) ?? 0
+        let windowMinutes = asInt(window?["windowDurationMins"])
         let resetsAt: Date? = {
-            guard let s = Self.asInt64(primary?["resetsAt"]) else { return nil }
-            return Date(timeIntervalSince1970: TimeInterval(s))
+            guard let raw = asInt64(window?["resetsAt"]) else { return nil }
+            var secs = raw
+            if secs > 1_000_000_000_000 { secs /= 1000 }   // 毫秒（13 位）→ 秒
+            return Date(timeIntervalSince1970: TimeInterval(secs))
         }()
         let planType = rateLimits["planType"] as? String
         return WeekLeft(usedPercent: usedPercent, resetsAt: resetsAt,
                         windowMinutes: windowMinutes, planType: planType, fetchedAt: Date())
+    }
+
+    /// 从顶层 primary/secondary 及 `rateLimitsByLimitId` 各桶的 primary/secondary 中，
+    /// 选 `windowDurationMins` 最接近 10080（一周）的窗口；若无该字段则兜底顶层 primary。
+    static func pickWeeklyWindow(_ rateLimits: [String: Any]) -> [String: Any]? {
+        var candidates: [[String: Any]] = []
+        if let p = rateLimits["primary"] as? [String: Any] { candidates.append(p) }
+        if let s = rateLimits["secondary"] as? [String: Any] { candidates.append(s) }
+        if let byId = rateLimits["rateLimitsByLimitId"] as? [String: Any] {
+            for v in byId.values {
+                guard let snap = v as? [String: Any] else { continue }
+                if let p = snap["primary"] as? [String: Any] { candidates.append(p) }
+                if let s = snap["secondary"] as? [String: Any] { candidates.append(s) }
+            }
+        }
+        let withMins = candidates.filter { asInt($0["windowDurationMins"]) != nil }
+        if withMins.isEmpty { return rateLimits["primary"] as? [String: Any] }   // 单窗兜底
+        return withMins.min { lhs, rhs in
+            abs((asInt(lhs["windowDurationMins"]) ?? 0) - 10080)
+                < abs((asInt(rhs["windowDurationMins"]) ?? 0) - 10080)
+        }
     }
 
     /// 兼容 JSON 反序列化的 NSNumber 与原生 Int/Int64。
@@ -69,44 +117,43 @@ struct RateLimitClient: RateLimitFetching {
         proc.standardOutput = stdout
         proc.standardError = Pipe()   // 丢弃 app-server 自身日志
 
-        let lock = NSLock()
+        let bagLock = NSLock()
         var responses: [Int: Any] = [:]
         let reader = LineReader(handle: stdout.fileHandleForReading) { line in
             guard let data = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let rid = obj["id"] as? Int else { return }
-            if let r = obj["result"] { lock.lock(); responses[rid] = r; lock.unlock() }
-            else if let e = obj["error"] { lock.lock(); responses[rid] = e; lock.unlock() }
+            if let r = obj["result"] { bagLock.lock(); responses[rid] = r; bagLock.unlock() }
+            else if let e = obj["error"] { bagLock.lock(); responses[rid] = e; bagLock.unlock() }
         }
         reader.start()
 
-        try proc.run()
-        defer {
-            proc.terminate()
-            reader.stop()
-        }
+        lock.lock(); cancelled = false; currentProc = proc; lock.unlock()
 
-        func send(_ obj: [String: Any]) throws {
-            var d = obj
-            if d["jsonrpc"] == nil { d["jsonrpc"] = "2.0" }
-            let data = try JSONSerialization.data(withJSONObject: d)
-            stdin.fileHandleForWriting.write(data)
-            stdin.fileHandleForWriting.write(Data("\n".utf8))
+        try proc.run()   // 启动失败抛 Swift error，由上层 catch，不崩
+        defer {
+            reader.stop()
+            if proc.isRunning { proc.terminate(); proc.waitUntilExit() }   // 仅在运行时回收
+            lock.lock(); if currentProc === proc { currentProc = nil }; lock.unlock()
         }
 
         // 1) 握手（experimentalApi=true：rate limits 属实验 API）
-        try send(["id": 1, "method": "initialize",
-                  "params": ["clientInfo": ["name": "PetDock", "version": "0.1"],
-                             "capabilities": ["experimentalApi": true]]])
-        guard Self.await(id: 1, in: &responses, lock: lock, timeout: timeout) != nil else {
-            throw DataError.msg("app-server 握手超时")
+        send(["id": 1, "method": "initialize",
+              "params": ["clientInfo": ["name": "PetDock", "version": "0.1"],
+                         "capabilities": ["experimentalApi": true]]], into: stdin)
+        guard Self.await(id: 1, bag: &responses, bagLock: bagLock, proc: proc,
+                         cancelled: { self.lock.lock(); let c = self.cancelled; self.lock.unlock(); return c },
+                         timeout: timeout) != nil else {
+            throw awaitFailure(proc: proc)
         }
-        try send(["method": "notifications/initialized"])
+        send(["method": "notifications/initialized"], into: stdin)
 
         // 2) 目标请求
-        try send(["id": id, "method": method, "params": params])
-        guard let res = Self.await(id: id, in: &responses, lock: lock, timeout: timeout) else {
-            throw DataError.msg("app-server 无响应（超时 \(Int(timeout))s）")
+        send(["id": id, "method": method, "params": params], into: stdin)
+        guard let res = Self.await(id: id, bag: &responses, bagLock: bagLock, proc: proc,
+                                   cancelled: { self.lock.lock(); let c = self.cancelled; self.lock.unlock(); return c },
+                                   timeout: timeout) else {
+            throw awaitFailure(proc: proc)
         }
         if let err = res as? [String: Any], err["code"] != nil || err["message"] != nil {
             throw DataError.msg("app-server 错误：\(err["message"] ?? "?")")
@@ -114,11 +161,35 @@ struct RateLimitClient: RateLimitFetching {
         return res
     }
 
-    private static func await(id: Int, in bag: inout [Int: Any], lock: NSLock, timeout: TimeInterval) -> Any? {
+    /// 写入失败（管道破裂等）忽略；靠 await 的「进程退出 / 超时」失败，不崩。
+    private func send(_ obj: [String: Any], into stdin: Pipe) {
+        var d = obj
+        if d["jsonrpc"] == nil { d["jsonrpc"] = "2.0" }
+        guard let data = try? JSONSerialization.data(withJSONObject: d) else { return }
+        try? stdin.fileHandleForWriting.write(contentsOf: data)
+        try? stdin.fileHandleForWriting.write(contentsOf: Data("\n".utf8))
+    }
+
+    /// 根据取消 / 进程退出 / 超时返回对应错误。
+    private func awaitFailure(proc: Process) -> DataError {
+        lock.lock(); let c = cancelled; lock.unlock()
+        if c { return DataError.msg("已取消（quit）") }
+        if !proc.isRunning { return DataError.msg("codex app-server 进程已退出（未安装 / 启动失败）") }
+        return DataError.msg("app-server 无响应（超时 \(Int(timeout))s）")
+    }
+
+    private static func await(id: Int, bag: inout [Int: Any], bagLock: NSLock, proc: Process,
+                              cancelled: () -> Bool, timeout: TimeInterval) -> Any? {
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
-            lock.lock(); let v = bag[id]; lock.unlock()
+            if cancelled() { return nil }
+            bagLock.lock(); let v = bag[id]; bagLock.unlock()
             if let v = v { return v }
+            if !proc.isRunning {
+                Thread.sleep(forTimeInterval: 0.1)   // 进程提前退出：稍等残留输出
+                bagLock.lock(); let v2 = bag[id]; bagLock.unlock()
+                return v2
+            }
             Thread.sleep(forTimeInterval: 0.05)
         }
         return nil

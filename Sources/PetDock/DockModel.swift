@@ -1,7 +1,7 @@
 import Foundation
 
 /// 底座/详情的纯展示数据。业务字段可空（缺失时 UI 占位 "—"）。
-/// 本阶段不读取真实额度/token，仅承载展示快照。
+/// 本结构仅承载展示快照，不直接读取数据源（由 LiveDockProvider 填充真实官方额度 / 本机 token）。
 struct DockSnapshot {
     let weekLeft: String?        // 剩余额度，如 "73%"
     let weekTokens: String?      // 本周 token，如 "1.2M"
@@ -26,7 +26,8 @@ struct DockSnapshot {
     }
 }
 
-/// 展示数据来源接口。P1 用静态假数据演示；真实额度/token 读取属后续阶段，本阶段严禁实现。
+/// 展示数据来源接口。LiveDockProvider 提供真实数据（官方额度 + 本机 token）；
+/// StaticDockProvider 仅演示用，不触碰真实数据源。
 protocol DockModelProvider: AnyObject {
     func currentSnapshot() -> DockSnapshot
 }

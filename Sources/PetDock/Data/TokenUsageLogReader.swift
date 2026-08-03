@@ -46,10 +46,16 @@ struct TokenUsageLogReader: TokenLogReading {
     }
 
     mutating func readPoints(from: Date, to: Date) throws -> TokenWindow {
+        let files = candidateFiles(from: from, to: to)
+        // 淘汰：移除已删除 / 移出当前扫描范围的缓存条目，避免 memCache 无界增长与陈旧数据。
+        let currentPaths = Set(files.map { $0.path })
+        for stale in memCache.keys where !currentPaths.contains(stale) {
+            memCache.removeValue(forKey: stale)
+        }
         var all: [TokenUsagePoint] = []
         var filesWithPoints = Set<String>()
         let fm = FileManager.default
-        for file in candidateFiles(from: from, to: to) {
+        for file in files {
             let size = ((try? fm.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value ?? -1
             let points: [TokenUsagePoint]
             if size >= 0, let hit = memCache[file.path], hit.size == size {

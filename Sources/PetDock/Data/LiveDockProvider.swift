@@ -53,8 +53,11 @@ final class LiveDockProvider: DockModelProvider {
         }
     }
 
-    /// 停止：拒绝后续刷新；在途任务完成时不再有 UI 副作用。供 quit 调用。
-    func stop() { queue.sync { isStopped = true } }
+    /// 停止：拒绝后续刷新；在途任务完成时不再有 UI 副作用；终止在途 codex 子进程不留孤儿。供 quit 调用。
+    func stop() {
+        queue.sync { isStopped = true }
+        service.cancelInFlight()
+    }
 
     /// 执行一次抓取（慢 IO 在 queue 外）并在 queue 内提交结果 / 处理 pending。
     private func startFetch(completion: @escaping () -> Void) {
