@@ -72,7 +72,7 @@
 
 ```sh
 make build        # swift build -c release，产出 .build/release/PetDock
-make app          # 组装 build/PetDock.app 并 ad-hoc 签名（Identifier=com.openai.petdock）
+make app          # 组装 build/PetDock.app 并 ad-hoc 签名（Identifier=io.github.bluesmilery.codexpetdock）
 make run          # 构建 app、启动（运行日志写入 /tmp/petdock.log）
 make diagnose     # 构建并跑一次识别诊断（输出到 /tmp/petdock-diagnose.txt）
 pkill -f PetDock  # 停止运行
