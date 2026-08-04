@@ -11,12 +11,12 @@
 
 ## 测试（已验证，全绿）
 
-`make test` = test-ui + test-data + test-shell，**208 项全部通过，0 failed**。
+`make test` = test-ui + test-data + test-shell，**221 项全部通过，0 failed**。
 
 | 套件 | 项数 | 覆盖 |
 | --- | --- | --- |
-| test-ui | 26 | selectPet 识别 11（Mascot 优先 / 不误绑主窗口 / 滞回 / petShaped）+ Geometry 坐标 4（多屏 / 负坐标）+ Follower 状态机 11（静止 / 移动 / 稳定 / 隐藏 / 重捕 / 频率阶） |
-| test-data | 91 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、**codex 路径解析 12 项 + 子进程 PATH prepend 5 项** |
+| test-ui | 36 | selectPet 识别（Mascot 优先 / 不误绑主窗口 / 滞回 / petShaped / **合理回退排除 384x95·18x6 辅助**）+ Geometry 坐标（多屏 / 负坐标）+ Follower 状态机 + **Dock 几何/reset 显示/placeBelow 宽度回归** |
+| test-data | 94 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、**codex 路径解析 12 项 + 子进程 PATH prepend 5 项 + resetsAt 格式化 MM-dd HH:mm / nil 占位** |
 | test-shell | 91 | Theme 内置 / 外部安全解析（颜色 / 字体 / 徽标 / 危险关键字）、Settings 持久化、ThemeStore fixture 热加载、AutoStart 状态映射 |
 
 纯函数测试（不依赖屏幕录制权限 / 不联网），用 `swiftc` 编译真实源码运行。
@@ -84,3 +84,8 @@ Remove historical SHA, private ref, and internal worker/task provenance while pr
    直接启动，不经 `/bin/sh -lc`）修复。env 覆盖先展开 `~` 且必须为绝对路径（否则 `overrideNotAbsolute`），
    PATH 仅接受绝对目录（跳过空 / 相对），系统候选目录可注入（测试传空隔离）；解析器测试 12 项
    （env 优先 / 不可执行 / tilde 展开 / 相对拒绝、PATH 仅绝对 / 跳过空相对、nvm 多版本、缺失、不可执行、symlink）。
+6. **WEEK LEFT 到期时间 + 窗口跟随几何（已修复）**：① 主底座 WEEK LEFT 单元显示本周期到期时间
+   （`resetsAt`，MM-dd HH:mm 本机时区，nil 占位不崩，不改底座 200x48 外框）；② `DockPanel.placeBelow`
+   底座宽度固定 `dockWidth(200)`、按 pet 中心对齐，不再被 `pet.width` 撑大（Mascot 消失误选 384x95 时旧
+   `max(dockWidth,pet.width)` 把底座 200→384）；③ `selectPet` 回退用 `isReasonablePet`（petShaped + 最小边≥50
+   + 非辅助 title），排除 384x95 / 18x6 / Voice Controls / Composition Surface，无合理候选则 nil 隐藏。

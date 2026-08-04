@@ -1,6 +1,6 @@
 import Cocoa
 
-/// 底座视图：圆角半透明，左侧 WEEK LEFT、右侧 WEEK TOKENS，点击触发详情展开。
+/// 底座视图：圆角半透明，左侧 WEEK LEFT（含本周期到期时间）、右侧 WEEK TOKENS，点击触发详情展开。
 /// 纯原生 AppKit（NSStackView + NSTextField）。
 final class DockView: NSView {
 
@@ -9,12 +9,15 @@ final class DockView: NSView {
 
     private let leftCaption: NSTextField
     private let leftValue: NSTextField
+    /// WEEK LEFT 本周期到期时间（resetsAt，MM-dd HH:mm）；nil 时占位「—」。紧凑次级文本。
+    private let leftReset: NSTextField
     private let tokensCaption: NSTextField
     private let tokensValue: NSTextField
 
     init() {
         leftCaption = DockView.captionLabel("WEEK LEFT")
         leftValue = DockView.valueLabel()
+        leftReset = DockView.resetLabel()
         tokensCaption = DockView.captionLabel("WEEK TOKENS")
         tokensValue = DockView.valueLabel()
         super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 48))
@@ -22,9 +25,10 @@ final class DockView: NSView {
         layer?.cornerRadius = 10
         layer?.backgroundColor = NSColor(white: 0.08, alpha: 0.65).cgColor
 
-        let leftCol = NSStackView(views: [leftCaption, leftValue])
+        let leftCol = NSStackView(views: [leftCaption, leftValue, leftReset])
         leftCol.orientation = .vertical
         leftCol.alignment = .leading
+        leftCol.spacing = 0
 
         let rightCol = NSStackView(views: [tokensCaption, tokensValue])
         rightCol.orientation = .vertical
@@ -33,7 +37,8 @@ final class DockView: NSView {
         let row = NSStackView(views: [leftCol, rightCol])
         row.orientation = .horizontal
         row.distribution = .fillEqually
-        row.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+        // top/bottom 4（原 6）：为 WEEK LEFT 第三行 reset 次级文本让出紧凑空间，不改底座整体尺寸（48）。
+        row.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
         NSLayoutConstraint.activate([
@@ -46,9 +51,10 @@ final class DockView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) 未实现") }
 
-    /// 用展示快照刷新两行数值。
+    /// 用展示快照刷新数值（WEEK LEFT 百分比 + 到期时间、WEEK TOKENS）。
     func render(_ s: DockSnapshot) {
         leftValue.stringValue = s.rendered(s.weekLeft)
+        leftReset.stringValue = s.rendered(s.resetAt)
         tokensValue.stringValue = s.rendered(s.weekTokens)
     }
 
@@ -68,11 +74,15 @@ final class DockView: NSView {
         tokensCaption.font = DockView.font(m.font, caption: true)
         leftValue.font = DockView.font(m.font, caption: false)
         tokensValue.font = DockView.font(m.font, caption: false)
+        leftReset.textColor = dim
     }
 
     override func mouseDown(with event: NSEvent) {
         onTap?()
     }
+
+    /// 仅供测试：WEEK LEFT 到期时间文本。
+    var resetTextForTesting: String { leftReset.stringValue }
 
     // MARK: - 工厂
 
@@ -103,6 +113,15 @@ final class DockView: NSView {
         let l = NSTextField(labelWithString: DockSnapshot.placeholder)
         l.font = .systemFont(ofSize: 15, weight: .semibold)
         l.textColor = .white
+        l.backgroundColor = .clear
+        return l
+    }
+
+    /// WEEK LEFT 到期时间次级文本：8pt regular dim（比 caption 更紧凑），不随主题字号变化。
+    private static func resetLabel() -> NSTextField {
+        let l = NSTextField(labelWithString: DockSnapshot.placeholder)
+        l.font = .systemFont(ofSize: 8, weight: .regular)
+        l.textColor = NSColor.white.withAlphaComponent(0.5)
         l.backgroundColor = .clear
         return l
     }

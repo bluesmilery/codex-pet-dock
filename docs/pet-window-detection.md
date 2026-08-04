@@ -46,10 +46,15 @@
 在「非主窗口」集合里，按优先级选择：
 1. **滞回（hysteresis）**：上次选中的 `windowID` 仍在「非主窗口」集中 ⇒ 继续跟随它。
    依据：避免在多候选间抖动，且宠物被拖动/动画时 windowID 不变。
-2. **高 layer 优先**：`layer > 0`（浮层 / 置顶）的候选里，取 `layer` 最高；并列取 `area` 最小。
+2. **高 layer 优先（须合理候选）**：`layer > 0` **且** `isReasonablePet`（见 R4.4）的候选里，取 `layer` 最高；并列取 `area` 最小。
    依据：桌面宠物通常以浮层窗口呈现，layer 高于主聊天窗口。
-3. **尺寸符合宠物范围**：`maxSide ≤ petMaxSide(300)` **且** `area ≤ petMaxArea(70_000)`，取 `area` 最小。
+3. **尺寸符合宠物范围（须合理候选）**：`isReasonablePet`（见 R4.4），取 `area` 最小。
    依据：宠物是小窗口；主窗口已被 R3 排除，剩下的最小者最可能是宠物。
+4. **R4.4 合理候选过滤 `isReasonablePet`**：`isPetShaped`（`maxSide≤300` 且 `area≤70_000`）**且** 最小边
+   ≥ `petMinSide(50)` **且** 非辅助控件 title（Voice Controls / Composition Surface / Backing / Glass）。
+   依据（实测修正）：Mascot 消失时，旧「高 layer」回退会误选 **384x95**（maxSide>300，宽扁辅助）或
+   **18x6**（minSide<50，Voice Controls Backing）；现仅允许合理宠物几何，无候选则隐藏（不误绑辅助窗）。
+   Mascot 172x179 合理；placeBelow 底座宽度固定 `dockWidth(200)`，不被 pet.width 撑大。
 
 ### R5. 歧义与无候选
 - 无非主窗口候选且存在可见窗口 ⇒ **不选**（理由：宁可漏跟也不误绑主窗口）。

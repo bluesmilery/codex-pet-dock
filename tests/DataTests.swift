@@ -279,6 +279,18 @@ struct DataTestRunner {
               && LiveDockProvider.formatTokens(1500) == "1.5K" && LiveDockProvider.formatTokens(1_590_000) == "1.59M"
               && LiveDockProvider.formatTokens(1_590_000_000) == "1.59B", "")
         check("T12r formatPercent=25%", LiveDockProvider.formatPercent(250, of: 1000) == "25%", "")
+
+        // ---- T-fmt: resetsAt 格式化（本机时区 MM-dd HH:mm）+ resetAt 映射 + nil 占位不崩 ----
+        let fmtDate = Date(timeIntervalSince1970: 1_723_104_120)
+        let formatted = LiveDockProvider.formatDateTime(fmtDate)
+        check("T-fmt1 formatDateTime 格式 MM-dd HH:mm",
+              formatted.range(of: #"^\d{2}-\d{2} \d{2}:\d{2}$"#, options: .regularExpression) != nil, formatted)
+        let wlReset = WeekLeft(usedPercent: 50, resetsAt: fmtDate, windowMinutes: 10080, planType: "fixture-plan", fetchedAt: fmtDate)
+        let snapReset = LiveDockProvider.buildSnapshot(left: .success(wlReset), tokens: .failure(DataError.msg("x")))
+        check("T-fmt2 buildSnapshot resetAt == formatDateTime(resetsAt)", snapReset.resetAt == formatted, "\(snapReset.resetAt ?? "?")")
+        let wlNil = WeekLeft(usedPercent: 50, resetsAt: nil, windowMinutes: 10080, planType: "fixture-plan", fetchedAt: fmtDate)
+        let snapNil = LiveDockProvider.buildSnapshot(left: .success(wlNil), tokens: .failure(DataError.msg("x")))
+        check("T-fmt3 resetsAt nil → resetAt nil（占位不崩）", snapNil.resetAt == nil, "\(snapNil.resetAt ?? "?")")
         section("LiveDockProvider 映射")
 
         // ---- C: 并发（refreshInFlight 合并 / maxConcurrent=1 / pending 最终刷新 / pause-resume 安全）----

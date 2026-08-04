@@ -53,12 +53,42 @@ let r10 = PetTracker.selectPet(candidates: [
 ], lastWID: nil)
 check("T10 Mascot优先于高layer子窗口→选wid2", r10.selected?.wid == 2, r10.selected?.detailed() ?? "nil")
 
-// T11 无 Mascot 时回退高 layer 规则
-let r11 = PetTracker.selectPet(candidates: [
+// T11 无 Mascot 时回退高 layer（须合理候选：非辅助控件、几何正常）
+let r11a = PetTracker.selectPet(candidates: [
     mk(1, layer: 0, w: 800, h: 600),
-    mk(2, layer: 3, w: 120, h: 120, title: "Codex Pet Voice Controls Glass")
+    mk(2, layer: 3, w: 120, h: 120, title: "Codex Pet Something")   // 合理宠物（非辅助 title）
 ], lastWID: nil)
-check("T11 无Mascot→回退高layer选wid2", r11.selected?.wid == 2, r11.selected?.detailed() ?? "nil")
+check("T11a 无Mascot→回退高layer选合理 wid2", r11a.selected?.wid == 2, r11a.selected?.detailed() ?? "nil")
+
+let r11b = PetTracker.selectPet(candidates: [
+    mk(1, layer: 0, w: 800, h: 600),
+    mk(2, layer: 3, w: 120, h: 120, title: "Codex Pet Voice Controls Glass")   // 辅助 title
+], lastWID: nil)
+check("T11b 无Mascot+仅辅助控件→nil", r11b.selected == nil, r11b.reason)
+
+// T12 无 Mascot + 384x95/18x6 layer3 → nil（Mascot 消失不误选辅助 / 极端几何）
+let r12 = PetTracker.selectPet(candidates: [
+    mk(1, layer: 0, w: 1728, h: 1050, title: "ChatGPT"),
+    mk(2, layer: 3, w: 384, h: 95),    // 宽扁辅助（maxSide>300）
+    mk(3, layer: 3, w: 18, h: 6)       // 细长辅助（minSide<50）
+], lastWID: nil)
+check("T12 无Mascot+384x95/18x6 layer3→nil", r12.selected == nil, r12.selected?.detailed() ?? r12.reason)
+
+// T13 有 Mascot + 384x95 layer3 → 仍优先 Mascot
+let r13 = PetTracker.selectPet(candidates: [
+    mk(1, layer: 0, w: 1728, h: 1050, title: "ChatGPT"),
+    mk(2, layer: 2, w: 172, h: 179, title: "Codex Pet Mascot Effect"),
+    mk(3, layer: 3, w: 384, h: 95)
+], lastWID: nil)
+check("T13 有Mascot→优先Mascot wid2(不受辅助干扰)", r13.selected?.wid == 2, r13.selected?.detailed() ?? "nil")
+
+// T14 仅已知辅助控件 → nil
+let r14 = PetTracker.selectPet(candidates: [
+    mk(1, layer: 0, w: 1728, h: 1050, title: "ChatGPT"),
+    mk(2, layer: 3, w: 17, h: 6, title: "Codex Pet Voice Controls Backing"),
+    mk(3, layer: 3, w: 768, h: 912, title: "Codex Pet Composition Surface")
+], lastWID: nil)
+check("T14 仅辅助(Voice Controls/Composition)→nil", r14.selected == nil, r14.selected?.detailed() ?? r14.reason)
 
 print("\n[selectPet] \(pass) passed, \(fail) failed")
 
@@ -109,6 +139,34 @@ check("F10 stable间隔=stableInterval", d4.nextInterval == Follower.stableInter
 // 隐藏决策应同步隐藏底座（详情由调用方跟随 showDock 关闭）
 check("F11 隐藏时showDock=false(底座+详情隐藏)", d1.showDock == false)
 print("\n[Follower] \(pass - fPass) passed, \(fail - fBase) failed")
+
+// ---- Dock 几何 / reset 显示 / placeBelow 宽度（需 NSApplication 初始化 NSPanel/NSView）----
+let _ = NSApplication.shared
+let dkBase = fail, dkPass = pass
+
+// T15 placeBelow：pet 宽 384 → 底座宽仍 200（不被撑大）
+let dp = DockPanel()
+dp.placeBelow(petQuartzRect: CGRect(x: 100, y: 100, width: 384, height: 179))
+check("T15 placeBelow pet384→dock宽200(不撑大)", dp.frame.width == 200, "width=\(dp.frame.width)")
+
+// T16 DockView reset 显示：有 resetAt → 显示；nil → 占位不崩
+let dv = DockView()
+let snapReset = DockSnapshot(weekLeft: "50%", weekTokens: "1.2M", plan: "pro",
+    resetAt: "<reset>", cacheRatio: nil, inputTokens: nil, outputTokens: nil,
+    sessionCount: nil, updatedAt: nil, localEstimateNote: "n")
+dv.render(snapReset)
+check("T16 DockView render resetAt→显示", dv.resetTextForTesting == "<reset>", dv.resetTextForTesting)
+let snapNil = DockSnapshot(weekLeft: "50%", weekTokens: "1.2M", plan: "pro",
+    resetAt: nil, cacheRatio: nil, inputTokens: nil, outputTokens: nil,
+    sessionCount: nil, updatedAt: nil, localEstimateNote: "n")
+dv.render(snapNil)
+check("T16b DockView resetAt nil→占位—", dv.resetTextForTesting == DockSnapshot.placeholder, dv.resetTextForTesting)
+
+// T17 几何回归：DockView frame 200x48 + DockPanel dockHeight/Width（加 reset 不改外框）
+check("T17a DockView frame 200x48", dv.frame.width == 200 && dv.frame.height == 48, "\(dv.frame.size)")
+check("T17b DockPanel dockWidth=200", DockPanel().dockWidth == 200, "")
+check("T17c DockPanel dockHeight=48", DockPanel().dockHeight == 48, "")
+print("\n[Dock 几何/reset/placeBelow] \(pass - dkPass) passed, \(fail - dkBase) failed")
 
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)

@@ -59,11 +59,13 @@ final class DockPanel {
         didShow = false
     }
 
-    /// 把底座放到宠物窗口（Quartz 全局 rect）正下方，居中、紧贴、不重叠。
+    /// 把底座放到宠物窗口（Quartz 全局 rect）正下方，按 pet 中心水平居中、紧贴、不重叠。
+    /// 底座宽度始终为 `dockWidth`（200）：**不被 pet.width 撑大**（实测 Mascot 消失误选 384x95 辅助窗时，
+    /// 旧 `max(dockWidth, pet.width)` 会把底座 200→384 突然变宽）。
     func placeBelow(petQuartzRect pet: CGRect) {
-        let dw = max(dockWidth, pet.width)
+        let dw = dockWidth
         let dh = dockHeight
-        let dx = pet.origin.x + (pet.width - dw) / 2          // 水平居中于宠物
+        let dx = pet.origin.x + (pet.width - dw) / 2          // 按 pet 中心对齐（dw 固定 200）
         let dy = pet.origin.y + pet.height + gap              // Quartz y 增大 = 向下 → 宠物下方
         let dockQuartz = CGRect(x: dx, y: dy, width: dw, height: dh)
         panel.setFrame(Geometry.appKitRectFromQuartz(dockQuartz), display: true)

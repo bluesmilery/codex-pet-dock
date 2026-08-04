@@ -6,6 +6,7 @@ enum PetHeuristics {
     static let mainMinSide: CGFloat = 400       // 主窗口最大边下限
     static let petMaxArea: CGFloat = 70_000     // 宠物面积上限
     static let petMaxSide: CGFloat = 300        // 宠物最大边上限
+    static let petMinSide: CGFloat = 50         // 宠物最小边下限（排除 18x6 等细长 / 过小辅助控件）
 }
 
 /// 一个可观测的窗口候选（来自 CGWindowList）。
@@ -32,6 +33,21 @@ struct WinCandidate {
         !isLikelyMainWindow
             && maxSide <= PetHeuristics.petMaxSide
             && area <= PetHeuristics.petMaxArea
+    }
+
+    /// 已知辅助控件（Mascot 周边的合成面 / 语音控件），识别时排除。
+    var isAuxiliaryTitle: Bool {
+        let t = title.lowercased()
+        return ["voice control", "composition surface", "backing", "glass"].contains { t.contains($0) }
+    }
+
+    /// R4.4 合理宠物候选：petShaped + 最小边（排除 18x6 等细长 / 过小）+ 非辅助控件 title。
+    /// Mascot 172x179 合理；384x95（maxSide>300）、18x6（minSide<50）、Voice Controls / Composition 排除。
+    var isReasonablePet: Bool {
+        isPetShaped
+            && bounds.width >= PetHeuristics.petMinSide
+            && bounds.height >= PetHeuristics.petMinSide
+            && !isAuxiliaryTitle
     }
 
     func detailed() -> String {
@@ -113,8 +129,8 @@ enum PetTracker {
             )
         }
 
-        // R4.2 高 layer 优先（浮层宠物）
-        let highLayer = nonMain.filter { $0.layer > 0 }
+        // R4.2 高 layer 优先（浮层宠物）—— 须为合理宠物候选，排除辅助控件 / 极端几何
+        let highLayer = nonMain.filter { $0.layer > 0 && $0.isReasonablePet }
         if let best = highLayer.sorted(by: { lhs, rhs in
             if lhs.layer != rhs.layer { return lhs.layer > rhs.layer }
             return lhs.area < rhs.area
@@ -127,8 +143,8 @@ enum PetTracker {
             )
         }
 
-        // R4.3 尺寸符合宠物范围
-        let petShaped = nonMain.filter { $0.isPetShaped }
+        // R4.3 尺寸符合宠物范围（合理候选：排除辅助控件 / 极端几何）
+        let petShaped = nonMain.filter { $0.isReasonablePet }
         if let best = petShaped.min(by: { $0.area < $1.area }) {
             return SelectionResult(
                 selected: best,
