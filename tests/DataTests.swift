@@ -144,14 +144,14 @@ struct DataTestRunner {
         let result: [String: Any] = [
             "rateLimits": [
                 "planType": "fixture-plan",
-                "primary": ["usedPercent": 45, "windowDurationMins": 10080, "resetsAt": Int64(1723104120)]
+                "primary": ["usedPercent": 45, "windowDurationMins": 10080, "resetsAt": Int64(2000000000)]
             ] as [String: Any]
         ]
         let wl = try! RateLimitClient.parse(result)
         check("T5a remainingPercent=55", wl.remainingPercent == 55, "\(wl.remainingPercent)")
         check("T5b isWeekly(10080min)=true", wl.isWeekly, "")
         check("T5c planType=fixture-plan", wl.planType == "fixture-plan", "\(wl.planType ?? "")")
-        check("T5d resetsAt 正确", wl.resetsAt == Date(timeIntervalSince1970: 1723104120), "")
+        check("T5d resetsAt 正确", wl.resetsAt == Date(timeIntervalSince1970: 2000000000), "")
         let r2res: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 10, "windowDurationMins": 1440]]]
         check("T5e windowMins=1440(日)→非周", try! RateLimitClient.parse(r2res).isWeekly == false, "")
         section("WeekLeft 解析")
@@ -169,11 +169,11 @@ struct DataTestRunner {
         let wl2 = try! RateLimitClient.parse(rl2)
         check("T-rl2 单窗兜底 primary（无 windowMins）", wl2.usedPercent == 30 && wl2.windowMinutes == nil, "")
         // resetsAt 秒
-        let rl3: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 5, "resetsAt": Int64(1723104120)] as [String: Any]]]
-        check("T-rl3 resetsAt 秒", try! RateLimitClient.parse(rl3).resetsAt == Date(timeIntervalSince1970: 1723104120), "")
+        let rl3: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 5, "resetsAt": Int64(2000000000)] as [String: Any]]]
+        check("T-rl3 resetsAt 秒", try! RateLimitClient.parse(rl3).resetsAt == Date(timeIntervalSince1970: 2000000000), "")
         // resetsAt 毫秒（13 位）→ /1000
-        let rl4: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 5, "resetsAt": Int64(1723104120000)] as [String: Any]]]
-        check("T-rl4 resetsAt 毫秒兼容（/1000 后同秒）", try! RateLimitClient.parse(rl4).resetsAt == Date(timeIntervalSince1970: 1723104120), "")
+        let rl4: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 5, "resetsAt": Int64(2000000000000)] as [String: Any]]]
+        check("T-rl4 resetsAt 毫秒兼容（/1000 后同秒）", try! RateLimitClient.parse(rl4).resetsAt == Date(timeIntervalSince1970: 2000000000), "")
         // 多桶 rateLimitsByLimitId：选桶内 weekly primary
         let rl5: [String: Any] = ["rateLimits": [
             "primary": ["usedPercent": 10, "windowDurationMins": 1440] as [String: Any],
@@ -239,7 +239,7 @@ struct DataTestRunner {
         section("分项累计/缺字段")
 
         // ---- T12: LiveDockProvider 字段映射 / 占位 / 单源失败（纯函数 buildSnapshot）----
-        let wlOK = WeekLeft(usedPercent: 45, resetsAt: Date(timeIntervalSince1970: 1723104120),
+        let wlOK = WeekLeft(usedPercent: 45, resetsAt: Date(timeIntervalSince1970: 2000000000),
                             windowMinutes: 10080, planType: "fixture-plan", fetchedAt: D("2026-08-03T12:00:00Z"))
         let wtOK = WeekTokens(totalTokens: 1_590_000_000, inputTokens: 1000, cachedInputTokens: 250,
                               outputTokens: 650, windowStart: D("2026-08-05T00:00:00Z"),
@@ -281,7 +281,7 @@ struct DataTestRunner {
         check("T12r formatPercent=25%", LiveDockProvider.formatPercent(250, of: 1000) == "25%", "")
 
         // ---- T-fmt: resetsAt 格式化（本机时区 MM-dd HH:mm）+ resetAt 映射 + nil 占位不崩 ----
-        let fmtDate = Date(timeIntervalSince1970: 1_723_104_120)
+        let fmtDate = Date(timeIntervalSince1970: 2_000_000_000)
         let formatted = LiveDockProvider.formatDateTime(fmtDate)
         check("T-fmt1 formatDateTime 格式 MM-dd HH:mm",
               formatted.range(of: #"^\d{2}-\d{2} \d{2}:\d{2}$"#, options: .regularExpression) != nil, formatted)

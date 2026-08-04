@@ -152,10 +152,10 @@ check("T15 placeBelow pet384→dock宽200(不撑大)", dp.frame.width == 200, "w
 // T16 DockView reset 显示：有 resetAt → 显示；nil → 占位不崩
 let dv = DockView()
 let snapReset = DockSnapshot(weekLeft: "50%", weekTokens: "1.2M", plan: "pro",
-    resetAt: "<reset>", cacheRatio: nil, inputTokens: nil, outputTokens: nil,
+    resetAt: "01-02 03:04", cacheRatio: nil, inputTokens: nil, outputTokens: nil,
     sessionCount: nil, updatedAt: nil, localEstimateNote: "n")
 dv.render(snapReset)
-check("T16 DockView render resetAt→显示", dv.resetTextForTesting == "<reset>", dv.resetTextForTesting)
+check("T16 DockView render resetAt→显示", dv.resetTextForTesting == "01-02 03:04", dv.resetTextForTesting)
 let snapNil = DockSnapshot(weekLeft: "50%", weekTokens: "1.2M", plan: "pro",
     resetAt: nil, cacheRatio: nil, inputTokens: nil, outputTokens: nil,
     sessionCount: nil, updatedAt: nil, localEstimateNote: "n")
