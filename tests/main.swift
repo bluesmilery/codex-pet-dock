@@ -4,7 +4,7 @@ import Cocoa
 // 用 swiftc 与真实源码一起编译：PetTracker.swift + Geometry.swift + selftest.swift
 
 func mk(_ wid: UInt32, layer: Int, w: CGFloat, h: CGFloat,
-        onscreen: Bool = true, pid: Int32 = <pid>, owner: String = "ChatGPT", title: String = "") -> WinCandidate {
+        onscreen: Bool = true, pid: Int32 = 11111, owner: String = "ChatGPT", title: String = "") -> WinCandidate {
     WinCandidate(wid: CGWindowID(wid), ownerPID: pid, ownerName: owner, title: title,
                  layer: layer, alpha: 1.0, isOnscreen: onscreen, sharingState: 1,
                  bounds: CGRect(x: 100, y: 100, width: w, height: h))
