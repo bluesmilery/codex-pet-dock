@@ -1,110 +1,195 @@
 # Codex Pet Dock
 
-> macOS 桌面伴侣：在 Codex（ChatGPT 桌面应用，bundle id `com.openai.codex`）的桌面宠物下方，
-> 悬浮一个透明「底座」，显示本周剩余额度（WEEK LEFT）与本周 Token 用量（WEEK TOKENS）；
-> 点击展开详情卡。自动跟随宠物移动、隐藏与重现重捕，支持主题、状态栏菜单、登录自启。
+> A macOS desktop companion that floats a transparent HUD beneath your Codex desktop pet,
+> showing your weekly quota remaining and weekly token usage at a glance.
 
-## 功能
+**Codex Pet Dock** 是一款 macOS 桌面伴侣：在 Codex 桌面应用（`/Applications/ChatGPT.app`，bundle id `com.openai.codex`）的桌面宠物正下方，悬浮一个透明「底座」，实时显示**本周剩余额度（WEEK LEFT）**与**本周 Token 用量（WEEK TOKENS）**；点击底座可展开详情卡。它会自动跟随宠物移动、在宠物隐藏时同步隐藏并在重现后重新捕获，并提供主题切换、状态栏菜单与登录自启。
 
-- **透明底座**：紧贴 Codex 桌面宠物下方，显示 `WEEK LEFT` / `WEEK TOKENS`；缺失数据占位 `—`。
-- **详情卡**：点击底座展开/关闭，含套餐、重置时间、缓存比例、输入、输出、会话数、更新时间、本机估算提示。
-- **自适应跟随**：宠物静止时低频且不重复 `setFrame`，移动时升频，稳定后降频；宠物隐藏/退出时底座与详情同步隐藏，重现后重捕。
-- **真实数据**：
-  - `WEEK LEFT`：经 `codex app-server` JSON-RPC 读取官方周额度（`primary` 周窗口）。
-  - `WEEK TOKENS`：解析 `~/.codex/sessions` 本机会话日志的 token 增量求和。
-- **主题**：3 款内置（Holographic / Warm Gold / Circuit）+ 外部 JSON 主题热加载（安全白名单解析）。
-- **状态栏菜单**：主题选择、显示/隐藏底座、登录时启动、退出。
-- **登录自启**：`SMAppService.mainApp`（macOS 13+），失败可解释、不崩溃。
+所有窗口枚举与数据读取均使用**公开 API**，不修改 Codex、不读取凭证、不读取会话正文。
 
-## 隐私边界（硬约束）
+---
 
-- **不修改** Codex / ChatGPT.app。
+## ✨ 功能亮点
+
+- **透明底座 HUD**：紧贴宠物下方、不重叠，显示 `WEEK LEFT`（含本周期到期时间）与 `WEEK TOKENS`；数据缺失时以 `—` 占位。
+- **详情卡**：点击底座展开 / 关闭，列出套餐、重置时间、缓存比例、输入、输出、会话数、更新时间，以及本机估算说明。
+- **自适应跟随**：宠物移动时高频跟随并定位，静止后自动降频且不重复刷新位置；宠物隐藏或 Codex 退出时底座与详情同步隐藏，重现后重新捕获。
+- **真实数据，严格隐私**：
+  - `WEEK LEFT`：经 `codex app-server` 的 JSON-RPC 读取官方周额度（`primary` 周窗口）。
+  - `WEEK TOKENS`：聚合 `~/.codex/sessions` 本机会话日志的 token 增量。
+- **主题**：内置 3 款程序化主题，并支持从 Application Support 加载外部 JSON 主题（带安全白名单解析、文件变化自动热加载）。
+- **状态栏菜单**：主题选择、显示 / 隐藏底座、登录时启动、退出。
+- **登录自启**：基于公开 `SMAppService`（macOS 13+），失败时可解释、不崩溃。
+
+---
+
+## 🖼️ 效果与界面
+
+<!-- 截图占位：建议在此处放置「底座贴在宠物下方」与「点击展开详情卡」的截图。
+     本仓库暂不包含真实截图；如贡献截图，请确保画面不含真实额度、账号或任何敏感信息。 -->
+
+底座与详情卡均为原生 AppKit（`NSPanel` + `NSStackView` + `NSTextField`）绘制：
+
+- **底座**（约 200×48，半透明圆角）：
+  - 左列：`WEEK LEFT` 标题 + 剩余百分比 + 本周期到期时间（`MM-dd HH:mm`，本机时区）。
+  - 右列：`WEEK TOKENS` 标题 + 本周累计 token。
+  - 点击底座切换详情卡。
+- **详情卡**（约 230×190）：套餐 / 重置时间 / 缓存比例 / 输入 / 输出 / 会话数 / 更新时间，底部附「本机估算」说明。
+- **状态栏**：菜单栏的爪印（pawprint）图标，下拉菜单见「主题与设置」。
+
+---
+
+## 📋 系统要求
+
+- **macOS 13（Ventura）或更高**（`SMAppService`、现代 AppKit 需要）。
+- **Apple Silicon（arm64）**：发布包按 arm64 构建。
+- **Swift 5.9+ 工具链**（从源码构建时）。
+- **Codex 桌面应用**（`ChatGPT.app`）已安装，且已登录（`WEEK LEFT` 依赖 codex 已完成自身鉴权）。
+- **屏幕录制权限**：跨应用窗口枚举的硬前提，详见「隐私与权限」。
+
+---
+
+## 🔒 隐私与权限
+
+本项目遵循严格的隐私边界（已由 fixture 测试固化）：
+
+- **不修改** Codex / `ChatGPT.app`。
 - **不读取** `auth.json`、认证 token、邮箱、Chrome Profile。
-- **不读取 / 记录 / 输出** 会话正文；`WEEK TOKENS` 仅提取 `timestamp` + `last_token_usage.total_tokens` 两个数值。
-- `WEEK LEFT` 的鉴权由 `codex` 进程在其可信环境完成；本进程仅经 stdio 收发 JSON-RPC 文本，只解析 `usedPercent`/`resetsAt`/`windowDurationMins`/`planType`，不碰凭证。
-- **不使用** 私有 CGS API；窗口枚举仅用公开 `CGWindowListCopyWindowInfo`。
+- **不读取 / 记录 / 输出会话正文**。`WEEK TOKENS` 仅从日志中提取 `timestamp` 与 `last_token_usage` 的若干数值字段。
+- **不外发数据**：所有计算与缓存均在本地完成。
+- **不使用私有 API**：窗口枚举仅用公开的 `CGWindowListCopyWindowInfo`，不调用私有 CGS 接口。
+- `WEEK LEFT` 的鉴权由 `codex` 进程在其自身可信环境内完成；本进程仅经 stdio 收发 JSON-RPC 文本，只解析 `usedPercent` / `resetsAt` / `windowDurationMins` / `planType`，不接触任何凭证。
 
-## 构建
+**屏幕录制权限（TCC）**：`CGWindowListCopyWindowInfo` 是唯一公开的跨应用窗口枚举 API；macOS 在未授权时会将其过滤为空列表。首次运行 `PetDock.app` 会触发系统授权请求，请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 **PetDock**，然后退出并重启 app 生效。
 
-```sh
-make build        # swift build -c release
-make app          # 组装并 ad-hoc 签名 build/PetDock.app
-make test         # UI + 数据 + Shell 全量测试
-```
+> ⚠️ ad-hoc 签名没有 team ID，TCC 按 ad-hoc 签名的代码目录哈希认证；每次重新签名（如重新执行 `make app`）都会改变该哈希值，使授权失效而需要重新授予。生产环境建议改用稳定开发者签名或 notarized 构建。
 
-## 分发
+---
 
-最终包：`dist/CodexPetDock-1.0.0-macOS-arm64.zip`（SHA256 `<hash>…`，ad-hoc 签名、未 notarized；用 `ditto` 打包，未改签名）。
+## 📦 构建、运行与分发
 
-## 运行
+在仓库根目录执行：
 
 ```sh
-make run          # 启动，日志写入 /tmp/petdock.log
-make diagnose     # 一次性识别诊断，写入 /tmp/petdock-diagnose.txt
-pkill -f PetDock  # 停止
+make build        # swift build -c release，产出 .build/release/PetDock
+make app          # 组装 build/PetDock.app 并 ad-hoc 签名（Identifier=com.openai.petdock）
+make run          # 构建 app、启动（运行日志写入 /tmp/petdock.log）
+make diagnose     # 构建并跑一次识别诊断（输出到 /tmp/petdock-diagnose.txt）
+pkill -f PetDock  # 停止运行
+make clean        # 清理构建产物
+make clean-logs   # 清理 /tmp 下的运行 / 诊断日志
 ```
 
-## 屏幕录制权限（硬前提）
+诊断模式（`--diagnose`）会枚举窗口、定位 Codex 宠物并把结果写入 `/tmp/petdock-diagnose.txt`，用于排查「识别不到宠物」类问题；若该文件未生成，通常意味着屏幕录制权限尚未授予。
 
-`CGWindowListCopyWindowInfo` 是唯一公开的跨应用窗口枚举 API；macOS 在**无屏幕录制权限**时
-（`CGPreflightScreenCaptureAccess() == false`）会过滤为空列表。首次运行 `PetDock.app` 会触发
-系统授权请求；在「系统设置 › 隐私与安全性 › 屏幕录制」允许 **PetDock** 后，退出并重启 app 生效。
+**分发**：当前发布包为 ad-hoc 签名（无 team ID）、未 notarized 的 arm64 预编译包。具体校验值与下载方式以发布说明为准。
 
-> 注：ad-hoc 签名无 team ID，TCC 按 CDHash 认证；每次重新 `codesign`（`make app`）会改变
-> CDHash，授权会失效需重新授予。生产建议改用稳定开发者签名 / notarized 构建。
+---
 
-## 状态栏菜单
+## 📊 数据来源与口径
 
-菜单栏爪印（pawprint）图标：**主题**（子菜单，当前打勾）/ **显示·隐藏底座** / **登录时启动**（打勾）/ **退出 PetDock**（⌘Q）。
+仅承载两项数据，均已在 `docs/data-layer.md` 中记录字段与口径。下表示例值为说明用占位，非任何真实账户数据。
 
-## 主题
+| 指标 | 来源 | 解析字段 | 显示示例（占位） |
+| --- | --- | --- | --- |
+| `WEEK LEFT` | `codex app-server` JSON-RPC：`account/rateLimits/read` | `primary.usedPercent` / `resetsAt` / `windowDurationMins`（10080 = 7 天 = 周窗口）/ `planType` | `73%` |
+| `WEEK TOKENS` | `~/.codex/sessions/**/*.jsonl`（按日期分桶的会话日志） | Σ `payload.info.last_token_usage.total_tokens`（单次增量，已验证跨会话求和不重复） + 输入 / 缓存 / 输出分项 | `1.2M` |
 
-- 内置：Holographic / Warm Gold / Circuit（共享同一几何槽位 200×48，只换皮不改布局）。
-- 外部：`~/Library/Application Support/PetDock/themes/*.json`，文件变化自动热加载。
-- 安全：颜色仅接受 `[r,g,b,a]`∈[0,1] 数值；字体仅白名单 token（`system`/`rounded`/`monospace`）；
-  拒绝 URL / 路径 / 脚本 / 嵌套对象 / 危险关键字（详见 `Sources/PetDock/Theme.swift`）。
+**刷新退避**（`WEEK LEFT` 与 `WEEK TOKENS` 各自独立计数）：
 
-## 登录自启
+| 连续失败次数 | 下次刷新间隔 |
+| --- | --- |
+| 0（成功） | 5 分钟 |
+| 1 | 15 分钟 |
+| 2 | 30 分钟 |
+| ≥ 3 | 60 分钟 |
 
-经 `SMAppService.mainApp` 注册。命令行裸跑（非 `.app`）时不可用（`notFound`），属预期；
-需作为 `PetDock.app` 运行。注册后可能需在「系统设置 › 通用 › 登录项」批准。
+宠物不可见时，数据刷新会自动暂停，可见后恢复。
 
-## 数据口径
+---
 
-| 指标 | 来源 | 字段 |
-| --- | --- | --- |
-| WEEK LEFT | `codex app-server` JSON-RPC `account/rateLimits/read` | `primary.usedPercent` / `resetsAt` / `windowDurationMins`(=10080 周) / `planType` |
-| WEEK TOKENS | `~/.codex/sessions/**/*.jsonl` | Σ `payload.info.last_token_usage.total_tokens`（单次增量） |
+## 🎨 主题与设置
 
-刷新退避（各源独立）：成功 5min / 失败 1×15min / 2×30min / ≥3×60min。宠物不可见时暂停刷新。
-详见 `docs/data-layer.md`。
+**内置主题**：Holographic / Warm Gold / Circuit，共享同一几何槽位（约 200×48），切换只改变颜色、圆角、边框与字体，不改变布局。
 
-## 测试
+**外部主题**：将 JSON 文件放入 `~/Library/Application Support/PetDock/themes/`，文件变化会自动热加载。最小示例（字段均可省略到仅含名称与三种颜色）：
+
+```json
+{
+  "name": "My Theme",
+  "background": [0.10, 0.18, 0.28, 0.60],
+  "accent":     [0.90, 0.80, 0.70, 1.00],
+  "label":      [1.00, 1.00, 1.00, 1.00],
+  "cornerRadius": 10,
+  "borderWidth": 1,
+  "font": "rounded",
+  "badge": "logo.png"
+}
+```
+
+**安全白名单**（见 `Sources/PetDock/Theme.swift`）：颜色仅接受 `[r,g,b,a]` 且每个分量 ∈ [0,1]；字体仅接受 `system` / `rounded` / `monospace`；徽标仅接受同目录下的纯文件名 `*.png`。解析器会拒绝 URL、路径分隔符、脚本 / CSS / JS 片段、嵌套对象与危险关键字。
+
+**状态栏菜单**：菜单栏爪印图标 → **主题**（子菜单，当前项打勾）/ **显示 / 隐藏底座** / **登录时启动**（打勾，按 `SMAppService` 真实状态）/ **退出 PetDock**（⌘Q）。
+
+**持久化偏好**（`UserDefaults`）：选中的主题、底座可见性等。登录自启的真实状态以系统登录项为准，不单独缓存，避免双源不一致。
+
+---
+
+## 🧪 测试
+
+全部为纯函数 / fixture 测试，用 `swiftc` 编译真实源码后运行，**不依赖屏幕录制权限、不联网**：
 
 ```sh
-make test-ui      # selectPet 识别 + Geometry 坐标 + Follower 状态机（纯函数）
-make test-data    # 数据层（周窗口聚合 / 增量缓存 / 退避 / pause，fixture，不联网）
-make test-shell   # Theme / Settings / ThemeStore / AutoStart 纯函数
-make test         # 全量
+make test-ui      # 宠物识别规则 + 坐标转换 + 跟随状态机（36 项）
+make test-data    # 数据层：周窗口聚合 / 增量缓存 / 退避 / 暂停 / 脱敏（95 项）
+make test-shell   # 主题安全解析 / 设置持久化 / 热加载 / 自启状态映射（91 项）
+make test         # 全量（共 222 项）
 ```
 
-## 关键文件
+隐私边界由 fixture 测试固化：数据层结果不包含会话正文诱饵、不包含凭证。详见 `docs/data-layer.md` 与 `tests/`。
+
+---
+
+## ⚠️ 已知限制
+
+- **ad-hoc 签名 TCC 不稳定**：每次重新签名会改变代码目录哈希，导致屏幕录制授权失效，需重新授予。
+- **屏幕录制权限是硬前提**：未授权时无法枚举到 Codex 窗口，底座不会出现。
+- **`codex app-server` 为 experimental**：协议字段可能随 codex 版本变化；已做稳定子集解析与缺失字段降级。
+- **跨应用窗口相对 z-order 不可控**：以 `.floating` 层级 + 几何不重叠的方式降级处理。
+- **平台范围有限**：当前仅适配 Apple Silicon 上的 macOS 13+，且仅针对 Codex 桌面宠物。
+- **登录自启需作为 `.app` 运行**：命令行裸跑（非 `.app` bundle）时 `SMAppService` 不可用，属预期。
+- **部分交互待真机验证**：UI 自动化受系统 Accessibility 限制，部分手工交互项尚未在真机逐项验证（见 `docs/final-success-criteria.md`）。
+
+---
+
+## 🤝 贡献
+
+欢迎通过 issue 与 pull request 反馈问题与改进。提交前请确保：
+
+1. `make test` 全量（222 项）通过；
+2. 不引入读取凭证、会话正文或调用私有 API 的代码；
+3. 提交信息遵循约定式提交（Conventional Commits）风格。
+
+项目结构与关键文件见下表：
 
 | 文件 | 作用 |
 | --- | --- |
-| `Sources/PetDock/PetTracker.swift` | bundle id 定位 + Quartz 枚举 + 宠物识别（Mascot 优先） |
-| `Sources/PetDock/Geometry.swift` | Quartz ↔ AppKit 坐标转换（多屏/负坐标） |
-| `Sources/PetDock/Follower.swift` | 自适应跟随状态机（纯函数 `decide`） |
-| `Sources/PetDock/DockPanel.swift` / `DockView.swift` | 透明底座 NSPanel + 视图 |
-| `Sources/PetDock/DetailPanel.swift` | 详情卡 |
-| `Sources/PetDock/Data/` | 数据层（RateLimitClient / TokenUsageLogReader / PetDockDataService） |
-| `Sources/PetDock/Theme.swift` | 主题（内置 + 外部安全解析 + 热加载） |
-| `Sources/PetDock/StatusBar.swift` | 状态栏菜单 |
-| `Sources/PetDock/AutoStart.swift` | 登录自启（SMAppService） |
-| `Sources/PetDock/Settings.swift` | UserDefaults 偏好 |
 | `Sources/PetDock/main.swift` | 入口：`--diagnose` 诊断模式 / 运行模式（跟随 + 数据 + 外壳） |
+| `Sources/PetDock/PetTracker.swift` | bundle id 定位 + Quartz 枚举 + 宠物识别（Mascot 优先） |
+| `Sources/PetDock/Geometry.swift` | Quartz ↔ AppKit 坐标转换（多屏 / 负坐标） |
+| `Sources/PetDock/Follower.swift` | 自适应跟随状态机（纯函数 `decide`） |
+| `Sources/PetDock/DockPanel.swift` / `DockView.swift` | 透明底座 `NSPanel` + 视图 |
+| `Sources/PetDock/DetailPanel.swift` | 详情卡 |
+| `Sources/PetDock/Data/` | 数据层（额度客户端 / 日志读取 / 服务） |
+| `Sources/PetDock/Theme.swift` | 主题：内置 + 外部安全解析 + 热加载 |
+| `Sources/PetDock/StatusBar.swift` | 状态栏菜单 |
+| `Sources/PetDock/AutoStart.swift` | 登录自启（`SMAppService`） |
+| `Sources/PetDock/Settings.swift` | `UserDefaults` 偏好 |
 
-## 宠物识别（摘要）
+更多设计依据见 [`docs/pet-window-detection.md`](docs/pet-window-detection.md)、[`docs/data-layer.md`](docs/data-layer.md) 与 [`docs/final-success-criteria.md`](docs/final-success-criteria.md)。
 
-归属过滤 → 排除主窗口（layer0 + 大尺寸）→ 滞回 → **title 含 "Mascot" 优先（吉祥物本体）** → 高 layer → 宠物尺寸；
-排除 Voice Controls Backing / Composition Surface 等辅助窗。详见 `docs/pet-window-detection.md`。
+---
+
+## 📄 许可证
+
+本项目**暂未选择**开源许可证（仓库当前不包含 `LICENSE` 文件）。在许可证确定之前，源码默认保留所有权利，不构成任何开源授权；如需使用、分发或二次开发，请先与作者联系确认。
