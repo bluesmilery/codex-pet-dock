@@ -291,6 +291,12 @@ struct DataTestRunner {
         let wlNil = WeekLeft(usedPercent: 50, resetsAt: nil, windowMinutes: 10080, planType: "fixture-plan", fetchedAt: fmtDate)
         let snapNil = LiveDockProvider.buildSnapshot(left: .success(wlNil), tokens: .failure(DataError.msg("x")))
         check("T-fmt3 resetsAt nil → resetAt nil（占位不崩）", snapNil.resetAt == nil, "\(snapNil.resetAt ?? "?")")
+        // T-fmt4: formatDateTime 显式本机时区（.current）
+        let tzFmt = DateFormatter()
+        tzFmt.locale = Locale(identifier: "en_US_POSIX")
+        tzFmt.timeZone = .current
+        tzFmt.dateFormat = "MM-dd HH:mm"
+        check("T-fmt4 formatDateTime 使用本机时区(.current)", LiveDockProvider.formatDateTime(fmtDate) == tzFmt.string(from: fmtDate), "")
         section("LiveDockProvider 映射")
 
         // ---- C: 并发（refreshInFlight 合并 / maxConcurrent=1 / pending 最终刷新 / pause-resume 安全）----

@@ -172,18 +172,20 @@ final class LiveDockProvider: DockModelProvider {
         return "\(p)%"
     }
 
-    /// 日期 + 时间（如 "08-10 00:00"）。
+    /// 日期 + 时间（如 "08-10 00:00"）。显式本机时区（.current）。
     static func formatDateTime(_ d: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
         f.dateFormat = "MM-dd HH:mm"
         return f.string(from: d)
     }
 
-    /// 仅时间（如 "12:34"）。
+    /// 仅时间（如 "12:34"）。显式本机时区（.current）。
     static func formatTime(_ d: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
         f.dateFormat = "HH:mm"
         return f.string(from: d)
     }
