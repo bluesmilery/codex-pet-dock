@@ -55,7 +55,9 @@ Remove historical SHA, private ref, and internal worker/task provenance while pr
 ### ✅ 已自动验证（公开 / 系统方式）
 Rewrite matched statement as a synthetic, number-free runtime verification statement. Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
-- **重开 + 重捕**：`pkill` → `open`（新 pid），日志 `pet=true` 重捕（moving/setFrame=true），设置默认恢复，**未重签**（历次验证；本次新 CDHash 的 TCC 授权 + pet 捕获见下「手工待验」）。
+Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
+- **重开 + 重捕**：`pkill` → `open`（新 pid），日志 `pet=true` 重捕（moving/setFrame=true），设置默认恢复，**未重签**。
+Rewrite matched statement as a synthetic, number-free runtime verification statement.
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
 
