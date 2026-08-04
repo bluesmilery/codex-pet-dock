@@ -18,8 +18,8 @@
 | 周窗口 | `rateLimits.primary: RateLimitWindow`（`usedPercent` / `resetsAt` / `windowDurationMins`） |
 | 推送 | `account/rateLimits/updated`（滚动 sparse 更新，可合并） |
 
-实证探测（脱敏，仅状态 / 比例 / 重置时间）：`planType=<plan>`，`primary` 窗口
-`windowDurationMins=10080`（= 7×24×60 = **一周**），`usedPercent=<N>%`，`resetsAt` 为 Unix 秒。
+实证探测（脱敏，仅状态 / 比例 / 重置时间；下列为示例，非真实账户数据）：`primary` 窗口
+`windowDurationMins=10080`（= 7×24×60 = **一周**，公开协议常量），`usedPercent` / `resetsAt` / `planType` 因账户而异（已脱敏）。
 
 > 合规：鉴权由 `codex` 进程在其可信环境内完成（它自管 `auth.json`）。本进程仅经 stdio 收发
 > JSON-RPC 文本，只解析 `usedPercent` / `resetsAt` / `windowDurationMins` / `planType`，**不碰凭证**。
@@ -92,9 +92,9 @@ make test-data    # 数据层测试（独立入口 tests/DataTests.swift + tests
 
 ## 真实验证结果（脱敏）
 
-- **WEEK LEFT**（app-server）：成功，`planType=<plan>`，`primary` `usedPercent=<N>%`、
-  `windowDurationMins=10080`（周窗口）、有 `resetsAt`。
-- **WEEK TOKENS**（真实日志最近 7 天）：`sampleCount=<N>`、`totalTokens≈<N>`、解析 <N> 个文件。
+- **WEEK LEFT**（app-server）：成功返回周窗口 `windowDurationMins=10080`、有 `resetsAt`
+  （`usedPercent` / `planType` 因账户而异，已脱敏）。
+- **WEEK TOKENS**（真实日志最近 7 天）：返回非占位正值（`sampleCount` / `totalTokens` 因本机而异，已脱敏）。
   仅数值聚合，无任何 timestamp / 正文输出。
 
 ## 边界与集成约定（供并行集成）

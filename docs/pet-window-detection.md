@@ -3,8 +3,8 @@
 > 目标：用公开 API（`CGWindowListCopyWindowInfo` / AppKit）从 `com.openai.codex` 进程名下的窗口里，
 > **选出桌面宠物窗口**，且**绝不误绑主聊天窗口**。规则必须可解释、可记录、可测试。
 >
-> 状态说明：本文档规则**已用真实窗口数据校准**（授权后诊断：`preflight=true`，全局 <N> 窗口、
-> codex 主进程 PID <pid> 名下 18 窗口）。阈值与 R4.0「title 含 Mascot 优先」均经实测确认，见文末「实测确认」。
+> 状态说明：本文档规则**已用真实窗口数据校准**（授权后诊断：`preflight=true`；窗口数 / PID 因机器而异，已脱敏）。
+> 阈值与 R4.0「title 含 Mascot 优先」均经实测确认，见文末「实测确认」。
 > 阈值常量集中定义在源码 `PetHeuristics`，与本文档一一对应。
 
 ## 0. 关键事实（已实测）
@@ -77,21 +77,21 @@
 主窗口+宠物并存→选宠物、仅主窗口→选 nil、两个 layer>0 候选→选 layer 高者、**Mascot 优先于高 layer 辅助窗**等。
 **本轮 P0 已跑通 selectPet 11/11 + Geometry 4/4**，退出码 0。
 
-## 5. 实测确认（授权后真实诊断：preflight=true，全局 <N> 窗口，codex 主进程 PID <pid> 名下 18 窗口）
+## 5. 实测确认（授权后真实诊断：preflight=true；PID / wid / bounds 为示例，已脱敏）
 
-| 项 | 候选假设 | 实测值 |
+| 项 | 候选假设 | 实测值（示例） |
 | --- | --- | --- |
-| 宠物窗口 ownerPID | 主进程或 helper | 主进程 **<pid>**（ownerName "ChatGPT"）✓ |
-| 真正吉祥物本体 | — | **wid=<wid> title="Codex Pet Mascot Effect" layer=2 172×179 bounds=(-187,998) onscreen** |
+| 宠物窗口 ownerPID | 主进程或 helper | 主进程（ownerName "ChatGPT"）✓ |
+| 真正吉祥物本体 | — | title="Codex Pet Mascot Effect" layer=2 172×179 onscreen |
 Rewrite matched statement with <wid>, <qx>, <ay>, and <screenHeight> placeholders as applicable.
-| 主聊天窗口 | ≥400 边 / ≥150k 面积 | wid=<wid> title="ChatGPT" layer=0 1728×1050 area=1814400 → **正确标 [MAIN] 排除** ✓ |
+| 主聊天窗口 | ≥400 边 / ≥150k 面积 | title="ChatGPT" layer=0 1728×1050 → **正确标 [MAIN] 排除** ✓ |
 Rewrite matched statement with <wid>, <qx>, <ay>, and <screenHeight> placeholders as applicable.
 | 最终采用规则 | R4.哪一条 | 见 5.2 修正（原 R4.2 选错） |
 
 ### 5.1 实测暴露的识别缺陷
 
-Rewrite matched statement with <wid>, <qx>, <ay>, and <screenHeight> placeholders as applicable.
-而非吉祥物本体 wid=<wid>「Codex Pet Mascot Effect」(172×179, layer=2)。
+原候选规则 R4.2「高 layer 优先 + 面积最小」选中了「Codex Pet Voice Controls Backing」(17×6, layer=3)，
+而非吉祥物本体「Codex Pet Mascot Effect」(172×179, layer=2)。
 原因：Mascot 的 layer=2 低于周边合成面/控件的 layer=3，"高 layer 优先"反而把它排除。
 后果：面板会跟随 17×6 的语音控件而非吉祥物本体（SC4 跟随位置错误）。
 

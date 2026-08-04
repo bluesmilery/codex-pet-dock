@@ -26,11 +26,11 @@
 ## 构建与运行结果（运行后回填）
 
 - 构建命令：`make app`（= `swift build -c release` + 组装 .app + ad-hoc 签名）
-- 构建结果：`Build complete!`，退出码 0，无警告；产物 `build/PetDock.app`（arm64 Mach-O，ad-hoc 签名 Identifier=io.github.bluesmilery.codexpetdock）；最终 CDHash `<hash>`
-- 各 SC 实测结果（真实运行，preflight=true，全局 <N> 窗口）：
+- 构建结果：`Build complete!`，退出码 0，无警告；产物 `build/PetDock.app`（arm64 Mach-O，ad-hoc 签名 Identifier=io.github.bluesmilery.codexpetdock）；构建特定 CDHash 已删除（ad-hoc 每次签名变化，公开固定值易误导）
+- 各 SC 实测结果（真实运行，preflight=true；窗口数 / PID / wid 为示例，已脱敏）：
   - **SC1 可构建** ✅ 通过：`swift build -c release` 退出码 0、无警告，`.app` 可执行。
-  - **SC2 进程定位** ✅ 通过：bundle id `com.openai.codex` → 主进程 PID <pid>（`/Applications/ChatGPT.app` v26.727.51351）。
-  - **SC3 窗口枚举与识别** ✅ 通过：`CGWindowListCopyWindowInfo([], kCGNullWindowID)` 枚举全局 <N> 窗口、codex 18 窗口（union 32 候选）；选中 wid=113860 `title="Codex Pet Mascot Effect"` layer=2 172×179，命中 `title~Mascot`；主窗口 wid=<wid> ChatGPT 1728×1050 正确 [MAIN] 排除，Voice Controls Backing / Composition Surface 等辅助窗亦排除。
+  - **SC2 进程定位** ✅ 通过：bundle id `com.openai.codex` → 定位到 `/Applications/ChatGPT.app` 主进程（PID / 版本因机器而异，已脱敏）。
+  - **SC3 窗口枚举与识别** ✅ 通过：`CGWindowListCopyWindowInfo([], kCGNullWindowID)` 枚举全局窗口、codex 多窗口（union 候选）；选中 Mascot 本体 `title="Codex Pet Mascot Effect"` layer=2 172×179，命中 `title~Mascot`；主窗口 ChatGPT 1728×1050 正确 [MAIN] 排除，Voice Controls Backing / Composition Surface 等辅助窗亦排除。
   - **SC4 NSPanel 跟随** ✅ 通过：0.5s 轮询持续跟随 Mascot，日志 dockAppKit 每 tick 更新，滞回稳定（wid 不变）。
   - **SC5 回退与重捕** ⚠️ 部分通过：重新捕获 ✅ 真实（PetDock 重启后重新选中 Mascot 并跟随）；隐藏逻辑 ✅（代码 `hideIfNeeded` + selftest T5「无可见→nil」）；**宠物隐藏 / Codex 退出真实触发未执行**（需用户在 ChatGPT 内操作，受"不修改 Codex"约束，本轮未触发）。
   Rewrite matched statement with <wid>, <qx>, <ay>, and <screenHeight> placeholders as applicable.

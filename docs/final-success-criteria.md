@@ -31,7 +31,7 @@ Remove historical SHA, private ref, and internal worker/task provenance while pr
 Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 - `public-history checkpoint`（base 761a653）：`CodexExecutableResolver` 解析 codex 绝对路径（env 覆盖 > PATH > nvm/volta/brew），`RateLimitClient` 用 `executableURL` 直接启动，修复 .app（launchd 环境）找不到 nvm codex 致 WEEK LEFT 占位。
-- `public-history checkpoint` 子进程 PATH（追加）：`RateLimitClient.childEnvironment` 把 codex 父目录 prepend 到子进程 `PATH`（去重、保留原 PATH），修复 codex 脚本 `#!/usr/bin/env node` 在子进程找不到同目录 node（nvm codex/node 同目录）致 app-server 立即退出。launchd 等价环境（`env -i HOME=~/<user> PATH=/usr/bin:/bin`）脱敏实测 `account/rateLimits/read` 成功。
+- `public-history checkpoint` 子进程 PATH（追加）：`RateLimitClient.childEnvironment` 把 codex 父目录 prepend 到子进程 `PATH`（去重、保留原 PATH），修复 codex 脚本 `#!/usr/bin/env node` 在子进程找不到同目录 node（nvm codex/node 同目录）致 app-server 立即退出。launchd 等价环境（`env -i HOME=<user> PATH=/usr/bin:/bin`）脱敏实测 `account/rateLimits/read` 成功。
 
 隐私边界经 fixture 测试固化：结果不含会话正文诱饵、不读 auth / 凭证。
 
@@ -53,8 +53,8 @@ Remove historical SHA, private ref, and internal worker/task provenance while pr
 Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 
 ### ✅ 已自动验证（公开 / 系统方式）
-Rewrite matched statement as a synthetic, number-free runtime verification statement. Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-Rewrite matched statement as a synthetic, number-free runtime verification statement.
+Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
+- **WEEK TOKENS**：解析 `~/.codex/sessions`（脱敏，仅数值聚合），近 7 天 sample/event 与 total 为非占位正值（具体数值因本机而异，已脱敏）。
 Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
 - **重开 + 重捕**：`pkill` → `open`（新 pid），日志 `pet=true` 重捕（moving/setFrame=true），设置默认恢复，**未重签**。
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
@@ -71,10 +71,17 @@ Rewrite matched statement as a synthetic, number-free runtime verification state
 ## 分发包
 
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
+- SHA256 / CDHash：构建特定指纹已删除（ad-hoc 签名每次 `make app` 都改变，公开固定值无意义且易误导）；最终分发时由发布流程重新生成。
 
 ## 已知风险（跨阶段）
 
+0. **bundle id 变更（公开发布清理）**：应用自身 bundle id 由 `io.github.bluesmilery.codexpetdock` 改为
+   `io.github.bluesmilery.codexpetdock`（目标 Codex 应用 `com.openai.codex` **不变**）。
+   代码层 `AutoStart` 用 `SMAppService.mainApp`（系统按 app bundle id 注册，未硬编码），故无需改代码；影响：
+   ① **TCC（屏幕录制）** 按 bundle id + 签名授权 → 新 id 需在「系统设置 › 隐私与安全性 › 屏幕录制」重新授予；
+   ② **登录自启**（`SMAppService`）按 app bundle id 注册 → 新 id 需重新启用；
+   ③ 旧 `io.github.bluesmilery.codexpetdock` 的 TCC 授权 / 登录项残留可在系统设置手动清理。
+   本项目尚未选择开源许可证（未随附 LICENSE）；公开分发前需确定授权。
 1. ad-hoc 签名 TCC 不稳定（每次重签 CDHash 变 → 屏幕录制授权失效）。
 2. 屏幕录制权限是硬前提。
 3. `codex app-server` 为 experimental，协议字段可能随版本变化（已做稳定子集 + 降级）。
