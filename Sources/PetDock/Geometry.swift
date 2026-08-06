@@ -40,4 +40,37 @@ enum Geometry {
         }
         return best
     }
+
+    /// 计算 pet（Quartz）正下方的底座 frame，避开 `obstacles`（Quartz rects）。
+    /// - x 始终按 pet 中心固定 `dockSize.width`（不被 pet/障碍宽度撑大）；
+    /// - y 从 `pet.maxY + gap` 起，对与当前 dock 矩形相交的障碍迭代下移到 `obstacle.maxY + gap`，直到不相交（多障碍链式）；
+    /// - 限定同一 `screen` 的 visibleFrame：若最终 dock 越界返回 nil（隐藏）。Quartz↔AppKit 只转换一次。
+    static func safeDockFrame(pet: CGRect, avoiding obstacles: [CGRect],
+                              dockSize: CGSize, gap: CGFloat, screen: NSScreen?) -> (frame: CGRect?, reason: String) {
+        let dw = dockSize.width, dh = dockSize.height
+        let dx = pet.origin.x + (pet.width - dw) / 2
+        var dy = pet.origin.y + pet.height + gap
+        let dockX = dx..<(dx + dw)
+        var changed = true, iterations = 0
+        while changed && iterations < 8 {           // 链式避让，n 小，8 次足够收敛
+            changed = false; iterations += 1
+            for obs in obstacles {
+                let ox = obs.origin.x..<(obs.origin.x + obs.width)
+                let oy = obs.origin.y..<(obs.origin.y + obs.height)
+                if dockX.overlaps(ox) && (dy..<(dy + dh)).overlaps(oy) {
+                    dy = max(dy, obs.origin.y + obs.height + gap)
+                    changed = true
+                }
+            }
+        }
+        let quartz = CGRect(x: dx, y: dy, width: dw, height: dh)
+        if let screen {                              // visible 判断（AppKit，转一次）
+            let appKit = appKitRectFromQuartz(quartz)
+            let v = screen.visibleFrame
+            let inside = appKit.minX >= v.minX && appKit.maxX <= v.maxX
+                && appKit.minY >= v.minY && appKit.maxY <= v.maxY
+            if !inside { return (nil, "避让后底座越出 screen visibleFrame") }
+        }
+        return (quartz, "ok")
+    }
 }

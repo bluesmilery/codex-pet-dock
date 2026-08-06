@@ -9,6 +9,12 @@ func mk(_ wid: UInt32, layer: Int, w: CGFloat, h: CGFloat,
                  layer: layer, alpha: 1.0, isOnscreen: onscreen, sharingState: 1,
                  bounds: CGRect(x: 100, y: 100, width: w, height: h))
 }
+/// 自定义 bounds 的 WinCandidate（避让几何测试用）。
+func mkw(_ wid: UInt32, layer: Int, _ bounds: CGRect, owner: String = "ChatGPT",
+         title: String = "", alpha: Double = 1.0) -> WinCandidate {
+    WinCandidate(wid: CGWindowID(wid), ownerPID: 11111, ownerName: owner, title: title,
+                 layer: layer, alpha: alpha, isOnscreen: true, sharingState: 1, bounds: bounds)
+}
 
 var pass = 0, fail = 0
 func check(_ desc: String, _ cond: Bool, _ extra: String = "") {
@@ -167,6 +173,104 @@ check("T17a DockView frame 200x48", dv.frame.width == 200 && dv.frame.height == 
 check("T17b DockPanel dockWidth=200", DockPanel().dockWidth == 200, "")
 check("T17c DockPanel dockHeight=48", DockPanel().dockHeight == 48, "")
 print("\n[Dock 几何/reset/placeBelow] \(pass - dkPass) passed, \(fail - dkBase) failed")
+
+// ---- T-avoid: 会话气泡避让（obstaclesNear + safeDockFrame + placeBelow）----
+let avBase = fail, avPass = pass
+let petRect = CGRect(x: 100, y: 100, width: 172, height: 179)   // Mascot 几何（示例）
+let mascotW = mkw(1, layer: 2, petRect, title: "Codex Pet Mascot Effect")
+let dockSize = CGSize(width: 200, height: 48)
+let gap: CGFloat = 2
+
+// T-a1 无障碍 → pet 下方（pet.maxY+gap），宽 200 中心对齐
+let ra1 = Geometry.safeDockFrame(pet: petRect, avoiding: [], dockSize: dockSize, gap: gap, screen: nil)
+check("T-a1 无障碍→pet下方 y=petMaxY+gap 宽200",
+      ra1.frame?.origin.y == petRect.maxY + gap && ra1.frame?.width == 200, "y=\(ra1.frame?.origin.y ?? -1)")
+
+// T-a2 bubble(345x54) 在 pet 下方与 dock 重叠 → 下移到 bubble.maxY+gap
+let bubble = CGRect(x: 80, y: 280, width: 345, height: 54)   // 280..334，与 dock 281..329 重叠
+let ra2 = Geometry.safeDockFrame(pet: petRect, avoiding: [bubble], dockSize: dockSize, gap: gap, screen: nil)
+check("T-a2 bubble 避让→y=bubbleMaxY+gap=336", ra2.frame?.origin.y == bubble.maxY + gap, "y=\(ra2.frame?.origin.y ?? -1)")
+if let f = ra2.frame {
+    let noOverlap = !(f.origin.y < bubble.maxY && f.origin.y + dockSize.height > bubble.minY)
+    check("T-a2b 避让后与 bubble 不相交", noOverlap, "")
+} else { check("T-a2b", false) }
+
+// T-a3 链式：bubble + 512x223 叠叠
+let bigObs = CGRect(x: 80, y: 336, width: 512, height: 223)   // dock 下移到 336 后又与 bigObs 重叠
+let ra3 = Geometry.safeDockFrame(pet: petRect, avoiding: [bubble, bigObs], dockSize: dockSize, gap: gap, screen: nil)
+check("T-a3 链式避让→y=bigMaxY+gap=561", ra3.frame?.origin.y == bigObs.maxY + gap, "y=\(ra3.frame?.origin.y ?? -1)")
+
+// T-a4 384x95 障碍 → 底座宽仍 200（不被撑大）
+let wideObs = CGRect(x: 50, y: 280, width: 384, height: 95)
+let ra4 = Geometry.safeDockFrame(pet: petRect, avoiding: [wideObs], dockSize: dockSize, gap: gap, screen: nil)
+check("T-a4 384x95 避让→dock 宽仍 200", ra4.frame?.width == 200, "w=\(ra4.frame?.width ?? -1)")
+
+// T-a5 obstaclesNear 纯几何排除 main(layer0)/Composition(maxSide>600)/voice(height<32)/mascot（不依赖 title）
+let mainW = mkw(2, layer: 0, CGRect(x: 0, y: 0, width: 1728, height: 1084))
+let compW = mkw(3, layer: 3, CGRect(x: 0, y: 0, width: 768, height: 912))
+let bubbleW = mkw(4, layer: 3, CGRect(x: 80, y: 280, width: 345, height: 54))
+let voiceW = mkw(5, layer: 3, CGRect(x: 0, y: 0, width: 17, height: 6))
+let obs = PetTracker.obstaclesNear(mascot: mascotW, candidates: [mainW, compW, bubbleW, voiceW, mascotW])
+check("T-a5 obstaclesNear 纯几何排除 main/composition/voice/mascot→仅 bubble",
+      obs.count == 1 && obs[0].wid == 4, "count=\(obs.count)")
+
+// T-a6 屏底不足 → 隐藏（nil）：真实屏 + 巨大障碍推 dock 越界
+if let screen = NSScreen.screens.first {
+    let huge = CGRect(x: 80, y: 280, width: 345, height: 100000)
+    let ra6 = Geometry.safeDockFrame(pet: petRect, avoiding: [huge], dockSize: dockSize, gap: gap, screen: screen)
+    check("T-a6 屏底不足→隐藏(nil)", ra6.frame == nil, ra6.reason)
+} else {
+    check("T-a6 屏底不足→隐藏（无屏跳过）", true, "无屏")
+}
+
+// T-a7 障碍消失 → 恢复 pet 下方
+let ra7 = Geometry.safeDockFrame(pet: petRect, avoiding: [], dockSize: dockSize, gap: gap, screen: nil)
+check("T-a7 障碍消失→恢复 pet 下方", ra7.frame?.origin.y == petRect.maxY + gap, "")
+
+// T-a8 placeBelow avoiding → 避让 + shown=true + 宽 200
+let dpA = DockPanel()
+let shownA = dpA.placeBelow(petQuartzRect: petRect, avoiding: [bubble], visibleScreen: nil)
+check("T-a8 placeBelow 避让→shown=true", shownA, "")
+check("T-a8b placeBelow dock 宽 200", dpA.frame.width == 200, "w=\(dpA.frame.width)")
+
+// T-a9 负坐标副屏：避让逻辑一致（screen=nil 不判 visible）+ screenContaining 不崩
+let negPet = CGRect(x: -380, y: 372, width: 172, height: 179)         // maxY=551
+let negBubble = CGRect(x: -466, y: 551, width: 345, height: 54)      // 与 dock 553..601 重叠
+let ra9 = Geometry.safeDockFrame(pet: negPet, avoiding: [negBubble], dockSize: dockSize, gap: gap, screen: nil)
+check("T-a9 负坐标副屏避让→y=negBubbleMaxY+gap=607", ra9.frame?.origin.y == negBubble.maxY + gap, "y=\(ra9.frame?.origin.y ?? -1)")
+_ = Geometry.screenContaining(quartzCenterX: negPet.midX, negPet.midY)   // 不崩即可（值依赖硬件）
+
+// T-a10..a13 真实两状态（动态收紧：排除 512 wrapper / 384x95 / 17x6，只识别 bubble）
+let petR = CGRect(x: -269, y: 398, width: 172, height: 179)              // maxY=577
+let mascotR = mkw(10, layer: 2, petR, title: "Codex Pet Mascot Effect")
+let wrapper = mkw(11, layer: 3, CGRect(x: -512, y: 380, width: 512, height: 223))   // 含整个 pet
+let obs384 = mkw(12, layer: 3, CGRect(x: -350, y: 444, width: 384, height: 95))
+let obs17 = mkw(13, layer: 3, CGRect(x: -200, y: 531, width: 17, height: 6))
+let bubbleR = mkw(14, layer: 3, CGRect(x: -466, y: 549, width: 345, height: 54))   // 549..603
+
+// A 无 bubble，wrapper+384+17 → obstacles empty，dock 回 pet.maxY+gap=579
+let oA = PetTracker.obstaclesNear(mascot: mascotR, candidates: [wrapper, obs384, obs17])
+check("T-a10A 无bubble+wrapper/384/17→obstacles empty", oA.isEmpty, "count=\(oA.count)")
+check("T-a10A2 dock回579",
+      Geometry.safeDockFrame(pet: petR, avoiding: oA.map { $0.bounds }, dockSize: dockSize, gap: gap, screen: nil).frame?.origin.y == 579, "")
+
+// B + bubble → 只选 bubble，dock 605
+let oB = PetTracker.obstaclesNear(mascot: mascotR, candidates: [wrapper, obs384, obs17, bubbleR])
+check("T-a11B +bubble→只选bubble", oB.count == 1 && oB[0].wid == 14, "count=\(oB.count)")
+check("T-a11B2 dock=605",
+      Geometry.safeDockFrame(pet: petR, avoiding: oB.map { $0.bounds }, dockSize: dockSize, gap: gap, screen: nil).frame?.origin.y == 605, "")
+
+// C bubble 消失（下 tick）→ 恢复 579
+let oC = PetTracker.obstaclesNear(mascot: mascotR, candidates: [wrapper, obs384, obs17])
+check("T-a12C bubble消失→恢复579",
+      Geometry.safeDockFrame(pet: petR, avoiding: oC.map { $0.bounds }, dockSize: dockSize, gap: gap, screen: nil).frame?.origin.y == 579, "")
+
+// D 多行 bubble（height 80）仍识别
+let bubbleMulti = mkw(15, layer: 3, CGRect(x: -466, y: 549, width: 345, height: 80))
+let oD = PetTracker.obstaclesNear(mascot: mascotR, candidates: [wrapper, obs384, obs17, bubbleMulti])
+check("T-a13D 多行bubble(height80)→识别", oD.count == 1 && oD[0].wid == 15, "count=\(oD.count)")
+
+print("\n[会话气泡避让] \(pass - avPass) passed, \(fail - avBase) failed")
 
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)

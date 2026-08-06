@@ -7,6 +7,10 @@ enum PetHeuristics {
     static let petMaxArea: CGFloat = 70_000     // 宠物面积上限
     static let petMaxSide: CGFloat = 300        // 宠物最大边上限
     static let petMinSide: CGFloat = 50         // 宠物最小边下限（排除 18x6 等细长 / 过小辅助控件）
+    // 会话气泡（短浮层）几何窗：用于动态识别 pet 底部下方的障碍，不依赖 title。
+    static let bubbleHeightMin: CGFloat = 32    // 高度下限（排除 17x6 voice controls）
+    static let bubbleHeightMax: CGFloat = 223   // 高度上限（排除 512x223 wrapper —— 它包含整个 pet）
+    static let bubbleMinYSlack: CGFloat = 32    // bubble.minY 允许高于 pet 底部的偏差（约一行气泡）
 }
 
 /// 一个可观测的窗口候选（来自 CGWindowList）。
@@ -175,6 +179,30 @@ enum PetTracker {
             seen.insert(w.wid); merged.append(w)
         }
         return merged
+    }
+
+    /// 与选中 Mascot 同 owner 的「短会话浮层」障碍（会话气泡），用于底座避让。
+    /// **动态几何窗，不依赖 title**：同 owner / onscreen / alpha>0 / layer>=3 / 非主窗；
+    /// 高度 ∈ [bubbleHeightMin, bubbleHeightMax)（排除 17x6 voice controls 与 512x223 wrapper）；
+    /// maxSide<=600（排除 Composition Surface 768x912 大面）；
+    /// minY 在 pet 底部附近（允许小负偏差，排除从 pet 中部开始的 wrapper/384x95/17x6）；
+    /// 水平投影与 pet 重叠。排除 Mascot 自身与 main(layer0)。
+    /// **不改变 selectPet 的合理回退**（障碍仅用于几何避让）。
+    static func obstaclesNear(mascot: WinCandidate, candidates: [WinCandidate]) -> [WinCandidate] {
+        guard !mascot.ownerName.isEmpty else { return [] }
+        let pet = mascot.bounds
+        let petMaxY = pet.maxY
+        return candidates.filter { c in
+            c.wid != mascot.wid
+                && c.ownerName == mascot.ownerName
+                && c.isOnscreen && c.alpha > 0 && c.layer >= 3
+                && !c.isLikelyMainWindow
+                && c.bounds.height >= PetHeuristics.bubbleHeightMin
+                && c.bounds.height < PetHeuristics.bubbleHeightMax
+                && c.maxSide <= 600
+                && c.bounds.minY >= petMaxY - PetHeuristics.bubbleMinYSlack
+                && c.bounds.origin.x < pet.maxX && c.bounds.origin.x + c.bounds.width > pet.minX
+        }
     }
 
     // MARK: - 解析

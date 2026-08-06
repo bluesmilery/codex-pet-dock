@@ -59,15 +59,23 @@ final class DockPanel {
         didShow = false
     }
 
-    /// 把底座放到宠物窗口（Quartz 全局 rect）正下方，按 pet 中心水平居中、紧贴、不重叠。
-    /// 底座宽度始终为 `dockWidth`（200）：**不被 pet.width 撑大**（实测 Mascot 消失误选 384x95 辅助窗时，
-    /// 旧 `max(dockWidth, pet.width)` 会把底座 200→384 突然变宽）。
-    func placeBelow(petQuartzRect pet: CGRect) {
-        let dw = dockWidth
-        let dh = dockHeight
-        let dx = pet.origin.x + (pet.width - dw) / 2          // 按 pet 中心对齐（dw 固定 200）
-        let dy = pet.origin.y + pet.height + gap              // Quartz y 增大 = 向下 → 宠物下方
-        let dockQuartz = CGRect(x: dx, y: dy, width: dw, height: dh)
-        panel.setFrame(Geometry.appKitRectFromQuartz(dockQuartz), display: true)
+    /// 把底座放到宠物窗口（Quartz 全局 rect）正下方，按 pet 中心水平居中、紧贴、不重叠，并避开 `avoiding`
+    /// 障碍；若避让后越出 `visibleScreen` 可见区，则隐藏底座并返回 false。
+    /// 底座宽度始终为 `dockWidth`（200）：**不被 pet/障碍宽度撑大**。默认无障碍/无 screen = 原 behavior。
+    /// 返回是否显示（false = 已隐藏，但宠物并未消失、不触发数据 pause）。
+    @discardableResult
+    func placeBelow(petQuartzRect pet: CGRect, avoiding obstacles: [CGRect] = [], visibleScreen: NSScreen? = nil) -> Bool {
+        if obstacles.isEmpty && visibleScreen == nil {
+            let dw = dockWidth, dh = dockHeight
+            let dx = pet.origin.x + (pet.width - dw) / 2          // 按 pet 中心对齐（dw 固定 200）
+            let dy = pet.origin.y + pet.height + gap
+            panel.setFrame(Geometry.appKitRectFromQuartz(CGRect(x: dx, y: dy, width: dw, height: dh)), display: true)
+            return true
+        }
+        let r = Geometry.safeDockFrame(pet: pet, avoiding: obstacles,
+                                       dockSize: CGSize(width: dockWidth, height: dockHeight), gap: gap, screen: visibleScreen)
+        guard let q = r.frame else { hideIfNeeded(); return false }
+        panel.setFrame(Geometry.appKitRectFromQuartz(q), display: true)
+        return true
     }
 }

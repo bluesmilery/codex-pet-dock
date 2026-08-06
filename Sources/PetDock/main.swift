@@ -234,11 +234,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lastWID = sel.selected?.wid
             if showUI {
                 renderSnapshot()
-                if d.shouldSetFrame, let p = pet {
-                    dock.placeBelow(petQuartzRect: p)
-                    if detail.isVisible { detail.placeBelow(dockFrame: dock.frame) }
+                if let mascot = sel.selected {
+                    // 会话气泡避让：pet 下方同 owner 浮层障碍下移；越出 screen 可见区则隐藏底座+详情。
+                    let obstacles = PetTracker.obstaclesNear(mascot: mascot, candidates: wins)
+                    let scr = Geometry.screenContaining(quartzCenterX: mascot.bounds.midX, mascot.bounds.midY)
+                    let shown = dock.placeBelow(petQuartzRect: mascot.bounds,
+                                                avoiding: obstacles.map { $0.bounds }, visibleScreen: scr)
+                    if shown {
+                        dock.showIfNeeded()
+                        if detail.isVisible { detail.placeBelow(dockFrame: dock.frame) }
+                    } else {
+                        dock.hideIfNeeded()
+                        detail.close()
+                    }
                 }
-                dock.showIfNeeded()
             } else {
                 dock.hideIfNeeded()
                 detail.close()
