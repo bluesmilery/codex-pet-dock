@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let dock = DockPanel()
     private let detail = DetailPanel()
     private let provider: LiveDockProvider
+    private let bubbleProbe = BubbleVisibilityProbe()
     private let settings = Settings()
     private var themeStore: ThemeStore?
     private var externalThemes: [ThemeSpec] = []
@@ -237,9 +238,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let mascot = sel.selected {
                     // 会话气泡避让：pet 下方同 owner 浮层障碍下移；越出 screen 可见区则隐藏底座+详情。
                     let obstacles = PetTracker.obstaclesNear(mascot: mascot, candidates: wins)
+                    // 异步探测 bubble 可见性（ScreenCaptureKit 像素 alpha）；只将 visible 候选作为障碍。
+                    bubbleProbe.probe(candidates: obstacles)
+                    let visibleObstacles = obstacles.filter { bubbleProbe.visibility(for: $0.wid) == .visible }
                     let scr = Geometry.screenContaining(quartzCenterX: mascot.bounds.midX, mascot.bounds.midY)
                     let shown = dock.placeBelow(petQuartzRect: mascot.bounds,
-                                                avoiding: obstacles.map { $0.bounds }, visibleScreen: scr)
+                                                avoiding: visibleObstacles.map { $0.bounds }, visibleScreen: scr)
                     if shown {
                         dock.showIfNeeded()
                         if detail.isVisible { detail.placeBelow(dockFrame: dock.frame) }
@@ -258,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             detail.close()
             lastPet = nil
             lastWID = nil
+            bubbleProbe.reset()
         }
         state = d.state
         stableCount = d.stableCount

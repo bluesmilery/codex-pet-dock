@@ -272,5 +272,114 @@ check("T-a13D 多行bubble(height80)→识别", oD.count == 1 && oD[0].wid == 15
 
 print("\n[会话气泡避让] \(pass - avPass) passed, \(fail - avBase) failed")
 
+// ---- T-bv: BubbleVisibility 分类（纯函数滞回）+ 调度（max2Hz/single-flight/reset）+ 异步集成（generation/strict single-flight）----
+let bvBase = fail, bvPass = pass
+// 实测基线（同窗口 345×64 真实对照）
+let collapsedS = BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080)
+let expandedS = BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
+let midS = BubbleAlphaStats(nonTransparentRatio: 0.004, bboxRatio: 0.007)
+check("T-bv1 collapsed→hidden", BubbleVisibilityClassifier.classify(stats: collapsedS, previous: .visible) == .hidden, "")
+check("T-bv2 expanded→visible", BubbleVisibilityClassifier.classify(stats: expandedS, previous: .hidden) == .visible, "")
+check("T-bv3 中间滞回→保持visible", BubbleVisibilityClassifier.classify(stats: midS, previous: .visible) == .visible, "")
+check("T-bv4 中间滞回→保持hidden", BubbleVisibilityClassifier.classify(stats: midS, previous: .hidden) == .hidden, "")
+check("T-bv5 nil stats→保守visible", BubbleVisibilityClassifier.classify(stats: nil, previous: .hidden) == .visible, "")
+
+// 调度（isDue + single-flight + reset）—— 经 lock 访问
+let probe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 1000) })
+check("T-bv6 初始isDue=true", probe.isDue(Date(timeIntervalSince1970: 1000)), "")
+probe.lock.withLock { $0.lastCapture = Date(timeIntervalSince1970: 1000); $0.inFlight = false }
+check("T-bv7 <0.5s→false", !probe.isDue(Date(timeIntervalSince1970: 1000.3)), "")
+check("T-bv8 >=0.5s→true", probe.isDue(Date(timeIntervalSince1970: 1000.5)), "")
+probe.lock.withLock { $0.inFlight = true }
+check("T-bv9 single-flight→false", !probe.isDue(Date(timeIntervalSince1970: 1001)), "")
+probe.reset()
+check("T-bv10 reset不清inFlight(旧Task负责)", probe.lock.withLock { $0.inFlight }, "")
+probe.lock.withLock { $0.inFlight = false; $0.cached = [CGWindowID(1): .visible] }
+probe.reset()
+check("T-bv11 reset→cached空(inFlight不变)", probe.lock.withLock { $0.cached.isEmpty && !$0.inFlight }, "")
+probe.lock.withLock { $0.inFlight = false }
+check("T-bv12 unknown wid→保守visible", probe.visibility(for: CGWindowID(99)) == .visible, "")
+
+// 异步集成（fake capturer + RunLoop pump）：pending capture 完成 → cached 更新
+var fakeTime = Date(timeIntervalSince1970: 2000)
+let fakeCollapsed: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
+    BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080)
+}
+let asyncProbe = BubbleVisibilityProbe(now: { fakeTime }, capturer: fakeCollapsed)
+let c1 = mkw(100, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
+asyncProbe.probe(candidates: [c1])
+check("T-bv13 probe后inFlight=true", asyncProbe.lock.withLock { $0.inFlight }, "")
+let pumpDeadline0 = Date().addingTimeInterval(5)
+while asyncProbe.lock.withLock({ $0.inFlight }) && Date() < pumpDeadline0 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv14 pending完成→cached(hidden)+inFlight=false",
+      asyncProbe.visibility(for: CGWindowID(100)) == .hidden && !asyncProbe.lock.withLock { $0.inFlight }, "")
+
+// strict single-flight：reset 期间新 probe 不启动（inFlight 由旧 Task 清）
+let slowCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
+    try? await Task.sleep(nanoseconds: 300_000_000)  // 300ms（async-safe，无 semaphore）
+    return BubbleAlphaStats(nonTransparentRatio: 0.001, bboxRatio: 0.001)
+}
+fakeTime = Date(timeIntervalSince1970: 3000)
+let concProbe = BubbleVisibilityProbe(now: { fakeTime }, capturer: slowCap)
+concProbe.probe(candidates: [c1])
+check("T-bv15 首次probe→inFlight=true", concProbe.lock.withLock { $0.inFlight }, "")
+concProbe.probe(candidates: [c1])
+check("T-bv16 重复probe被拒(single-flight)", concProbe.lock.withLock { $0.inFlight }, "")
+// reset 期间 inFlight 保持 true（旧 Task 在途）
+concProbe.reset()
+check("T-bv17 reset不清inFlight(旧Task负责)", concProbe.lock.withLock { $0.inFlight }, "")
+check("T-bv18 reset后新probe被拒(inFlight仍true)", !concProbe.isDue(fakeTime), "")
+// 旧 Task 完成 → 清 inFlight（generation 过期 → 不写 cached）
+let pumpDeadline1 = Date().addingTimeInterval(5)
+while concProbe.lock.withLock({ $0.inFlight }) && Date() < pumpDeadline1 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv19 旧Task完成→inFlight=false", !concProbe.lock.withLock { $0.inFlight }, "")
+check("T-bv20 旧Task回调generation过期→cached仍空", concProbe.lock.withLock { $0.cached.isEmpty }, "")
+
+// 新 probe 启动（旧完成后）→ 新结果生效
+fakeTime = Date(timeIntervalSince1970: 3001)
+let c2 = mkw(200, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
+concProbe.probe(candidates: [c2])
+check("T-bv21 旧完成后新probe启动→inFlight=true", concProbe.lock.withLock { $0.inFlight }, "")
+let pumpDeadline2 = Date().addingTimeInterval(5)
+while concProbe.lock.withLock({ $0.inFlight }) && Date() < pumpDeadline2 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv22 新probe完成→cached更新(hidden)", concProbe.visibility(for: CGWindowID(200)) == .hidden, "")
+check("T-bv23 新wid不污染旧wid", concProbe.visibility(for: CGWindowID(100)) == .visible, "")
+
+// strict single-flight：在途 Task 中 probe(empty) → 候选重新出现 probe 仍被拒（inFlight 不清）
+fakeTime = Date(timeIntervalSince1970: 4000)
+let concProbe2 = BubbleVisibilityProbe(now: { fakeTime }, capturer: slowCap)  // 300ms capturer
+concProbe2.probe(candidates: [c1])
+check("T-bv24 首次probe→inFlight=true", concProbe2.lock.withLock { $0.inFlight }, "")
+// 在途时 probe(empty) → 与 reset 一致：不清 inFlight
+concProbe2.probe(candidates: [])
+check("T-bv25 probe(empty)不清inFlight(旧Task持有token)", concProbe2.lock.withLock { $0.inFlight }, "")
+// 候选重新出现 → 被 inFlight 拒（strict single-flight）
+concProbe2.probe(candidates: [c1])
+check("T-bv26 候选重现probe被拒(inFlight仍true)", concProbe2.lock.withLock { $0.inFlight }, "")
+// 旧 Task 完成 → 清 inFlight（generation 过期 → 不写 cached）
+let pumpDeadline3 = Date().addingTimeInterval(5)
+while concProbe2.lock.withLock({ $0.inFlight }) && Date() < pumpDeadline3 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv27 旧Task完成→inFlight=false", !concProbe2.lock.withLock { $0.inFlight }, "")
+check("T-bv28 旧结果不写cached(generation过期)", concProbe2.lock.withLock { $0.cached.isEmpty }, "")
+// 新 probe 可启动 → 结果生效
+fakeTime = Date(timeIntervalSince1970: 4001)
+concProbe2.probe(candidates: [c2])
+check("T-bv29 旧完成后新probe启动→inFlight=true", concProbe2.lock.withLock { $0.inFlight }, "")
+let pumpDeadline4 = Date().addingTimeInterval(5)
+while concProbe2.lock.withLock({ $0.inFlight }) && Date() < pumpDeadline4 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv30 新probe完成→cached(hidden)", concProbe2.visibility(for: CGWindowID(200)) == .hidden, "")
+
+print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
+
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)

@@ -14,7 +14,7 @@ enum PetHeuristics {
 }
 
 /// 一个可观测的窗口候选（来自 CGWindowList）。
-struct WinCandidate {
+struct WinCandidate: Sendable {
     let wid: CGWindowID
     let ownerPID: Int32
     let ownerName: String

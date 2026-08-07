@@ -1,0 +1,182 @@
+import Cocoa
+import os
+import ScreenCaptureKit
+
+// MARK: - 会话气泡可见性（ScreenCaptureKit 像素 alpha 判定）
+
+/// 会话气泡是否实际绘制内容（展开 vs 收起）。
+/// - visible：有内容（展开）→ 作为障碍避让。
+/// - hidden：空/收起 → 不避让，dock 回 pet 下方。
+enum BubbleVisibility: Equatable, Sendable {
+    case visible
+    case hidden
+}
+
+/// 实测校准阈值（同窗口 345×64 真实 collapsed vs expanded 对照）。
+/// collapsed: nonTransparent 34/22080≈0.154%, bbox 48/22080≈0.217%
+/// expanded:  nonTransparent 189/22080≈0.856%, bbox 390/22080≈1.766%
+/// open/close 之间留滞回区，防抖动。
+enum BubbleVisibilityThresholds {
+    /// 判 visible：非透明占比 ≥ 此值（0.6%，在 collapsed 0.154% 与 expanded 0.856% 之间）。
+    static let openNonTransparent: Double = 0.006
+    /// 判 visible：bbox 占比 ≥ 此值（1.0%，在 collapsed 0.217% 与 expanded 1.766% 之间）。
+    static let openBBox: Double = 0.010
+    /// 判 hidden：非透明占比 ≤ 此值（0.3%）。
+    static let closeNonTransparent: Double = 0.003
+    /// 判 hidden：bbox 占比 ≤ 此值（0.5%）。
+    static let closeBBox: Double = 0.005
+}
+
+/// 匿名像素 alpha 统计（不记录颜色/文字/图像）。
+struct BubbleAlphaStats: Equatable, Sendable {
+    let nonTransparentRatio: Double   // alpha>0.04 像素 / 总像素
+    let bboxRatio: Double             // 非透明 bbox 面积 / 总像素
+}
+
+/// 纯函数分类（有滞回）。stats nil（capture 失败/SC 窗口缺失）→ 保守 visible。
+enum BubbleVisibilityClassifier {
+    static func classify(stats: BubbleAlphaStats?, previous: BubbleVisibility) -> BubbleVisibility {
+        guard let s = stats else { return .visible }
+        if s.nonTransparentRatio >= BubbleVisibilityThresholds.openNonTransparent
+            || s.bboxRatio >= BubbleVisibilityThresholds.openBBox { return .visible }
+        if s.nonTransparentRatio <= BubbleVisibilityThresholds.closeNonTransparent
+            && s.bboxRatio <= BubbleVisibilityThresholds.closeBBox { return .hidden }
+        return previous   // 中间滞回
+    }
+}
+
+/// 像素捕获器接口（@Sendable 闭包，后台 Task 安全传递）。
+typealias BubbleCapturer = @Sendable (WinCandidate) async -> BubbleAlphaStats?
+
+/// 异步探测 obstaclesNear 候选的可见性。`Sendable`（状态由 `OSAllocatedUnfairLock` 保护）。
+/// max 2Hz、single-flight（generation 严格）、保守降级（失败/macOS13/缺失 → visible）。
+/// 像素捕获在 `Task.detached` 后台执行（不跑主线程），完成后经 lock + generation 校验更新。
+final class BubbleVisibilityProbe: Sendable {
+    static let minInterval: TimeInterval = 0.5   // 2Hz
+
+    /// 受锁保护的可变状态（同 module 测试可经 lock 访问）。
+    internal struct ProbeState: Sendable {
+        var cached: [CGWindowID: BubbleVisibility] = [:]
+        var lastCapture: Date = .distantPast
+        var inFlight = false
+        /// 候选版本：reset 递增。旧 Task 回调 generation 不匹配时丢弃。
+        var generation = 0
+    }
+
+    internal let lock: OSAllocatedUnfairLock<ProbeState>
+    private let now: @Sendable () -> Date
+    private let capturer: BubbleCapturer
+
+    init(now: @escaping @Sendable () -> Date = { Date() }, capturer: BubbleCapturer? = nil) {
+        self.lock = OSAllocatedUnfairLock(initialState: ProbeState())
+        self.now = now
+        self.capturer = capturer ?? Self.defaultCapturer
+    }
+
+    // MARK: - 主线程接口（tick 同步调用）
+
+    /// 是否可触发探测（max 2Hz + single-flight）。
+    func isDue(_ time: Date) -> Bool {
+        lock.withLock { s in
+            !s.inFlight && time.timeIntervalSince(s.lastCapture) >= Self.minInterval
+        }
+    }
+
+    /// 异步探测候选（如果 due 且无在途）。后台 Task 捕获 → generation 校验 → 更新 cached。
+    func probe(candidates: [WinCandidate]) {
+        let gen: Int
+        let prev: [CGWindowID: BubbleVisibility]
+        let shouldStart: Bool
+        (gen, prev, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Bool) in
+            guard !candidates.isEmpty else {
+                // 与 reset() 一致：递增 generation + 清 cached，不设 inFlight=false。
+                // 旧 Task 仍持有唯一 token，完成时清 inFlight；期间候选重新出现 probe 被拒。
+                s.generation += 1; s.cached.removeAll()
+                return (0, [:], false)
+            }
+            let time = now()
+            guard !s.inFlight && time.timeIntervalSince(s.lastCapture) >= Self.minInterval else {
+                return (0, [:], false)
+            }
+            s.inFlight = true
+            s.lastCapture = time
+            return (s.generation, s.cached, true)
+        }
+        guard shouldStart else { return }
+        let cap = capturer
+        // Task.detached：不捕获 self（仅捕获 Sendable 值 lock/cap/gen/prev/candidates）→ 0 #SendableClosureCaptures warning。
+        // 像素计算（cap → captureStats → computeAlphaStats）在后台线程执行。
+        Task.detached { [lock] in
+            var r: [CGWindowID: BubbleVisibility] = [:]
+            for c in candidates {
+                let stats = await cap(c)
+                r[c.wid] = BubbleVisibilityClassifier.classify(stats: stats, previous: prev[c.wid] ?? .visible)
+            }
+            let results = r   // var→let：lock 闭包只捕获不可变 Sendable 值
+            // generation 校验：旧 Task 回调（reset/候选切换后）仅清自己的 inFlight token，绝不写 cached。
+            lock.withLock { s in
+                s.inFlight = false   // 始终清 inFlight（旧 Task 的责任，保证新 probe 能在下一 tick 启动）
+                guard s.generation == gen else { return }   // generation 过期 → 不写 cached
+                s.cached = results
+            }
+        }
+    }
+
+    /// 同步读缓存（tick 主线程，非阻塞）。unknown → 保守 visible。
+    func visibility(for wid: CGWindowID) -> BubbleVisibility {
+        lock.withLock { $0.cached[wid] ?? .visible }
+    }
+
+    /// 候选/宠物消失 → 递增 generation（旧 Task 回调失效）+ 清 cached。
+    /// **不设 inFlight=false**：旧 Task 在途时由其自身回调清 inFlight，保证 reset 期间新 probe 不启动（strict single-flight）。
+    func reset() {
+        lock.withLock { s in
+            s.generation += 1
+            s.cached.removeAll()
+        }
+    }
+
+    // MARK: - 默认捕获器（macOS 14+ ScreenCaptureKit，macOS 13/失败 → nil 保守 visible）
+
+    private static let defaultCapturer: BubbleCapturer = { candidate in
+        guard #available(macOS 14.0, *) else { return nil }
+        return await captureStats(candidate)
+    }
+
+    // MARK: - ScreenCaptureKit 捕获（static，后台执行）
+
+    @available(macOS 14.0, *)
+    private static func captureStats(_ candidate: WinCandidate) async -> BubbleAlphaStats? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              let win = content.windows.first(where: { $0.windowID == candidate.wid }) else { return nil }
+        let filter = SCContentFilter(desktopIndependentWindow: win)
+        let config = SCStreamConfiguration()
+        config.width = Int(candidate.bounds.width.rounded())
+        config.height = Int(candidate.bounds.height.rounded())
+        config.scalesToFit = false
+        config.showsCursor = false
+        guard let img = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else { return nil }
+        return computeAlphaStats(image: img)
+    }
+
+    /// 内存计算 alpha 统计（不保存图/OCR/记录颜色文字）。static → 后台 Task 内执行。
+    static func computeAlphaStats(image: CGImage) -> BubbleAlphaStats {
+        let rep = NSBitmapImageRep(cgImage: image)
+        let w = rep.pixelsWide, h = rep.pixelsHigh
+        guard w > 0, h > 0 else { return BubbleAlphaStats(nonTransparentRatio: 0, bboxRatio: 0) }
+        let total = Double(w * h)
+        var nonTrans = 0, minX = w, minY = h, maxX = 0, maxY = 0
+        for y in 0..<h {
+            for x in 0..<w {
+                guard let c = rep.colorAt(x: x, y: y) else { continue }
+                if c.alphaComponent > 0.04 {
+                    nonTrans += 1
+                    if x < minX { minX = x }; if x > maxX { maxX = x }
+                    if y < minY { minY = y }; if y > maxY { maxY = y }
+                }
+            }
+        }
+        let bbox = nonTrans > 0 ? Double((maxX - minX + 1) * (maxY - minY + 1)) : 0
+        return BubbleAlphaStats(nonTransparentRatio: Double(nonTrans) / total, bboxRatio: bbox / total)
+    }
+}

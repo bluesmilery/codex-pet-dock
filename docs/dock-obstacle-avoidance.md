@@ -44,3 +44,32 @@
 - 无障碍 → pet 下方；bubble 重叠 → 下移且不相交；bubble + 512x223 链式避让。
 - 384x95 障碍 → dock 宽仍 200；`obstaclesNear` 排除 main/composition/voice/mascot。
 - 屏底不足 → 隐藏(nil)；障碍消失 → 恢复；placeBelow 避让 shown=true；负坐标副屏避让。
+
+## Bubble 可见性判定（`BubbleVisibility.swift`，ScreenCaptureKit 像素 alpha）
+
+`obstaclesNear` 纳入的候选可能处于「展开（有内容）」或「收起（空背景）」状态——两者 `onscreen`/`alpha`/
+`bounds` 元数据完全相同（公开 CGWindowList 无法区分）。`BubbleVisibilityProbe` 用 **ScreenCaptureKit**
+公开 API 捕获候选窗口像素，只在内存计算 `alpha>0.04` 的非透明占比与 bbox 占比（**不 OCR、不保存图、
+不记录颜色/文字**），经纯函数滞回分类判定 visible/hidden。**macOS 13 / 捕获失败 / SC 窗口缺失 → 保守
+visible**（沿用 metadata 避让，不漏避让）。
+
+### 实测校准阈值（`BubbleVisibilityThresholds`，同窗口 345×64 真实 collapsed vs expanded 对照）
+| 指标 | collapsed（收起） | expanded（展开） |
+| --- | --- | --- |
+| nonTransparentRatio | 34/22080 ≈ **0.154%** | 189/22080 ≈ **0.856%** |
+| bboxRatio | 48/22080 ≈ **0.217%** | 390/22080 ≈ **1.766%** |
+
+- **判 visible**（open）：`nonTransparentRatio ≥ 0.6%` 或 `bboxRatio ≥ 1.0%`（在 collapsed 与 expanded 之间）。
+- **判 hidden**（close）：`nonTransparentRatio ≤ 0.3%` 且 `bboxRatio ≤ 0.5%`。
+- **中间滞回**：保持 previous（防抖动）。
+- **unknown**（nil stats）：保守 visible。
+
+### 调度
+- macOS 14+ ScreenCaptureKit 异步捕获，**max 2Hz**（0.5s 间隔）、**single-flight**（在途不重发）。
+- 主线程缓存结果；tick 非阻塞读缓存，异步结果下 tick 生效（≤1s 收起贴回 / 展开避让）。
+- 候选/宠物消失 → `reset()` 递增 generation + 清 cached（不设 inFlight=false，由旧 Task 回调清，保证 strict single-flight）。
+- `main.tick`：`obstaclesNear` → `bubbleProbe.probe(candidates)` → 仅 `visible` 候选作为 `placeBelow` 障碍。
+
+### 测试（`tests/main.swift` T-bv，11 项）
+纯分类（collapsed→hidden / expanded→visible / 中间滞回 / nil→visible）+ 调度（isDue max2Hz /
+single-flight / reset / unknown→visible）。依赖注入 fake clock，不依赖真实 TCC。

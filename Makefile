@@ -37,7 +37,7 @@ clean-logs:
 
 # UI 测试：selectPet 识别 + Geometry 坐标 + Follower 状态机（纯函数，需 Cocoa）。
 test-ui:
-	swiftc tests/main.swift Sources/PetDock/PetTracker.swift Sources/PetDock/Geometry.swift Sources/PetDock/Follower.swift Sources/PetDock/DockModel.swift Sources/PetDock/Theme.swift Sources/PetDock/DockView.swift Sources/PetDock/DockPanel.swift -framework Cocoa -o /tmp/petdock-uitests
+	swiftc tests/main.swift Sources/PetDock/PetTracker.swift Sources/PetDock/Geometry.swift Sources/PetDock/Follower.swift Sources/PetDock/DockModel.swift Sources/PetDock/Theme.swift Sources/PetDock/DockView.swift Sources/PetDock/DockPanel.swift Sources/PetDock/BubbleVisibility.swift -framework Cocoa -framework ScreenCaptureKit -o /tmp/petdock-uitests
 	/tmp/petdock-uitests
 
 # 数据层测试（独立入口 + fixture，不依赖屏幕录制权限 / 不联网）。

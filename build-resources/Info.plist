@@ -22,5 +22,7 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>PetDock 仅读取 Codex 会话气泡窗口是否实际绘制内容（alpha 占用统计），用于判断气泡展开/收起以避免底座重叠。不进行 OCR、不保存图像、不记录文字或颜色。</string>
 </dict>
 </plist>
