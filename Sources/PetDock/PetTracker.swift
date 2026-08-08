@@ -7,6 +7,9 @@ enum PetHeuristics {
     static let petMaxArea: CGFloat = 70_000     // 宠物面积上限
     static let petMaxSide: CGFloat = 300        // 宠物最大边上限
     static let petMinSide: CGFloat = 50         // 宠物最小边下限（排除 18x6 等细长 / 过小辅助控件）
+    /// 位置容差：origin 位移 ≤ 此值视为「位置不变」，吸收 Electron 渲染亚像素抖动，
+    /// 使 Follower 能进入 stable 降频（否则微抖动下精确 != 永真、永不降频）。尺寸变化不受此容差影响。
+    static let positionTolerance: CGFloat = 1.0
     // 会话气泡（短浮层）几何窗：用于动态识别 pet 底部下方的障碍，不依赖 title。
     static let bubbleHeightMin: CGFloat = 32    // 高度下限（排除 17x6 voice controls）
     static let bubbleHeightMax: CGFloat = 223   // 高度上限（排除 512x223 wrapper —— 它包含整个 pet）

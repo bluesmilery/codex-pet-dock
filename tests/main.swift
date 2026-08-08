@@ -144,6 +144,32 @@ check("F9 moving间隔=movingInterval", d2.nextInterval == Follower.movingInterv
 check("F10 stable间隔=stableInterval", d4.nextInterval == Follower.stableInterval)
 // 隐藏决策应同步隐藏底座（详情由调用方跟随 showDock 关闭）
 check("F11 隐藏时showDock=false(底座+详情隐藏)", d1.showDock == false)
+
+// F12-F14: 亚像素抖动容差（pet 来自 CGWindowList double 精度 bounds，
+// Electron 渲染微抖动 0.x px 会使精确 != 永真 → Follower 永不进 stable）。
+// 容差：origin 位移 ≤ positionTolerance 视为位置不变（尺寸变化仍判为变化）。
+let petJitter = CGRect(x: 100.4, y: 100.3, width: 172, height: 179)   // 位移 0.5px < 阈值
+let d12 = Follower.decide(pet: petJitter, lastPet: petA, state: .moving, stableCount: 0)
+check("F12 亚像素抖动0.5px→判不变(过渡moving/setFrame=false/count=1)",
+      d12.state == .moving && d12.shouldSetFrame == false && d12.stableCount == 1, "state=\(d12.state) setFrame=\(d12.shouldSetFrame) count=\(d12.stableCount)")
+
+let petMove = CGRect(x: 102, y: 100, width: 172, height: 179)   // 位移 2px > 阈值
+let d13 = Follower.decide(pet: petMove, lastPet: petA, state: .stable, stableCount: 100)
+check("F13 位移2px→判变化(moving/setFrame=true/count=0)",
+      d13.state == .moving && d13.shouldSetFrame == true && d13.stableCount == 0, "")
+
+// 边界：位移恰等于阈值 → 视为不变（≤ 而非 <）
+let petEdge = CGRect(x: 100 + PetHeuristics.positionTolerance, y: 100, width: 172, height: 179)
+let d14 = Follower.decide(pet: petEdge, lastPet: petA, state: .moving, stableCount: 0)
+check("F14 位移恰=阈值→判不变(边界≤)",
+      d14.state == .moving && d14.shouldSetFrame == false && d14.stableCount == 1, "")
+
+// 尺寸变化（即使 origin 不变）仍判为变化——宠物形变需重定位
+let petResize = CGRect(x: 100, y: 100, width: 173, height: 179)   // width +1
+let d15 = Follower.decide(pet: petResize, lastPet: petA, state: .stable, stableCount: 100)
+check("F15 尺寸变化→判变化(setFrame=true)",
+      d15.state == .moving && d15.shouldSetFrame == true, "state=\(d15.state) setFrame=\(d15.shouldSetFrame)")
+
 print("\n[Follower] \(pass - fPass) passed, \(fail - fBase) failed")
 
 // ---- Dock 几何 / reset 显示 / placeBelow 宽度（需 NSApplication 初始化 NSPanel/NSView）----

@@ -35,8 +35,9 @@ enum Follower {
             return FollowDecision(state: .hidden, showDock: false, shouldSetFrame: false,
                                   nextInterval: hiddenInterval, stableCount: 0)
         }
-        // 位置变化（含首次捕获 / 重现）→ moving，升频，setFrame
-        if lastPet == nil || pet != lastPet! {
+        // 实质变化（含首次捕获 / 重现）→ moving，升频，setFrame。
+        // 位置变化用容差比较（吸收亚像素抖动）；尺寸变化不耐受，直接判变。
+        if lastPet == nil || hasMaterialChange(pet, lastPet!) {
             return FollowDecision(state: .moving, showDock: true, shouldSetFrame: true,
                                   nextInterval: movingInterval, stableCount: 0)
         }
@@ -50,5 +51,13 @@ enum Follower {
         // 过渡期：仍 moving，但不 setFrame
         return FollowDecision(state: .moving, showDock: true, shouldSetFrame: false,
                               nextInterval: movingInterval, stableCount: count)
+    }
+
+    /// 是否发生实质变化：尺寸不同，或 origin 位移超过 `PetHeuristics.positionTolerance`。
+    /// 位移用欧氏距离比较，吸收 Electron 渲染亚像素抖动（< 容差视为静止）。
+    private static func hasMaterialChange(_ pet: CGRect, _ last: CGRect) -> Bool {
+        if pet.width != last.width || pet.height != last.height { return true }
+        let dx = pet.origin.x - last.origin.x, dy = pet.origin.y - last.origin.y
+        return (dx * dx + dy * dy).squareRoot() > PetHeuristics.positionTolerance
     }
 }
