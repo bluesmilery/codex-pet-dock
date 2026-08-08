@@ -1,3 +1,21 @@
+<!-- TRELLIS:START -->
+# Trellis Instructions
+
+These instructions are for AI assistants working in this project.
+
+This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
+
+- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
+- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
+- `.trellis/workspace/` — per-developer journals and session traces
+- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
+
+If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
+
+Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
+
+<!-- TRELLIS:END -->
+
 # Codex Pet Dock — 项目开发规则
 
 > 本文件仅包含项目特定的持久规则，补充但不重复用户根级 `AGENTS.md` 通用规则（Python 环境、浏览器操作、谨慎编码等）。
@@ -26,7 +44,7 @@
 - **不读** `auth.json` / token / 邮箱 / 会话正文；**不改** Codex 应用；**不用** 私有 CGS API。
 - BubbleVisibility 只在**内存**计算 alpha 像素统计，**不 OCR、不保存图像、不记录颜色 / 文字**。
 - 公开分发前对**全 history** 敏感扫描（`/Users/<user>` 路径 / 真实 wid / 坐标 / CDHash / SHA / 旧 hash / CoAuthored），残留需清理。
-- 私有 refs / bundle id 分叉 / `.claude/` 永不上传 GitHub。
+- 私有 refs / bundle id 分叉 / `.claude/` 永不上传 GitHub；Trellis `.claude/` 平台文件由各贡献者本地 `trellis init --claude -u <name>` 生成，`.trellis/workspace/<developer>/` 开发者机器身份 / journal 同理不入库。
 
 ## 5. 构建与分发
 
