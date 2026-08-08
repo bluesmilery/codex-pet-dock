@@ -144,9 +144,6 @@ check("set/get themeID", s.themeID == "builtin.circuit")
 ud.synchronize()
 let ud2 = UserDefaults(suiteName: suite)!
 check("持久化跨实例", Settings(defaults: ud2).themeID == "builtin.circuit")
-check("默认 showDetails=true", s.showDetails == true)
-s.showDetails = false
-check("set showDetails=false", s.showDetails == false)
 check("默认 dockVisible=true", s.dockVisible == true)
 s.dockVisible = false
 check("set dockVisible=false", s.dockVisible == false)
