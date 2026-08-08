@@ -98,6 +98,72 @@ check("T14 仅辅助(Voice Controls/Composition)→nil", r14.selected == nil, r1
 
 print("\n[selectPet] \(pass) passed, \(fail) failed")
 
+// ---- T-enum: unionCandidates 单次枚举 + codexPIDs 缓存 ----
+let enBase = fail, enPass = pass
+
+// 构造 mock infos：主进程 PID=11111 的窗口 + helper PID=22222 但 ownerName 含 Codex 的窗口
+func infoDict(_ wid: UInt32, _ pid: Int32, _ owner: String, _ title: String,
+              _ layer: Int, _ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> [String: Any] {
+    return [
+        (kCGWindowNumber as String): NSNumber(value: wid),
+        (kCGWindowOwnerPID as String): NSNumber(value: pid),
+        (kCGWindowOwnerName as String): owner,
+        (kCGWindowName as String): title,
+        (kCGWindowLayer as String): NSNumber(value: layer),
+        (kCGWindowAlpha as String): NSNumber(value: 1.0),
+        (kCGWindowIsOnscreen as String): true,
+        (kCGWindowBounds as String): ["X": x, "Y": y, "Width": w, "Height": h] as [String: Any],
+    ]
+}
+let mockInfos: [[String: Any]] = [
+    infoDict(10, 11111, "ChatGPT", "ChatGPT", 0, 0, 0, 1728, 1050),
+    infoDict(20, 11111, "ChatGPT", "Codex Pet Mascot Effect", 2, 100, 100, 172, 179),
+    infoDict(30, 22222, "Codex (Renderer)", "Codex Pet Mascot Effect", 2, 100, 100, 172, 179),  // helper PID
+]
+
+// T-enum1: unionCandidates 单次 infosProvider 调用（PID 通道 + ownerName 通道共享一次枚举）
+var infosCallCount = 0
+let savedInfosProvider = PetTracker.infosProvider
+PetTracker.infosProvider = { infosCallCount += 1; return mockInfos }
+let union1 = PetTracker.unionCandidates()
+check("T-enum1 unionCandidates 单次枚举(infosProvider 调用 1 次)", infosCallCount == 1, "count=\(infosCallCount)")
+// 主进程 PID 通道 + ownerName 通道(helper PID 22222 owner 含 Codex)按 wid 去重合并
+check("T-enum1b union 合并 PID+ownerName 通道(wid 10/20/30)", Set(union1.map { $0.wid }) == [10, 20, 30], "wids=\(union1.map { $0.wid })")
+
+// T-enum2: enumerate(pids:) 与 enumerateByOwnerName 各自经 infosProvider（仍单次/各自）
+infosCallCount = 0
+_ = PetTracker.enumerate(pids: [11111])
+_ = PetTracker.enumerateByOwnerName(["Codex"])
+// wrapper 各调一次 infosProvider（诊断模式路径，运行模式用 unionCandidates 共享）
+check("T-enum2 wrapper 各调 infosProvider(共 2 次)", infosCallCount == 2, "count=\(infosCallCount)")
+PetTracker.infosProvider = savedInfosProvider
+
+// T-enum3: codexPIDs 1s TTL 缓存（连续调用命中缓存，不重复查 NSRunningApplication）
+var appsCallCount = 0
+let savedAppsProvider = PetTracker.runningAppsProvider
+let savedNowProvider = PetTracker.nowProvider
+var fakeNow = Date(timeIntervalSince1970: 5000)
+PetTracker.runningAppsProvider = { appsCallCount += 1; return [11111, 22222] }
+PetTracker.nowProvider = { fakeNow }
+PetTracker.resetPIDCacheForTesting()
+let pids1 = PetTracker.codexPIDs()
+let pids2 = PetTracker.codexPIDs()
+let pids3 = PetTracker.codexPIDs()
+check("T-enum3 codexPIDs 缓存命中(1s TTL 内 provider 仅调 1 次)", appsCallCount == 1, "count=\(appsCallCount)")
+check("T-enum3b 缓存返回一致", pids1 == [11111, 22222] && pids2 == pids1 && pids3 == pids1, "")
+
+// T-enum4: 缓存过期 → 重新查询
+fakeNow = fakeNow.addingTimeInterval(PetTracker.pidCacheTTL + 0.1)   // 超过 TTL
+let pids4 = PetTracker.codexPIDs()
+check("T-enum4 TTL 过期→重新查询(provider 调 2 次)", appsCallCount == 2, "count=\(appsCallCount)")
+check("T-enum4b 过期后返回正确", pids4 == [11111, 22222], "")
+
+PetTracker.runningAppsProvider = savedAppsProvider
+PetTracker.nowProvider = savedNowProvider
+PetTracker.resetPIDCacheForTesting()
+
+print("\n[unionCandidates/PID缓存] \(pass - enPass) passed, \(fail - enBase) failed")
+
 // ---- Geometry 坐标转换（多屏/负坐标）----
 let gBase = fail, gPass = pass
 guard let main = NSScreen.screens.first else { fatalError("无屏幕") }

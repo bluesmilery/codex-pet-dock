@@ -78,19 +78,57 @@ enum PetTracker {
 
     static let bundleID = "com.openai.codex"
 
-    /// R1：通过 bundle id 拿 codex 主进程 PID 集合。
-    /// Electron 的 helper 是否纳入，取决于诊断实测（见 docs）。
+    // MARK: - 可注入的运行时源（测试替换；默认调系统 API）
+
+    /// 全局窗口枚举源。默认调 `CGWindowListCopyWindowInfo`；测试可注入 mock + 计数。
+    static var infosProvider: () -> [[String: Any]]? = {
+        CGWindowListCopyWindowInfo([], kCGNullWindowID) as? [[String: Any]]
+    }
+    /// codex 主进程 PID 源。默认查 `NSRunningApplication`；测试可注入 mock + 计数。
+    static var runningAppsProvider: () -> [Int32] = {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .map { $0.processIdentifier }.filter { $0 != 0 }
+    }
+    /// 时钟源（PID 缓存 TTL 判断用）。测试可注入固定时钟。
+    static var nowProvider: () -> Date = { Date() }
+
+    // MARK: - PID 缓存（1s TTL，moving 态 20Hz 下避免每 tick 查 NSRunningApplication）
+
+    static let pidCacheTTL: TimeInterval = 1.0
+    private static let pidLock = NSLock()
+    private static var cachedPIDs: [Int32] = []
+    private static var cachedPIDsAt: Date = .distantPast
+    private static var hasPIDCache = false
+
+    /// R1：通过 bundle id 拿 codex 主进程 PID 集合（结果在 `pidCacheTTL` 内缓存）。
+    /// PID 极少变化，1s TTL 足够；moving 态 20Hz 下从 20 次/秒降为 ~1 次/秒。
     static func codexPIDs() -> [Int32] {
-        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        return apps.map { $0.processIdentifier }.filter { $0 != 0 }
+        pidLock.lock()
+        if hasPIDCache, nowProvider().timeIntervalSince(cachedPIDsAt) < pidCacheTTL {
+            let cached = cachedPIDs; pidLock.unlock(); return cached
+        }
+        pidLock.unlock()
+        let pids = runningAppsProvider()
+        pidLock.lock()
+        cachedPIDs = pids; cachedPIDsAt = nowProvider(); hasPIDCache = true
+        pidLock.unlock()
+        return pids
     }
 
-    /// R1+R2：按 PID 集合枚举窗口。
+    /// 测试用：清空 PID 缓存。
+    static func resetPIDCacheForTesting() {
+        pidLock.lock(); cachedPIDs = []; hasPIDCache = false; pidLock.unlock()
+    }
+
+    /// R1+R2：按 PID 集合枚举窗口（经 `infosProvider` 取一次全局窗口）。
     static func enumerate(pids: [Int32]) -> [WinCandidate] {
+        guard let infos = infosProvider() else { return [] }
+        return enumerate(pids: pids, from: infos)
+    }
+
+    /// 按 PID 集合从已枚举的 `infos` 过滤（共享单次枚举结果，避免重复系统调用）。
+    static func enumerate(pids: [Int32], from infos: [[String: Any]]) -> [WinCandidate] {
         let pidSet = Set(pids)
-        guard let infos = CGWindowListCopyWindowInfo([], kCGNullWindowID) as? [[String: Any]] else {
-            return []
-        }
         return infos.compactMap { dict -> WinCandidate? in
             guard let c = parse(dict) else { return nil }
             return pidSet.contains(c.ownerPID) ? c : nil
@@ -99,10 +137,13 @@ enum PetTracker {
 
     /// 扩展通道（诊断用）：按 ownerName 包含关系枚举，用于发现 Electron helper 归属的窗口。
     static func enumerateByOwnerName(_ names: [String]) -> [WinCandidate] {
-        guard let infos = CGWindowListCopyWindowInfo([], kCGNullWindowID) as? [[String: Any]] else {
-            return []
-        }
-        return infos.compactMap { dict -> WinCandidate? in
+        guard let infos = infosProvider() else { return [] }
+        return enumerateByOwnerName(names, from: infos)
+    }
+
+    /// 按 ownerName 从已枚举的 `infos` 过滤（共享单次枚举结果）。
+    static func enumerateByOwnerName(_ names: [String], from infos: [[String: Any]]) -> [WinCandidate] {
+        infos.compactMap { dict -> WinCandidate? in
             guard let c = parse(dict) else { return nil }
             return names.contains { c.ownerName.localizedCaseInsensitiveContains($0) } ? c : nil
         }
@@ -173,9 +214,12 @@ enum PetTracker {
 
     /// 运行模式使用的候选集：PID 通道 ∪ ownerName 关键词通道（按 wid 去重）。
     /// Electron 应用的窗口可能挂在 helper/renderer PID 上（非主 PID），故同时用 ownerName 兜底。
+    /// **单次 `CGWindowListCopyWindowInfo` 枚举**：两通道共享 `infosProvider()` 结果，
+    /// moving 态 20Hz 下从 40 次/秒降为 20 次/秒。
     static func unionCandidates() -> [WinCandidate] {
-        let byPID = enumerate(pids: codexPIDs())
-        let byName = enumerateByOwnerName(["Chat", "GPT", "Codex", "OpenAI"])
+        guard let infos = infosProvider() else { return [] }
+        let byPID = enumerate(pids: codexPIDs(), from: infos)
+        let byName = enumerateByOwnerName(["Chat", "GPT", "Codex", "OpenAI"], from: infos)
         var seen = Set<CGWindowID>()
         var merged: [WinCandidate] = []
         for w in byPID + byName where !seen.contains(w.wid) {
