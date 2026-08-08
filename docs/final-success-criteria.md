@@ -1,37 +1,39 @@
-# Codex Pet Dock — 最终成功标准（Release Candidate）
+# Codex Pet Dock — 发布验收（v0.1.0）
 
-> 候选版本：`PetDock.app` 1.0.0（build 2），分支 `public-history checkpoint`（base `main` 657a984）。
+> 版本：`PetDock.app` v0.1.0（build 1），分支 `dev`（release candidate）。
 > 本文件记录构建 / 测试 / 代码评审结论，以及需真机验证的待办项。
 
 ## 构建（已验证）
 
 - `make build`（`swift build -c release`）：`Build complete!`，退出码 0，无警告。
 - 产物：`.build/release/PetDock`（arm64 Mach-O）。
-- `.app` 组装（`make app`，ad-hoc 签名 `Identifier=io.github.bluesmilery.codexpetdock`）：**待主项目最终 make app**（见末尾流程）。
+- `.app` 组装（`make app`，ad-hoc 签名 `Identifier=io.github.bluesmilery.codexpetdock`）：**待发布流程执行**。
 
 ## 测试（已验证，全绿）
 
-`make test` = test-ui + test-data + test-shell，**221 项全部通过，0 failed**。
+`make test` = test-ui + test-data + test-shell，**275 项全部通过，0 failed**。
 
 | 套件 | 项数 | 覆盖 |
 | --- | --- | --- |
-| test-ui | 36 | selectPet 识别（Mascot 优先 / 不误绑主窗口 / 滞回 / petShaped / **合理回退排除 384x95·18x6 辅助**）+ Geometry 坐标（多屏 / 负坐标）+ Follower 状态机 + **Dock 几何/reset 显示/placeBelow 宽度回归** |
-| test-data | 94 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、**codex 路径解析 12 项 + 子进程 PATH prepend 5 项 + resetsAt 格式化 MM-dd HH:mm / nil 占位** |
+| test-ui | 89 | selectPet 识别（Mascot 优先 / 合理回退排除辅助窗）+ Geometry 坐标（多屏 / 负坐标）+ Follower 状态机 + Dock 几何/reset + **BubbleVisibility 30（分类滞回 + 调度 + 异步 generation single-flight）** + **障碍避让 17（链式/排除/越界/恢复）** + **水平 clamp 6** |
+| test-data | 95 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、codex 路径解析 + 子进程 PATH + resetsAt 格式化 |
 | test-shell | 91 | Theme 内置 / 外部安全解析（颜色 / 字体 / 徽标 / 危险关键字）、Settings 持久化、ThemeStore fixture 热加载、AutoStart 状态映射 |
 
 纯函数测试（不依赖屏幕录制权限 / 不联网），用 `swiftc` 编译真实源码运行。
 
 ## 代码评审结论（历次切片已合入 main）
 
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-- `public-history checkpoint`（base 761a653）：`CodexExecutableResolver` 解析 codex 绝对路径（env 覆盖 > PATH > nvm/volta/brew），`RateLimitClient` 用 `executableURL` 直接启动，修复 .app（launchd 环境）找不到 nvm codex 致 WEEK LEFT 占位。
-- `public-history checkpoint` 子进程 PATH（追加）：`RateLimitClient.childEnvironment` 把 codex 父目录 prepend 到子进程 `PATH`（去重、保留原 PATH），修复 codex 脚本 `#!/usr/bin/env node` 在子进程找不到同目录 node（nvm codex/node 同目录）致 app-server 立即退出。launchd 等价环境（`env -i HOME=<user> PATH=/usr/bin:/bin`）脱敏实测 `account/rateLimits/read` 成功。
+- P0：宠物识别 + 透明面板（SC1–SC7 真实验证）。
+- P1-UI：底座 + 详情卡 + Follower 自适应。
+- P1-数据：WEEK LEFT / WEEK TOKENS 数据层（fixture 测试 + 脱敏验证）。
+- P1-shell：主题 / 设置 / 状态栏 / 自启（安全白名单）。
+- 生产接线：真实数据 + 主题 / 状态栏 / 自启 + 详情字段映射 + pause 跟随。
+- 并发修复：单 serial queue + refreshInFlight 合并 pending + stop。
+- P2 review：缓存淘汰 / RateLimitClient 健壮性 / Timer.common 模式 / 注释标签。
+- codex 路径修复：`CodexExecutableResolver` 解析 codex 绝对路径（env 覆盖 > PATH > nvm/volta/brew），`RateLimitClient` 用 `executableURL` 直接启动，修复 .app（launchd 环境）找不到 nvm codex 致 WEEK LEFT 占位。
+- codex 子进程 PATH：`RateLimitClient.childEnvironment` 把 codex 父目录 prepend 到子进程 `PATH`（去重、保留原 PATH），修复 codex 脚本 `#!/usr/bin/env node` 在子进程找不到同目录 node 致 app-server 立即退出。launchd 等价环境脱敏实测 `account/rateLimits/read` 成功。
+- BubbleVisibility：ScreenCaptureKit 像素 alpha 判定 bubble 展开/收起，macOS14+ max2Hz single-flight generation 安全。
+- 水平 clamp：`clampDockX` 纯函数将 dock x 限制在屏内，副屏边缘贴边展示。
 
 隐私边界经 fixture 测试固化：结果不含会话正文诱饵、不读 auth / 凭证。
 
@@ -50,16 +52,22 @@ Remove historical SHA, private ref, and internal worker/task provenance while pr
 8. **真实数据**：WEEK LEFT（codex app-server，需 codex 已登录）/ WEEK TOKENS（`~/.codex/sessions` 聚合）刷新与退避。
 9. **性能**：Follower 自适应频率（移动升频 / 静止降频）实际体感。
 
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
+## 运行时 QA 实测（v0.1.0 dev release candidate；下述为泛化结论，不含真实 wid/坐标/CDHash/SHA）
 
 ### ✅ 已自动验证（公开 / 系统方式）
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-- **WEEK TOKENS**：解析 `~/.codex/sessions`（脱敏，仅数值聚合），近 7 天 sample/event 与 total 为非占位正值（具体数值因本机而异，已脱敏）。
-Remove historical SHA, private ref, and internal worker/task provenance while preserving public intent.
-- **重开 + 重捕**：`pkill` → `open`（新 pid），日志 `pet=true` 重捕（moving/setFrame=true），设置默认恢复，**未重签**。
-Rewrite matched statement as a synthetic, number-free runtime verification statement.
-Rewrite matched statement as a synthetic, number-free runtime verification statement.
-Rewrite matched statement as a synthetic, number-free runtime verification statement.
+- **launchd 等价环境 WEEK LEFT**：`PATH=/usr/bin:/bin HOME=<user>` 下，`CodexExecutableResolver` 解析到 `~/.nvm/versions/node/<ver>/bin/codex`，`account/rateLimits/read` **成功**（退出码 0，未碰 auth）。
+- **WEEK TOKENS**：解析 `~/.codex/sessions`（脱敏，仅数值聚合），近 7 天非占位正值。
+- **窗口几何**：`selectPet` 选中 Mascot 本体（172×179 layer=2）；辅助窗（18×6 / 384×95）layer=3 存在但未被选中。
+- **重开 + 重捕**：`pkill` → `open`（新 pid），日志 `pet=true` 重捕，设置默认恢复，未重签。
+- **Follower 自适应**：`moving(0.05)` → `stable(0.5)`，频率自适应 + 不重复 setFrame。
+- **三主题**：Holographic / Warm Gold / Circuit 配置正确。
+- **BubbleVisibility 三态实测（同一进程同一签名，ScreenCaptureKit 像素 alpha）**：
+  - **expanded**：会话气泡展开 → 像素非透明高 → classify **visible** → dock 避让到 bubble.maxY+2。
+  - **collapsed**：用户收起气泡 → 像素非透明低 → classify **hidden** → dock 回 pet.maxY+2（不避让）。
+  - **re-expanded**：用户再展开 → classify visible 恢复 → dock 回避让位。
+  - 可逆性确认：expanded→collapsed→expanded 周期完全可逆。
+- **水平边缘 clamp**：Mascot 靠近副屏右边缘时，dock x 经 `clampDockX` clamp 到 visibleFrame 内（完全留在屏内），不隐藏。
+- **无 SC/TCC 错误**：三态全程日志 `pet=true`，无 ScreenCaptureKit 错误。
 
 Rewrite matched statement as a synthetic, number-free runtime verification statement.
 - 点击底座开关详情卡（套餐 / 重置 / 缓存 / 输入 / 输出 / 会话 / 更新时间可见）。
@@ -70,7 +78,7 @@ Rewrite matched statement as a synthetic, number-free runtime verification state
 
 ## 分发包
 
-Rewrite matched statement as a synthetic, number-free runtime verification statement.
+- ZIP：`dist/CodexPetDock-0.1.0-macOS-arm64.zip`（`ditto -c -k --keepParent` 打包，**待发布流程生成**）。
 - SHA256 / CDHash：构建特定指纹已删除（ad-hoc 签名每次 `make app` 都改变，公开固定值无意义且易误导）；最终分发时由发布流程重新生成。
 
 ## 已知风险（跨阶段）
@@ -81,7 +89,7 @@ Rewrite matched statement as a synthetic, number-free runtime verification state
    ① **TCC（屏幕录制）** 按 bundle id + 签名授权 → 新 id 需在「系统设置 › 隐私与安全性 › 屏幕录制」重新授予；
    ② **登录自启**（`SMAppService`）按 app bundle id 注册 → 新 id 需重新启用；
    ③ 旧 `io.github.bluesmilery.codexpetdock` 的 TCC 授权 / 登录项残留可在系统设置手动清理。
-   本项目尚未选择开源许可证（未随附 LICENSE）；公开分发前需确定授权。
+   本项目以 [MIT License](LICENSE) 开源，根目录已随附 LICENSE 文件。
 1. ad-hoc 签名 TCC 不稳定（每次重签 CDHash 变 → 屏幕录制授权失效）。
 2. 屏幕录制权限是硬前提。
 3. `codex app-server` 为 experimental，协议字段可能随版本变化（已做稳定子集 + 降级）。

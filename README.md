@@ -16,6 +16,7 @@ All window enumeration and data access use **public APIs only** — Codex is nev
 - **Transparent dock HUD**: sits right below the pet without overlapping, showing `WEEK LEFT` (including the current period's reset time) and `WEEK TOKENS`; missing data falls back to a `—` placeholder.
 - **Detail card**: click the dock to expand/collapse, listing plan, reset time, cache ratio, input, output, session count, last-updated time, and a local-estimate note.
 - **Adaptive following**: high-frequency tracking and positioning while the pet moves, automatically stepping down when idle (no redundant repositioning); hides with the pet when it is hidden or Codex quits, and recaptures on reappearance.
+- **Session-bubble avoidance**: when a Codex conversation bubble appears beneath the pet, the dock steps down to avoid overlap. Uses `ScreenCaptureKit` (macOS 14+) to detect whether the bubble is actually drawn (alpha-only pixel statistics — no OCR, no image saving, no color/text recording); on macOS 13 or capture failure, it conservatively avoids. When the pet is near a screen edge, the dock is clamped horizontally to stay fully on-screen (like a message bar hugging the edge).
 - **Real data, strict privacy**:
   - `WEEK LEFT`: read from the official weekly quota (`primary` weekly window) via `codex app-server` JSON-RPC.
   - `WEEK TOKENS`: aggregated from token deltas in the local `~/.codex/sessions` logs.
@@ -86,6 +87,14 @@ Diagnostic mode (`--diagnose`) enumerates windows, locates the Codex pet, and wr
 
 **Distribution**: the current release is an ad-hoc-signed (no team ID), unnotarized arm64 prebuilt package. Exact checksums and download channels are provided with the release notes.
 
+**Preview installation** (not a one-click trusted install):
+
+1. Download `CodexPetDock-0.1.0-macOS-arm64.zip` and extract it.
+2. Move `PetDock.app` to `/Applications` (or any fixed location).
+3. Because the app is ad-hoc-signed (no Developer ID, not notarized), macOS Gatekeeper may block the first launch. Go to **System Settings › Privacy & Security** and click **Open Anyway** (or "Open Anyway" in the Gatekeeper dialog). See [Apple's guide](https://support.apple.com/guide/mac-help/mh40616/mac) for details.
+4. On first launch, grant **Screen Recording** permission (required for cross-app window enumeration) and restart the app.
+5. Ensure the `codex` CLI (`@openai/codex`) is installed and signed in — `WEEK LEFT` depends on it being available on the local machine.
+
 ---
 
 ## 📊 Data Sources & Semantics
@@ -142,10 +151,10 @@ Refreshing is paused while the pet is not visible and resumes when it reappears.
 All tests are pure-function / fixture tests, compiled with `swiftc` against the real sources — **no screen-recording permission and no network required**:
 
 ```sh
-make test-ui      # pet-detection rules + coordinate transforms + follow state machine (36 tests)
+make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance + clamp (89 tests)
 make test-data    # data layer: weekly aggregation / incremental cache / backoff / pause / desensitization (95 tests)
 make test-shell   # theme safe-parsing / settings persistence / hot-reload / autostart state mapping (91 tests)
-make test         # full suite (222 tests in total)
+make test         # full suite (275 tests in total)
 ```
 
 Privacy boundaries are pinned by fixture tests: data-layer results contain no conversation-content decoys and no credentials. See `docs/data-layer.md` and `tests/`.
@@ -168,7 +177,7 @@ Privacy boundaries are pinned by fixture tests: data-layer results contain no co
 
 Issues and pull requests are welcome. Before submitting, please ensure:
 
-1. `make test` (full suite, 222 tests) passes;
+1. `make test` (full suite, 275 tests) passes;
 2. the change introduces no code that reads credentials or conversation content, and no private-API calls;
 3. commit messages follow Conventional Commits.
 
@@ -199,7 +208,7 @@ More design rationale in [`docs/pet-window-detection.md`](docs/pet-window-detect
 - New work happens on `feature/*` branches cut from `dev`, merged back into `dev` when done.
 - Merging `dev` → `main`, and pushing `main` to GitHub, both require **manual confirmation** — never automated.
 - **Do not** use `git push --all`, to avoid pushing local or temporary branches to the remote.
-- No remote URL or CI is fabricated in this document; all changes are validated by local `swift build -c release` and `make test` (222 tests).
+- No remote URL or CI is fabricated in this document; all changes are validated by local `swift build -c release` and `make test` (275 tests).
 
 ---
 

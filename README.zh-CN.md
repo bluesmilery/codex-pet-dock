@@ -15,6 +15,7 @@
 - **透明底座 HUD**：紧贴宠物下方、不重叠，显示 `WEEK LEFT`（含本周期到期时间）与 `WEEK TOKENS`；数据缺失时以 `—` 占位。
 - **详情卡**：点击底座展开 / 关闭，列出套餐、重置时间、缓存比例、输入、输出、会话数、更新时间，以及本机估算说明。
 - **自适应跟随**：宠物移动时高频跟随并定位，静止后自动降频且不重复刷新位置；宠物隐藏或 Codex 退出时底座与详情同步隐藏，重现后重新捕获。
+- **会话气泡避让**：当 Codex 会话气泡出现在宠物下方时，底座自动下移避开重叠。使用 `ScreenCaptureKit`（macOS 14+）检测气泡是否实际绘制内容（仅 alpha 像素统计——不 OCR、不保存图像、不记录颜色或文字）；macOS 13 或捕获失败时保守避让。宠物靠近屏幕边缘时，底座水平 clamp 到屏内（像消息条一样贴边展示）。
 - **真实数据，严格隐私**：
   - `WEEK LEFT`：经 `codex app-server` 的 JSON-RPC 读取官方周额度（`primary` 周窗口）。
   - `WEEK TOKENS`：聚合 `~/.codex/sessions` 本机会话日志的 token 增量。
@@ -85,6 +86,14 @@ make clean-logs   # 清理 /tmp 下的运行 / 诊断日志
 
 **分发**：当前发布包为 ad-hoc 签名（无 team ID）、未 notarized 的 arm64 预编译包。具体校验值与下载方式以发布说明为准。
 
+**预览安装**（非一键可信安装）：
+
+1. 下载 `CodexPetDock-0.1.0-macOS-arm64.zip` 并解压。
+2. 将 `PetDock.app` 移至 `/Applications`（或任意固定位置）。
+3. 因应用为 ad-hoc 签名（无 Developer ID、未公证），macOS Gatekeeper 可能拦截首次启动。前往**系统设置 › 隐私与安全性**，点击**仍要打开**（或在 Gatekeeper 对话框中选"打开"）。详见 [Apple 官方指南](https://support.apple.com/guide/mac-help/mh40616/mac)。
+4. 首次启动后，授予**屏幕录制**权限（跨应用窗口枚举所需），然后重启应用。
+5. 确保本机已安装并登录 `codex` CLI（`@openai/codex`）——`WEEK LEFT` 依赖其可用。
+
 ---
 
 ## 📊 数据来源与口径
@@ -141,10 +150,10 @@ make clean-logs   # 清理 /tmp 下的运行 / 诊断日志
 全部为纯函数 / fixture 测试，用 `swiftc` 编译真实源码后运行，**不依赖屏幕录制权限、不联网**：
 
 ```sh
-make test-ui      # 宠物识别规则 + 坐标转换 + 跟随状态机（36 项）
+make test-ui      # 宠物识别 + 坐标转换 + 跟随状态机 + 气泡可见性 + 障碍避让 + 边缘 clamp（89 项）
 make test-data    # 数据层：周窗口聚合 / 增量缓存 / 退避 / 暂停 / 脱敏（95 项）
 make test-shell   # 主题安全解析 / 设置持久化 / 热加载 / 自启状态映射（91 项）
-make test         # 全量（共 222 项）
+make test         # 全量（共 275 项）
 ```
 
 隐私边界由 fixture 测试固化：数据层结果不包含会话正文诱饵、不包含凭证。详见 `docs/data-layer.md` 与 `tests/`。
@@ -167,7 +176,7 @@ make test         # 全量（共 222 项）
 
 欢迎通过 issue 与 pull request 反馈问题与改进。提交前请确保：
 
-1. `make test` 全量（222 项）通过；
+1. `make test` 全量（275 项）通过；
 2. 不引入读取凭证、会话正文或调用私有 API 的代码；
 3. 提交信息遵循约定式提交（Conventional Commits）风格。
 
@@ -198,7 +207,7 @@ make test         # 全量（共 222 项）
 - 新功能在从 `dev` 派生的 `feature/*` 分支上开发，完成后合并回 `dev`。
 - `dev` → `main` 的合并，以及 `main` 推送到 GitHub，均需**人工确认**后执行，绝不自动推送。
 - **禁止**使用 `git push --all`，以免误推本地或临时分支到远端。
-- 不在本文虚构远端地址或 CI；所有变更以本地 `swift build -c release` 与 `make test`（222 项）验证为准。
+- 不在本文虚构远端地址或 CI；所有变更以本地 `swift build -c release` 与 `make test`（275 项）验证为准。
 
 ---
 
