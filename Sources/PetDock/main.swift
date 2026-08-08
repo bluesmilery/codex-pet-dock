@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?               // 跟随（高频：窗口枚举 + 位置）
     private var dataTimer: Timer?           // 数据刷新（低频：退避间隔）
     private var wasPetVisible = false       // 数据 pause/resume 的边沿触发（跟随宠物可见性）
-    private let logURL = URL(fileURLWithPath: "/tmp/petdock.log")
+    private let logger = PetLogger()
 
     override init() {
         // 数据栈：RateLimitClient 经 codex app-server JSON-RPC 取官方周额度；
@@ -84,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        DebugLog.applyOverrides(arguments: CommandLine.arguments)
         if !CGPreflightScreenCaptureAccess() {
             _ = CGRequestScreenCaptureAccess()
         }
@@ -274,14 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func log(_ s: String) {
-        let line = "[\(s)]\n"
-        guard let data = line.data(using: .utf8) else { return }
-        if FileManager.default.fileExists(atPath: logURL.path),
-           let h = try? FileHandle(forWritingTo: logURL) {
-            h.seekToEndOfFile(); h.write(data); try? h.close()
-        } else {
-            try? data.write(to: logURL)
-        }
+        logger.log(s)
     }
 }
 

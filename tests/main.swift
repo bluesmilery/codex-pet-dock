@@ -436,5 +436,47 @@ if let scr = NSScreen.screens.first(where: { $0.frame.origin.x < 0 }) {
 }
 print("\n[水平clamp] \(pass - clPass) passed, \(fail - clBase) failed")
 
+// ---- T-log: PetLogger release 门控 + 后台异步 IO ----
+let lgBase = fail, lgPass = pass
+let logTmp = FileManager.default.temporaryDirectory
+    .appendingPathComponent("petdock-log-test-\(ProcessInfo.processInfo.processIdentifier).log")
+try? FileManager.default.removeItem(at: logTmp)
+
+// L1: enabled=false → no-op，不创建/写文件
+let offLogger = PetLogger(enabled: false, logURL: logTmp)
+offLogger.log("should-not-write")
+// 等待足够时间确认后台队列也无写入
+let l1Deadline = Date().addingTimeInterval(0.5)
+while Date() < l1Deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+check("L1 enabled=false→文件不创建(no-op)", !FileManager.default.fileExists(atPath: logTmp.path), "")
+
+// L2: enabled=true → 后台异步写入文件（主线程不阻塞）
+let onLogger = PetLogger(enabled: true, logURL: logTmp)
+onLogger.log("hello-petdock")
+let l2Deadline = Date().addingTimeInterval(2)
+while Date() < l2Deadline && !FileManager.default.fileExists(atPath: logTmp.path) {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+}
+let l2Content = (try? String(contentsOf: logTmp, encoding: .utf8)) ?? ""
+check("L2 enabled=true→后台异步写入文件", l2Content.contains("hello-petdock"), "content=\(l2Content)")
+
+// L3: enabled=true → log() 异步派发（调用返回时尚未同步写盘，证明主线程无同步文件 IO）
+let asyncTmp = FileManager.default.temporaryDirectory
+    .appendingPathComponent("petdock-log-async-\(ProcessInfo.processInfo.processIdentifier).log")
+try? FileManager.default.removeItem(at: asyncTmp)
+let asyncLogger = PetLogger(enabled: true, logURL: asyncTmp)
+asyncLogger.log("async-write")
+// 调用立即返回：全新文件首次写入需 create，异步派发下此刻尚未落盘
+check("L3 log()异步派发(调用返回时未同步写盘)", !FileManager.default.fileExists(atPath: asyncTmp.path), "")
+let l3Deadline = Date().addingTimeInterval(2)
+while Date() < l3Deadline && !FileManager.default.fileExists(atPath: asyncTmp.path) {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+}
+check("L3b 异步派发后最终落盘", FileManager.default.fileExists(atPath: asyncTmp.path), "")
+try? FileManager.default.removeItem(at: asyncTmp)
+
+try? FileManager.default.removeItem(at: logTmp)
+print("\n[PetLogger] \(pass - lgPass) passed, \(fail - lgBase) failed")
+
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)
