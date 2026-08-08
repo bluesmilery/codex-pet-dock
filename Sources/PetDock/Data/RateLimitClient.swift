@@ -224,11 +224,14 @@ final class RateLimitClient: RateLimitFetching {
 
 // MARK: - 管道逐行读取
 
-/// 后台线程读取 FileHandle 并按换行切分回调，避免阻塞主流程。
+/// 异步逐行读取 FileHandle：用 `readabilityHandler`（GCD 后台队列回调）替代裸 `Thread` + 阻塞
+/// `availableData`，避免 `stop()` 后线程挂起（`availableData` 的唤醒语义 Apple 文档未保证）。
+/// `stop()` 置空 readabilityHandler + close，确保读循环在有限时间内退出，无线程泄漏。
 final class LineReader {
     private let handle: FileHandle
     private let onLine: (String) -> Void
-    private var thread: Thread?
+    private let lock = NSLock()
+    private var buffer = Data()
     private var stopped = false
 
     init(handle: FileHandle, onLine: @escaping (String) -> Void) {
@@ -237,29 +240,32 @@ final class LineReader {
     }
 
     func start() {
-        let t = Thread { [weak self] in self?.loop() }
-        t.start()
-        thread = t
-    }
-
-    private func loop() {
-        var buffer = Data()
-        while !stopped {
-            let chunk = handle.availableData
-            if chunk.isEmpty { break }
-            buffer.append(chunk)
-            while let nl = buffer.firstIndex(of: 0x0A) {
-                let lineData = buffer[buffer.startIndex..<nl]
-                buffer.removeSubrange(buffer.startIndex...nl)
-                if let s = String(data: Data(lineData), encoding: .utf8), !s.isEmpty {
-                    onLine(s)
-                }
-            }
+        handle.readabilityHandler = { [weak self] h in
+            self?.process(h.availableData)
         }
     }
 
+    private func process(_ chunk: Data) {
+        if chunk.isEmpty { stop(); return }   // EOF
+        lock.lock()
+        buffer.append(chunk)
+        while let nl = buffer.firstIndex(of: 0x0A) {
+            let lineData = buffer[buffer.startIndex..<nl]
+            buffer.removeSubrange(buffer.startIndex...nl)
+            let line = String(data: Data(lineData), encoding: .utf8) ?? ""
+            lock.unlock()
+            if !line.isEmpty { onLine(line) }
+            lock.lock()
+        }
+        lock.unlock()
+    }
+
     func stop() {
+        lock.lock()
+        guard !stopped else { lock.unlock(); return }
         stopped = true
+        lock.unlock()
+        handle.readabilityHandler = nil   // 停止 GCD 回调
         try? handle.close()
     }
 }

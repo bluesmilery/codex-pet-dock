@@ -478,6 +478,59 @@ struct DataTestRunner {
         }
         section("子进程环境 prepend")
 
+        // ---- T-lr: LineReader 异步逐行读取 + stop() 不挂起 + 不完整行缓冲 ----
+        do {
+            // LR1: 多行 → 逐行回调（readabilityHandler 异步，pump 等待）
+            let pipe1 = Pipe()
+            var lines1: [String] = []
+            let lr1 = LineReader(handle: pipe1.fileHandleForReading) { l in lines1.append(l) }
+            lr1.start()
+            try? pipe1.fileHandleForWriting.write(contentsOf: Data("alpha\nbeta\ngamma\n".utf8))
+            let lr1ok = Self.waitPumpingMain({ lines1 == ["alpha", "beta", "gamma"] }, timeout: 3)
+            check("LR1 多行→逐行回调", lr1ok, "lines=\(lines1)")
+            lr1.stop()
+
+            // LR2: stop() 后有限时间内退出（不挂起）—— 写入后立即 stop，断言 stop 调用不阻塞
+            let pipe2 = Pipe()
+            var lines2: [String] = []
+            let lr2 = LineReader(handle: pipe2.fileHandleForReading) { l in lines2.append(l) }
+            lr2.start()
+            try? pipe2.fileHandleForWriting.write(contentsOf: Data("x\n".utf8))
+            _ = Self.waitPumpingMain({ !lines2.isEmpty }, timeout: 3)
+            let stopStart = Date()
+            lr2.stop()
+            let stopElapsed = Date().timeIntervalSince(stopStart)
+            check("LR2 stop()有限时间内返回(不挂起)", stopElapsed < 2.0, "elapsed=\(stopElapsed)s")
+
+            // LR3: 不完整行缓冲——分两次写同一行，中间无 premature 回调
+            let pipe3 = Pipe()
+            var lines3: [String] = []
+            let lr3 = LineReader(handle: pipe3.fileHandleForReading) { l in lines3.append(l) }
+            lr3.start()
+            try? pipe3.fileHandleForWriting.write(contentsOf: Data("partial".utf8))   // 无换行
+            _ = Self.waitPumpingMain({ false }, timeout: 0.2)   // 短暂等待，确认无 premature 回调
+            check("LR3 不完整行无premature回调", lines3.isEmpty, "lines=\(lines3)")
+            try? pipe3.fileHandleForWriting.write(contentsOf: Data("-line\n".utf8))   // 补全
+            let lr3ok = Self.waitPumpingMain({ lines3 == ["partial-line"] }, timeout: 3)
+            check("LR3 分两次写→合并一行", lr3ok, "lines=\(lines3)")
+            lr3.stop()
+
+            // LR4: EOF（关闭写端）→ reader 自停，不挂起
+            let pipe4 = Pipe()
+            var lines4: [String] = []
+            let lr4 = LineReader(handle: pipe4.fileHandleForReading) { l in lines4.append(l) }
+            lr4.start()
+            try? pipe4.fileHandleForWriting.write(contentsOf: Data("eof-line\n".utf8))
+            _ = Self.waitPumpingMain({ !lines4.isEmpty }, timeout: 3)
+            try? pipe4.fileHandleForWriting.close()   // EOF
+            _ = Self.waitPumpingMain({ false }, timeout: 0.5)   // 等待 EOF 处理
+            // EOF 后再 stop 不挂起
+            let eofStopStart = Date()
+            lr4.stop()
+            check("LR4 EOF后再stop不挂起", Date().timeIntervalSince(eofStopStart) < 2.0, "")
+        }
+        section("LineReader 异步读")
+
         print("\n[DataTests] 全部通过")
         exit(fail == 0 ? 0 : 1)
     }
