@@ -208,5 +208,31 @@ _ = AutoStart.set(enabled: true)
 _ = AutoStart.set(enabled: false)
 check("set(true)/set(false) 均不崩", true)
 
-print("\n[Shell: Theme/Settings/Store/AutoStart] \(pass) passed, \(fail) failed")
+// ============ StatusBar TCC 权限降级提示 ============
+mark("StatusBar TCC 提示")
+let _ = NSApplication.shared   // NSStatusBar 需 NSApp
+let sb = StatusBar(
+    themes: Theme.builtins,
+    currentThemeID: Theme.defaultID,
+    dockVisible: true,
+    launchAtLogin: false,
+    actions: StatusBar.Actions(
+        onSelectTheme: { _ in }, onToggleVisible: { _ in },
+        onToggleLaunchAtLogin: { _ in }, onQuit: {}))
+// 默认无权限提示
+check("SB1 默认无 TCC 提示项", !sb.menuItemTitlesForTesting.contains { $0.contains("屏幕录制权限") },
+      "items=\(sb.menuItemTitlesForTesting)")
+// 开启提示 → 菜单顶部出现提示项
+sb.updatePermissionWarning(true)
+check("SB2 开启→菜单含 TCC 提示项", sb.menuItemTitlesForTesting.contains { $0.contains("屏幕录制权限") },
+      "items=\(sb.menuItemTitlesForTesting)")
+// 提示项在顶部（第一项）
+check("SB3 TCC 提示项在菜单顶部", sb.menuItemTitlesForTesting.first?.contains("屏幕录制权限") ?? false,
+      "first=\(sb.menuItemTitlesForTesting.first ?? "nil")")
+// 关闭提示 → 消失
+sb.updatePermissionWarning(false)
+check("SB4 关闭→TCC 提示项消失", !sb.menuItemTitlesForTesting.contains { $0.contains("屏幕录制权限") },
+      "items=\(sb.menuItemTitlesForTesting)")
+
+print("\n[Shell: Theme/Settings/Store/AutoStart/StatusBar] \(pass) passed, \(fail) failed")
 exit(fail == 0 ? 0 : 1)

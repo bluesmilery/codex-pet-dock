@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?               // 跟随（高频：窗口枚举 + 位置）
     private var dataTimer: Timer?           // 数据刷新（低频：退避间隔）
     private var wasPetVisible = false       // 数据 pause/resume 的边沿触发（跟随宠物可见性）
+    private var consecutiveEmptyTicks = 0   // 连续无候选 tick 计数（TCC 缺失降级提示用）
     private let logger = PetLogger()
 
     override init() {
@@ -217,6 +218,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sel = PetTracker.selectPet(candidates: wins, lastWID: lastWID)
         let pet = sel.selected?.bounds
         let d = Follower.decide(pet: pet, lastPet: lastPet, state: state, stableCount: stableCount)
+
+        // TCC 缺失降级提示：连续无候选 + 屏幕录制权限未授予 → 状态栏提示（避免静默失败）。
+        // 权限授予后 CGWindowList 返候选，或 preflight 转 true → 提示自动消失。
+        if sel.selected == nil {
+            consecutiveEmptyTicks += 1
+        } else {
+            consecutiveEmptyTicks = 0
+        }
+        let needsTCCWarning = consecutiveEmptyTicks >= 3 && !CGPreflightScreenCaptureAccess()
+        statusBar?.updatePermissionWarning(needsTCCWarning)
 
         // 数据探测仅跟随宠物可见性（与用户是否隐藏 UI 解耦）。
         let petVisible = d.showDock

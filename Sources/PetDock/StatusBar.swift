@@ -18,6 +18,7 @@ final class StatusBar: NSObject {
     private var currentThemeID: String
     private var dockVisible: Bool
     private var launchAtLogin: Bool
+    private var permissionWarning = false
 
     init(themes: [ThemeSpec],
          currentThemeID: String,
@@ -39,6 +40,10 @@ final class StatusBar: NSObject {
     func updateThemeSelection(_ id: String) { currentThemeID = id; rebuildMenu() }
     func updateDockVisible(_ v: Bool) { dockVisible = v; rebuildMenu() }
     func updateLaunchAtLogin(_ v: Bool) { launchAtLogin = v; rebuildMenu() }
+
+    /// 屏幕录制权限缺失降级提示：true 时菜单顶部显示「⚠️ 需屏幕录制权限」提示项，
+    /// false 时隐藏。避免无 TCC 授权时 dock 静默不显示、用户无反馈。
+    func updatePermissionWarning(_ on: Bool) { permissionWarning = on; rebuildMenu() }
 
     // MARK: - 菜单动作（target/action）
 
@@ -62,6 +67,15 @@ final class StatusBar: NSObject {
 
     func rebuildMenu() {
         let menu = NSMenu()
+
+        // 屏幕录制权限缺失提示（顶部醒目，不可点击）
+        if permissionWarning {
+            let warn = NSMenuItem(title: "⚠️ 需屏幕录制权限（系统设置 › 隐私 › 屏幕录制）",
+                                  action: nil, keyEquivalent: "")
+            warn.isEnabled = false
+            menu.addItem(warn)
+            menu.addItem(.separator())
+        }
 
         // 主题选择（子菜单，当前主题打勾）
         let themeItem = NSMenuItem(title: "主题", action: nil, keyEquivalent: "")
@@ -99,5 +113,12 @@ final class StatusBar: NSObject {
 
         statusItem.menu = menu
         statusItem.button?.image = NSImage(systemSymbolName: "pawprint", accessibilityDescription: "PetDock")
+    }
+
+    // MARK: - 测试钩子
+
+    /// 当前菜单项标题列表（测试用）。
+    var menuItemTitlesForTesting: [String] {
+        (statusItem.menu?.items ?? []).map { $0.title }
     }
 }

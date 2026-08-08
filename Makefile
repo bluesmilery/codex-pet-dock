@@ -49,7 +49,7 @@ test-data:
 
 # Shell 测试：Theme/Settings/ThemeStore/AutoStart 纯函数 + fixture（需 Cocoa + ServiceManagement）。
 test-shell:
-	swiftc tests/shell/main.swift Sources/PetDock/Theme.swift Sources/PetDock/Settings.swift Sources/PetDock/AutoStart.swift -framework Cocoa -framework ServiceManagement -o /tmp/petdock-shelltests
+	swiftc tests/shell/main.swift Sources/PetDock/Theme.swift Sources/PetDock/Settings.swift Sources/PetDock/AutoStart.swift Sources/PetDock/StatusBar.swift -framework Cocoa -framework ServiceManagement -o /tmp/petdock-shelltests
 	/tmp/petdock-shelltests
 
 # 全量测试：UI + 数据(含 LiveDockProvider 映射) + Shell。
