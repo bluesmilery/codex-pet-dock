@@ -11,6 +11,14 @@ All window enumeration and data access use **public APIs only** — Codex is nev
 
 ---
 
+## 📌 Origin & Attribution
+
+This project was inspired by [an original WeChat article](https://mp.weixin.qq.com/s/W4kC9enEmvJm2swhM5fbUw). The article's author later released a **Windows** implementation, [hjxccc/codex-pet-dock](https://github.com/hjxccc/codex-pet-dock), which is the original cross-platform reference for this concept.
+
+This repository is an independent **macOS** implementation. It targets a different platform (macOS on Apple Silicon vs. Windows), uses a different technology stack (native Swift/AppKit and public macOS APIs rather than the Windows toolchain), and was developed separately. It is not a port of the Windows project, but shares the same originating inspiration. Thanks to the original author for the idea. (The article's title, author, and content belong to the original source; this document does not reproduce them.)
+
+---
+
 ## ✨ Features
 
 - **Transparent dock HUD**: sits right below the pet without overlapping, showing `WEEK LEFT` (including the current period's reset time) and `WEEK TOKENS`; missing data falls back to a `—` placeholder.
@@ -104,7 +112,7 @@ Only two pieces of data are surfaced; their fields and semantics are documented 
 | Metric | Source | Parsed fields | Example (placeholder) |
 | --- | --- | --- | --- |
 | `WEEK LEFT` | `codex app-server` JSON-RPC: `account/rateLimits/read` | `primary.usedPercent` / `resetsAt` / `windowDurationMins` (10080 = 7 days = weekly window) / `planType` | `73%` |
-| `WEEK TOKENS` | `~/.codex/sessions/**/*.jsonl` (date-bucketed session logs) | Σ `payload.info.last_token_usage.total_tokens` (per-event deltas; verified non-duplicating across sessions) + input / cached / output breakdown | `1.2M` |
+| `WEEK TOKENS` | `~/.codex/sessions/**/*.jsonl` (date-bucketed session logs) | Σ `payload.info.last_token_usage.total_tokens` (per-event deltas; verified non-duplicating across sessions) + input / cached / output breakdown | `~1M` |
 
 **Refresh backoff** (`WEEK LEFT` and `WEEK TOKENS` counted independently):
 
@@ -221,9 +229,3 @@ This project is open-sourced under the [MIT License](LICENSE), Copyright (c) 202
 - This is an **unofficial** community project; it is not affiliated with OpenAI and is not endorsed or sponsored by OpenAI or any third party.
 - **OpenAI**, **Codex**, **ChatGPT**, and other names and trademarks belong to their respective owners; this project only provides compatibility and claims no rights over any third-party trademark.
 - The MIT license **grants only copyright-related rights in this project's code, and no third-party trademark rights.**
-
----
-
-## 💡 Inspiration
-
-This project was inspired by [an original WeChat article](https://mp.weixin.qq.com/s/W4kC9enEmvJm2swhM5fbUw). Thanks to the author for the inspiration. (The article's title, author, and content belong to the original source; this document does not reproduce them.)

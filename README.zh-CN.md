@@ -10,6 +10,14 @@
 
 ---
 
+## 📌 来源与致谢
+
+本项目的灵感来自一篇[原始微信公众号文章](https://mp.weixin.qq.com/s/W4kC9enEmvJm2swhM5fbUw)。该文章作者随后发布了 **Windows** 平台的实现 [hjxccc/codex-pet-dock](https://github.com/hjxccc/codex-pet-dock)，是这一概念的原始跨平台参考。
+
+本仓库是一个独立的 **macOS** 实现：目标平台不同（macOS / Apple Silicon 与 Windows）、技术栈不同（原生 Swift/AppKit 与公开 macOS API，而非 Windows 工具链），系独立开发，并非 Windows 项目的移植，但共享同一灵感来源。感谢原作者带来的启发。（文章标题、作者与内容均归原作者所有，本文不作转述。）
+
+---
+
 ## ✨ 功能亮点
 
 - **透明底座 HUD**：紧贴宠物下方、不重叠，显示 `WEEK LEFT`（含本周期到期时间）与 `WEEK TOKENS`；数据缺失时以 `—` 占位。
@@ -103,7 +111,7 @@ make clean-logs   # 清理 /tmp 下的运行 / 诊断日志
 | 指标 | 来源 | 解析字段 | 显示示例（占位） |
 | --- | --- | --- | --- |
 | `WEEK LEFT` | `codex app-server` JSON-RPC：`account/rateLimits/read` | `primary.usedPercent` / `resetsAt` / `windowDurationMins`（10080 = 7 天 = 周窗口）/ `planType` | `73%` |
-| `WEEK TOKENS` | `~/.codex/sessions/**/*.jsonl`（按日期分桶的会话日志） | Σ `payload.info.last_token_usage.total_tokens`（单次增量，已验证跨会话求和不重复） + 输入 / 缓存 / 输出分项 | `1.2M` |
+| `WEEK TOKENS` | `~/.codex/sessions/**/*.jsonl`（按日期分桶的会话日志） | Σ `payload.info.last_token_usage.total_tokens`（单次增量，已验证跨会话求和不重复） + 输入 / 缓存 / 输出分项 | `~1M` |
 
 **刷新退避**（`WEEK LEFT` 与 `WEEK TOKENS` 各自独立计数）：
 
@@ -220,9 +228,3 @@ make test         # 全量（共 275 项）
 - 本项目为**非官方**的社区项目，与 OpenAI 无任何隶属关系，也未获得 OpenAI 或任何第三方的背书或赞助。
 - **OpenAI**、**Codex**、**ChatGPT** 等名称与商标归其各自权利人所有；本项目仅作兼容性适配，不主张对任何第三方商标的权利。
 - MIT 许可证**仅授予本项目代码的版权相关权利，不授予任何第三方商标权**。
-
----
-
-## 💡 灵感来源
-
-本项目的灵感来自一篇[原始微信公众号文章](https://mp.weixin.qq.com/s/W4kC9enEmvJm2swhM5fbUw)，感谢作者带来的启发。（文章标题、作者与内容均归原作者所有，本文不作转述。）
