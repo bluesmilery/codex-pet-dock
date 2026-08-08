@@ -471,6 +471,24 @@ while concProbe2.lock.withLock({ $0.inFlight }) && Date() < pumpDeadline4 {
 }
 check("T-bv30 新probe完成→cached(hidden)", concProbe2.visibility(for: CGWindowID(200)) == .hidden, "")
 
+// T-bv31: 完全空闲态（candidates 空 + cached 空 + !inFlight）probe 不递增 generation（避免无意义锁写）
+let idleProbe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 5000) })
+let genBefore = idleProbe.lock.withLock { $0.generation }
+idleProbe.probe(candidates: [])
+idleProbe.probe(candidates: [])
+idleProbe.probe(candidates: [])
+let genAfter = idleProbe.lock.withLock { $0.generation }
+check("T-bv31 空闲态空probe不递增generation", genAfter == genBefore, "before=\(genBefore) after=\(genAfter)")
+
+// T-bv32: cached 有值时 probe([]) → 仍清 cached + 递增 generation（旧结果失效）
+let cacheProbe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 6000) })
+cacheProbe.lock.withLock { $0.cached = [CGWindowID(7): .visible]; $0.inFlight = false }
+let genCB = cacheProbe.lock.withLock { $0.generation }
+cacheProbe.probe(candidates: [])
+let genCA = cacheProbe.lock.withLock { $0.generation }
+check("T-bv32 cached非空时probe([])→递增generation+清cached",
+      genCA == genCB + 1 && cacheProbe.lock.withLock { $0.cached.isEmpty }, "before=\(genCB) after=\(genCA)")
+
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
 
 // ---- T-clamp: clampDockX 纯函数 + safeDockFrame 水平 clamp ----

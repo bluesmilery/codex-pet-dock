@@ -57,13 +57,19 @@ enum Geometry {
     /// - x 默认按 pet 中心固定 `dockSize.width`；若水平超出 `screen.visibleFrame`，经 `clampDockX` 贴边展示；
     /// - y 从 `pet.maxY + gap` 起，对与当前 dock 矩形相交的障碍迭代下移到 `obstacle.maxY + gap`，直到不相交（多障碍链式）；
     /// - 限定同一 `screen` 的 visibleFrame：水平 clamp 后仍越界（屏宽 < dock 宽）或垂直越界返回 nil（隐藏）。
+    ///
+    /// 坐标系说明（维护者必读）：`pet` / `obstacles` / 返回 frame 均为 **Quartz 全局坐标**（主屏左上原点，y 向下）。
+    /// `screen.visibleFrame` 是 **AppKit 全局坐标**（主屏左下原点，y 向上）。
+    /// - **水平**：Quartz 与 AppKit 共享 x 轴，故 `v.minX/maxX` 可直接用于 Quartz x 的 clamp（无需转换）。
+    /// - **垂直**：两系 y 轴方向相反，故避让后的 Quartz rect 须经 `appKitRectFromQuartz` 转一次再比 `v.minY/maxY`。
+    /// 修改本函数时切勿在垂直判断中直接用 Quartz `dy` 比 AppKit `v.minY/maxY`（副屏负坐标下会判断错误）。
     static func safeDockFrame(pet: CGRect, avoiding obstacles: [CGRect],
                               dockSize: CGSize, gap: CGFloat, screen: NSScreen?) -> (frame: CGRect?, reason: String) {
         let dw = dockSize.width, dh = dockSize.height
-        var dx = pet.origin.x + (pet.width - dw) / 2   // 默认按 pet 中心
-        var dy = pet.origin.y + pet.height + gap
+        var dx = pet.origin.x + (pet.width - dw) / 2   // Quartz x：默认按 pet 中心
+        var dy = pet.origin.y + pet.height + gap        // Quartz y：pet 底部下方
 
-        // 水平 clamp：若 screen 有 visibleFrame，经纯函数 clampDockX 限制。
+        // 水平 clamp（Quartz x 与 AppKit x 同轴，可直接用 visibleFrame.minX/maxX）。
         if let screen {
             let v = screen.visibleFrame
             guard let clamped = clampDockX(centeredX: dx, dockWidth: dw,
@@ -75,19 +81,19 @@ enum Geometry {
 
         let dockX = dx..<(dx + dw)
         var changed = true, iterations = 0
-        while changed && iterations < 8 {           // 链式避让，n 小，8 次足够收敛
+        while changed && iterations < 8 {           // 链式避让（Quartz 坐标），n 小，8 次足够收敛
             changed = false; iterations += 1
             for obs in obstacles {
                 let ox = obs.origin.x..<(obs.origin.x + obs.width)
                 let oy = obs.origin.y..<(obs.origin.y + obs.height)
                 if dockX.overlaps(ox) && (dy..<(dy + dh)).overlaps(oy) {
-                    dy = max(dy, obs.origin.y + obs.height + gap)
+                    dy = max(dy, obs.origin.y + obs.height + gap)   // Quartz y：下移到障碍底部下方
                     changed = true
                 }
             }
         }
         let quartz = CGRect(x: dx, y: dy, width: dw, height: dh)
-        if let screen {                              // 垂直 visible 判断（AppKit，转一次）
+        if let screen {                              // 垂直 visible 判断：Quartz → AppKit 转换后比 visibleFrame.minY/maxY
             let appKit = appKitRectFromQuartz(quartz)
             let v = screen.visibleFrame
             let vInside = appKit.minY >= v.minY && appKit.maxY <= v.maxY

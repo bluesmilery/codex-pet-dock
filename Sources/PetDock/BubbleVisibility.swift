@@ -89,7 +89,11 @@ final class BubbleVisibilityProbe: Sendable {
         let shouldStart: Bool
         (gen, prev, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Bool) in
             guard !candidates.isEmpty else {
-                // 与 reset() 一致：递增 generation + 清 cached，不设 inFlight=false。
+                // 完全空闲（无候选 + 无缓存 + 无在途）→ 无意义锁写，直接 return。
+                // 宠物可见但下方无会话气泡时，moving 态 20Hz 每 tick 调 probe([])，
+                // 此早退避免每帧递增 generation + 清空字典的无意义锁写。
+                if s.cached.isEmpty && !s.inFlight { return (0, [:], false) }
+                // 仍有缓存或在途：与 reset() 一致递增 generation + 清 cached，使旧结果失效。
                 // 旧 Task 仍持有唯一 token，完成时清 inFlight；期间候选重新出现 probe 被拒。
                 s.generation += 1; s.cached.removeAll()
                 return (0, [:], false)
