@@ -22,7 +22,7 @@ final class DetailPanel {
         panel.hasShadow = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isMovableByWindowBackground = false
@@ -89,12 +89,23 @@ final class DetailPanel {
     }
 
     /// 紧贴底座下方（dockFrame 为 AppKit 全局坐标），水平与底座对齐。
-    func placeBelow(dockFrame: NSRect) {
+    /// 若传入 `visibleScreen`，对 detail 宽度（≥230）做水平 clamp，避免 dock 贴右边缘时
+    /// detail 右侧越出屏幕（detail 宽 max(dockWidth,230) > dock 宽 200，从同一 x 起算会超 30px）。
+    func placeBelow(dockFrame: NSRect, visibleScreen: NSScreen? = nil) {
         let h = panel.frame.height
         let w = max(dockFrame.width, 230)
-        let f = NSRect(x: dockFrame.origin.x, y: dockFrame.origin.y - h - 2, width: w, height: h)
+        var x = dockFrame.origin.x
+        if let v = visibleScreen?.visibleFrame {
+            x = min(max(x, v.minX), v.maxX - w)   // 水平 clamp：左不越 visibleMinX，右不越 visibleMaxX-w
+        }
+        let f = NSRect(x: x, y: dockFrame.origin.y - h - 2, width: w, height: h)
         panel.setFrame(f, display: true)
     }
+
+    // MARK: - 测试钩子
+
+    var frameForTesting: NSRect { panel.frame }
+    var collectionBehaviorForTesting: NSWindow.CollectionBehavior { panel.collectionBehavior }
 
     // MARK: - 工厂
 

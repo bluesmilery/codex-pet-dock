@@ -436,6 +436,50 @@ if let scr = NSScreen.screens.first(where: { $0.frame.origin.x < 0 }) {
 }
 print("\n[水平clamp] \(pass - clPass) passed, \(fail - clBase) failed")
 
+// ---- T-detail: DetailPanel 水平 clamp + fullScreenAuxiliary ----
+let dtBase = fail, dtPass = pass
+
+// D1: DetailPanel.collectionBehavior 与 DockPanel 一致含 .fullScreenAuxiliary
+let dtPanel = DetailPanel()
+let dtCB = dtPanel.collectionBehaviorForTesting
+check("D1 DetailPanel collectionBehavior 含 .fullScreenAuxiliary",
+      dtCB.contains(.fullScreenAuxiliary), "cb=\(dtCB.rawValue)")
+
+// D2: dock clamp 到屏幕右边缘 → detail frame maxX <= visibleMaxX（不越出屏幕）
+if let screen = NSScreen.screens.first {
+    let v = screen.visibleFrame
+    let dockAtRightEdge = NSRect(x: v.maxX - 200, y: v.minY + 100, width: 200, height: 48)  // dock 贴右
+    dtPanel.placeBelow(dockFrame: dockAtRightEdge, visibleScreen: screen)
+    let df = dtPanel.frameForTesting
+    check("D2 dock贴右→detail maxX<=visibleMaxX", df.maxX <= v.maxX,
+          "detailMaxX=\(df.maxX) visibleMaxX=\(v.maxX)")
+
+    // D3: dock 在屏幕左边缘 → detail 不越出左边（minX >= visibleMinX）
+    let dockAtLeftEdge = NSRect(x: v.minX, y: v.minY + 100, width: 200, height: 48)
+    dtPanel.placeBelow(dockFrame: dockAtLeftEdge, visibleScreen: screen)
+    let df3 = dtPanel.frameForTesting
+    check("D3 dock贴左→detail minX>=visibleMinX", df3.minX >= v.minX,
+          "detailMinX=\(df3.minX) visibleMinX=\(v.minX)")
+
+    // D4: dock 居中不超界 → detail 与 dock 左对齐（clamp 不改变原对齐；NSPanel 可能像素对齐，容差 1px）
+    let dockCenter = NSRect(x: v.midX - 100, y: v.minY + 100, width: 200, height: 48)
+    dtPanel.placeBelow(dockFrame: dockCenter, visibleScreen: screen)
+    let df4 = dtPanel.frameForTesting
+    check("D4 dock居中→detail与dock左对齐(clamp不改变)", abs(df4.origin.x - dockCenter.origin.x) < 1.0,
+          "detailX=\(df4.origin.x) dockX=\(dockCenter.origin.x)")
+} else {
+    check("D2/D3/D4（无屏跳过）", true, "")
+}
+
+// D5: 无 screen → 不 clamp（与原 behavior 一致，x 与 dock 对齐）
+let noScrDock = NSRect(x: 5000, y: 5000, width: 200, height: 48)  // 远超常规屏
+dtPanel.placeBelow(dockFrame: noScrDock, visibleScreen: nil)
+let df5 = dtPanel.frameForTesting
+check("D5 无screen→不clamp(x与dock对齐)", abs(df5.origin.x - noScrDock.origin.x) < 0.01,
+      "detailX=\(df5.origin.x) dockX=\(noScrDock.origin.x)")
+
+print("\n[DetailPanel clamp] \(pass - dtPass) passed, \(fail - dtBase) failed")
+
 // ---- T-log: PetLogger release 门控 + 后台异步 IO ----
 let lgBase = fail, lgPass = pass
 let logTmp = FileManager.default.temporaryDirectory

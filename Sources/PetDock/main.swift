@@ -247,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                 avoiding: visibleObstacles.map { $0.bounds }, visibleScreen: scr)
                     if shown {
                         dock.showIfNeeded()
-                        if detail.isVisible { detail.placeBelow(dockFrame: dock.frame) }
+                        if detail.isVisible { detail.placeBelow(dockFrame: dock.frame, visibleScreen: scr) }
                     } else {
                         dock.hideIfNeeded()
                         detail.close()
