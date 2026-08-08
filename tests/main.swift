@@ -604,6 +604,43 @@ check("L3b 异步派发后最终落盘", FileManager.default.fileExists(atPath: 
 try? FileManager.default.removeItem(at: asyncTmp)
 
 try? FileManager.default.removeItem(at: logTmp)
+
+// L4: 默认构造（不显式传 enabled）的 logger 必须实时跟随 DebugLog.enabled ——
+// 模拟 release 启动顺序：logger 在 applyOverrides 之前创建（此时 enabled=false），
+// 随后 applyOverrides 设 DebugLog.enabled=true，默认构造的 logger 仍须落盘。
+// 回归保护：见 review §4.1（--verbose 在 release 下静默失效）。
+let savedDebugLogEnabled = DebugLog.enabled
+let defaultTmp = FileManager.default.temporaryDirectory
+    .appendingPathComponent("petdock-log-default-\(ProcessInfo.processInfo.processIdentifier).log")
+func resetDefaultTmp() { try? FileManager.default.removeItem(at: defaultTmp) }
+
+// L4a: logger 默认构造于 enabled=false 之后翻转为 true → 须落盘（修复点）
+DebugLog.enabled = false
+resetDefaultTmp()
+let defaultLogger = PetLogger(logURL: defaultTmp)   // 默认构造，不传 enabled
+DebugLog.enabled = true                              // 模拟 applyOverrides(--verbose)
+defaultLogger.log("follow-state-after-verbose")
+let l4Deadline = Date().addingTimeInterval(2)
+while Date() < l4Deadline && !FileManager.default.fileExists(atPath: defaultTmp.path) {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+}
+let l4Content = (try? String(contentsOf: defaultTmp, encoding: .utf8)) ?? ""
+check("L4a 默认构造logger在enabled翻转后落盘(--verbose修复)", l4Content.contains("follow-state-after-verbose"),
+      "content=\(l4Content)")
+
+// L4b: 默认构造 + DebugLog.enabled=false → 不写（保证 release 默认 no-op 不回归）
+DebugLog.enabled = false
+resetDefaultTmp()
+let defaultOffLogger = PetLogger(logURL: defaultTmp)
+defaultOffLogger.log("should-not-write-default")
+let l4bDeadline = Date().addingTimeInterval(0.5)
+while Date() < l4bDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+check("L4b 默认构造logger enabled=false→不写(no-op不回归)",
+      !FileManager.default.fileExists(atPath: defaultTmp.path), "")
+
+resetDefaultTmp()
+DebugLog.enabled = savedDebugLogEnabled   // 恢复，避免污染后续测试
+
 print("\n[PetLogger] \(pass - lgPass) passed, \(fail - lgBase) failed")
 
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")

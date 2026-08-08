@@ -18,13 +18,18 @@ enum DebugLog {
 }
 
 /// 后台异步文件日志：所有 IO 派发到串行后台队列，不阻塞主线程（tick 在 moving 态 20Hz 调用）。
-/// `enabled=false`（release 默认）时 `log()` 为 no-op，不创建/写任何文件。
+/// 关闭时（release 默认）`log()` 为 no-op，不创建/写任何文件。
 final class PetLogger {
-    private let enabled: Bool
+    /// `nil` = 实时跟随共享开关 `DebugLog.enabled`（默认构造的行为，使 `--verbose`
+    /// 能在 logger 创建后才 `applyOverrides` 生效）；显式传入 `true`/`false` 时固定。
+    private let enabled: Bool?
     private let queue: DispatchQueue
     private let logURL: URL
 
-    init(enabled: Bool = DebugLog.enabled,
+    /// - parameter enabled: 传 `nil`（默认）让 `log()` 实时读取 `DebugLog.enabled`；
+    ///   传固定值用于测试隔离。默认构造的 logger 须在 `applyOverrides` 之后生效，
+    ///   故不在此快照 `DebugLog.enabled`。
+    init(enabled: Bool? = nil,
          logURL: URL = URL(fileURLWithPath: "/tmp/petdock.log"),
          queue: DispatchQueue = DispatchQueue(label: "petdock.logger")) {
         self.enabled = enabled
@@ -34,7 +39,7 @@ final class PetLogger {
 
     /// 记录一行日志。release 默认 no-op；开启时异步写入后台队列（主线程无文件 IO）。
     func log(_ s: String) {
-        guard enabled else { return }
+        guard enabled ?? DebugLog.enabled else { return }
         let line = "[\(s)]\n"
         guard let data = line.data(using: .utf8) else { return }
         let url = logURL
