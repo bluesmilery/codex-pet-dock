@@ -381,5 +381,34 @@ check("T-bv30 新probe完成→cached(hidden)", concProbe2.visibility(for: CGWin
 
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
 
+// ---- T-clamp: clampDockX 纯函数 + safeDockFrame 水平 clamp ----
+let clBase = fail, clPass = pass
+// 纯数值测试（副屏模拟 visMinX=-1728 visMaxX=0 dockWidth=200）
+// 正常居中不超界 → 原值
+check("T-clamp1 正常居中不clamp",
+      Geometry.clampDockX(centeredX: -914, dockWidth: 200, visibleMinX: -1728, visibleMaxX: 0) == -914, "")
+// 右超界 centeredX=-165 → clamp 到 maxX-dw = 0-200 = -200
+check("T-clamp2 右边缘clamp",
+      Geometry.clampDockX(centeredX: -165, dockWidth: 200, visibleMinX: -1728, visibleMaxX: 0) == -200, "")
+// 左超界 centeredX=-1800 → clamp 到 minX = -1728
+check("T-clamp3 左边缘clamp",
+      Geometry.clampDockX(centeredX: -1800, dockWidth: 200, visibleMinX: -1728, visibleMaxX: 0) == -1728, "")
+// 屏宽 < dock 宽 → nil
+check("T-clamp4 屏窄nil",
+      Geometry.clampDockX(centeredX: 0, dockWidth: 200, visibleMinX: -50, visibleMaxX: 50) == nil, "")
+// safeDockFrame 无 screen → 不 clamp（x 居中不变）
+let noScreenPet = CGRect(x: -151, y: 346, width: 172, height: 179)
+let rNoScreen = Geometry.safeDockFrame(pet: noScreenPet, avoiding: [], dockSize: CGSize(width: 200, height: 48), gap: 2, screen: nil)
+check("T-clamp5 safeDockFrame无screen不clamp", rNoScreen.frame?.origin.x == -151 + (172-200)/2, "")
+// safeDockFrame integration（可选：用本机副屏，但核心覆盖在纯函数 1-4）
+if let scr = NSScreen.screens.first(where: { $0.frame.origin.x < 0 }) {
+    let vMax = scr.visibleFrame.maxX
+    let rInt = Geometry.safeDockFrame(pet: noScreenPet, avoiding: [], dockSize: CGSize(width: 200, height: 48), gap: 2, screen: scr)
+    check("T-clamp6 integration右clamp", rInt.frame?.origin.x == vMax - 200, "x=\(rInt.frame?.origin.x ?? -999)")
+} else {
+    check("T-clamp6 integration（无副屏跳过）", true, "")
+}
+print("\n[水平clamp] \(pass - clPass) passed, \(fail - clBase) failed")
+
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)

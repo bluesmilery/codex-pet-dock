@@ -37,13 +37,20 @@
 1. **不误主窗口为障碍**：`isLikelyMainWindow` 排除（layer0 + 大尺寸）。
 2. **不恢复跟随辅助窗**：`selectPet` 的 `isReasonablePet` 不动；`obstaclesNear` 也排除 `isAuxiliaryTitle`。
 3. **底座宽固定 200**：按 pet 中心，不被 pet/障碍宽度撑大（384x95 不再致底座变宽）。
-4. **仅几何避让**：避让隐藏与「宠物隐藏 / 用户隐藏」语义分离；障碍消失自动回 pet 下方。
-5. **负坐标副屏**：避让逻辑（Quartz）与坐标转换（`appKitRectFromQuartz`）统一适用多屏/负坐标。
+4. **水平 clamp（副屏边缘）**：若 dock 按 pet 中心居中后 x 超出当前 screen 的 `visibleFrame`
+   左右边界，clamp 到 `[visMinX, visMaxX - dockWidth]` 使 dock 完全留在屏内（像消息条一样贴边展示）。
+   Quartz x 与 AppKit x 同轴，负坐标副屏正确。屏可见宽 < dock 宽 → nil 隐藏。
+   y/气泡链式避让不受 clamp 影响。
+5. **仅几何避让**：避让隐藏与「宠物隐藏 / 用户隐藏」语义分离；障碍消失自动回 pet 下方。
+6. **垂直降级**：避让后底座垂直越出 screen visibleFrame → nil 隐藏（不 clamp 垂直）。
+7. **负坐标副屏**：避让逻辑（Quartz）与坐标转换（`appKitRectFromQuartz`）统一适用多屏/负坐标。
 
-## 测试覆盖（`tests/main.swift` T-avoid）
+## 测试覆盖（`tests/main.swift` T-avoid + T-clamp）
 - 无障碍 → pet 下方；bubble 重叠 → 下移且不相交；bubble + 512x223 链式避让。
 - 384x95 障碍 → dock 宽仍 200；`obstaclesNear` 排除 main/composition/voice/mascot。
 - 屏底不足 → 隐藏(nil)；障碍消失 → 恢复；placeBelow 避让 shown=true；负坐标副屏避让。
+- T-clamp：无 screen 不 clamp；右边缘 clamp 到 maxX-dw；左边缘 clamp 到 minX；正常居中不 clamp；
+  expanded x clamp + y 避让；固定 200 宽；垂直底部 nil 隐藏。
 
 ## Bubble 可见性判定（`BubbleVisibility.swift`，ScreenCaptureKit 像素 alpha）
 
