@@ -33,8 +33,8 @@
   - **SC3 窗口枚举与识别** ✅ 通过：`CGWindowListCopyWindowInfo([], kCGNullWindowID)` 枚举全局窗口、codex 多窗口（union 候选）；选中 Mascot 本体 `title="Codex Pet Mascot Effect"` layer=2 172×179，命中 `title~Mascot`；主窗口 ChatGPT 1728×1050 正确 [MAIN] 排除，Voice Controls Backing / Composition Surface 等辅助窗亦排除。
   - **SC4 NSPanel 跟随** ✅ 通过：0.5s 轮询持续跟随 Mascot，日志 dockAppKit 每 tick 更新，滞回稳定（wid 不变）。
   - **SC5 回退与重捕** ⚠️ 部分通过：重新捕获 ✅ 真实（PetDock 重启后重新选中 Mascot 并跟随）；隐藏逻辑 ✅（代码 `hideIfNeeded` + selftest T5「无可见→nil」）；**宠物隐藏 / Codex 退出真实触发未执行**（需用户在 ChatGPT 内操作，受"不修改 Codex"约束，本轮未触发）。
-  Rewrite matched statement with <wid>, <qx>, <ay>, and <screenHeight> placeholders as applicable.
-  Rewrite matched statement with <wid>, <qx>, <ay>, and <screenHeight> placeholders as applicable.
+  - **SC6 坐标转换** ✅ 通过：宠物副屏负坐标 quartz=(<qx>,<qy>)172×179 → 面板 dockAppKit=(<ax>,<ay>)；公式 `<H>-(<qy>+179+2)-30=<ay>`（`<H>` 为主屏高度）与日志一致；screen=副屏正确；selftest Geometry 4/4。（坐标/分辨率因机器而异，已脱敏）
+  - **SC7 降级方案** ✅ 通过：面板 `.floating` level；宠物底部 AppKit_y=<petBottom>、面板顶部=<panelTop>，gap=2 紧贴下方不重叠。（坐标因机器而异，已脱敏）
 - 无需 TCC 的纯函数测试：selectPet 11/11 PASS（含 Mascot 优先/回退/不误绑）、Geometry 4/4 PASS。
 - 未解决风险：
   1. ad-hoc 签名无 team ID，TCC 按 CDHash 认证 → 每次重签屏幕录制授权失效，需重新授权；生产应用稳定签名/notarized 构建。

@@ -9,7 +9,7 @@
 
 ## 0. 关键事实（已实测）
 
-- `/Applications/ChatGPT.app` 的 `CFBundleIdentifier` = `com.openai.codex`（版本 26.727.51351）。
+- `/Applications/ChatGPT.app` 的 `CFBundleIdentifier` = `com.openai.codex`（版本因安装而异）。
 - 该应用是 **Electron 应用**：主进程 `ChatGPT` 之外存在大量 Helper / Renderer 子进程
   （`Codex Framework`/`Codex (Renderer)`/`node_repl` 等）。
   ⇒ 窗口的 `kCGWindowOwnerPID` **可能是某个子进程**，不一定等于 `NSRunningApplication` 给出的主 PID。
