@@ -641,6 +641,85 @@ check("L4b 默认构造logger enabled=false→不写(no-op不回归)",
 resetDefaultTmp()
 DebugLog.enabled = savedDebugLogEnabled   // 恢复，避免污染后续测试
 
+// L5-L9: 句柄复用 + 大小上限轮转（accepted-deferred）。
+// 每个 logger 用独立文件 + 独立队列隔离；flush() 同步落盘，测试无需 RunLoop pump。
+func uniqueLogURL(_ tag: String) -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("petdock-log-\(tag)-\(ProcessInfo.processInfo.processIdentifier).log")
+}
+/// 提取 "line-N" 中的行号集合（轮转无重叠断言用）。
+func lineNums(in content: String) -> Set<Int> {
+    var nums = Set<Int>()
+    for line in content.split(separator: "\n") {
+        if let r = line.range(of: "line-") {
+            if let n = Int(line[r.upperBound...]) { nums.insert(n) }
+        }
+    }
+    return nums
+}
+func disjointLineNums(_ a: String, _ b: String) -> Bool {
+    lineNums(in: a).isDisjoint(with: lineNums(in: b))
+}
+let rotTmp = uniqueLogURL("rot")
+let rotOld = rotTmp.deletingPathExtension().appendingPathExtension("log.1")   // 轮转副本
+try? FileManager.default.removeItem(at: rotTmp)
+try? FileManager.default.removeItem(at: rotOld)
+
+// L5: 句柄复用——连续多次 log() 后 flush() 同步落盘，内容完整且只有一份（句柄常驻，不再每次 open/close）。
+let rotLogger = PetLogger(enabled: true, logURL: rotTmp, maxBytes: 512)
+for i in 0..<8 { rotLogger.log("line-\(i)") }
+rotLogger.flush()
+let l5Content = (try? String(contentsOf: rotTmp, encoding: .utf8)) ?? ""
+check("L5 句柄复用→多次写入内容完整(0..7均在)",
+      (0..<8).allSatisfy { l5Content.contains("line-\($0)") }, "content=\(l5Content)")
+
+// L6: 大小上限轮转——累计写入超过 maxBytes(512) 后，旧内容滚动到 .1，主文件仅含末尾写入。
+// 每行 "[line-N]\n" 约 9 字节，写 200 行远超 512 → 必触发轮转（可触发多次）。
+for i in 100..<300 { rotLogger.log("line-\(i)") }
+rotLogger.flush()
+let l6Main = (try? String(contentsOf: rotTmp, encoding: .utf8)) ?? ""
+let l6Roll = FileManager.default.fileExists(atPath: rotOld.path)
+    ? ((try? String(contentsOf: rotOld, encoding: .utf8)) ?? "") : ""
+check("L6 超上限→生成.1轮转文件", FileManager.default.fileExists(atPath: rotOld.path), "")
+check("L6b 主文件仅含末尾内容(不含早期 line-100)", !l6Main.contains("line-100"),
+      "mainHas100=\(l6Main.contains("line-100"))")
+// 单份覆盖式轮转不变量：主文件与 .1 是时间上的两段，同一行号不会同时出现（无重叠）。
+check("L6c 主文件与.1无内容重叠(任一行号不同时出现)",
+      l6Roll.contains("line-") && disjointLineNums(l6Main, l6Roll),
+      "rollTail=\(l6Roll.suffix(40))")
+
+// L7: flush() 同步——调用返回后内容已在盘上（无需 RunLoop pump，证明串行队列 sync 落盘）。
+let syncTmp = uniqueLogURL("sync")
+try? FileManager.default.removeItem(at: syncTmp)
+let syncLogger = PetLogger(enabled: true, logURL: syncTmp, maxBytes: 1_000_000)
+syncLogger.log("sync-line")
+syncLogger.flush()
+let l7Content = (try? String(contentsOf: syncTmp, encoding: .utf8)) ?? ""
+check("L7 flush同步落盘(无需RunLoop pump)", l7Content.contains("sync-line"), "content=\(l7Content)")
+
+// L8: enabled=false 时 flush() 也不创建文件（no-op 不回归；句柄常驻不破坏 release 默认行为）。
+let noopTmp = uniqueLogURL("noop")
+try? FileManager.default.removeItem(at: noopTmp)
+let noopLogger = PetLogger(enabled: false, logURL: noopTmp, maxBytes: 512)
+noopLogger.log("ignored"); noopLogger.flush()
+check("L8 enabled=false→flush也不创建文件(no-op不回归)",
+      !FileManager.default.fileExists(atPath: noopTmp.path), "")
+
+// L9: 二次轮转——再次超过上限时 .1 被替换为主文件当时的旧内容（旧 .1 不残留累积）。
+for i in 500..<900 { rotLogger.log("line-\(i)") }
+rotLogger.flush()
+let l9Main = (try? String(contentsOf: rotTmp, encoding: .utf8)) ?? ""
+let l9Roll = FileManager.default.fileExists(atPath: rotOld.path)
+    ? ((try? String(contentsOf: rotOld, encoding: .utf8)) ?? "") : ""
+check("L9 二次轮转→.1被替换为前一段(含line-100..299之一,不含line-500+)",
+      l9Roll.contains("line-") && !l9Roll.contains("line-500") && !l9Main.contains("line-100"),
+      "rollTail=\(l9Roll.suffix(30))")
+
+try? FileManager.default.removeItem(at: rotTmp)
+try? FileManager.default.removeItem(at: rotOld)
+try? FileManager.default.removeItem(at: syncTmp)
+try? FileManager.default.removeItem(at: noopTmp)
+
 print("\n[PetLogger] \(pass - lgPass) passed, \(fail - lgBase) failed")
 
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
