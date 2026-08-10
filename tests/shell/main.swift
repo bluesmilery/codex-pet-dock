@@ -234,5 +234,41 @@ sb.updatePermissionWarning(false)
 check("SB4 关闭→TCC 提示项消失", !sb.menuItemTitlesForTesting.contains { $0.contains("屏幕录制权限") },
       "items=\(sb.menuItemTitlesForTesting)")
 
+// ============ StatusBar toggleVisible 单向状态更新（消除双重 rebuild）============
+mark("StatusBar toggleVisible 单向")
+// 模拟集成链：toggleVisible 外发动作 → AppDelegate.setVisible 回写 updateDockVisible。
+// 旧实现 toggleVisible 内部先乐观 rebuild，回写又 rebuild → 双重。期望单向：仅回写 rebuild 一次。
+var visActionCount = 0
+var visLastValue: Bool?
+let sbv = StatusBar(
+    themes: Theme.builtins,
+    currentThemeID: Theme.defaultID,
+    dockVisible: true,            // 初始：底座可见 → 菜单标题「隐藏底座」
+    launchAtLogin: false,
+    actions: StatusBar.Actions(
+        onSelectTheme: { _ in }, onToggleVisible: { v in visActionCount += 1; visLastValue = v },
+        onToggleLaunchAtLogin: { _ in }, onQuit: {}))
+
+let baseline = sbv.rebuildCount
+check("SBV0 找到显示/隐藏菜单项", sbv.visibilityItemForTesting != nil, "")
+sbv.performToggleVisibleForTesting()
+check("SBV1 toggleVisible 外发动作1次", visActionCount == 1, "count=\(visActionCount)")
+check("SBV2 外发期望值=false(从true翻转)", visLastValue == false, "value=\(visLastValue as Any)")
+// 集成层回写：模拟 AppDelegate.setVisible → updateDockVisible(false)。
+sbv.updateDockVisible(false)
+let rebuildsDuringToggle = sbv.rebuildCount - baseline
+check("SBV3 整链仅rebuild 1次(无双重)", rebuildsDuringToggle == 1, "rebuilds=\(rebuildsDuringToggle)")
+check("SBV4 菜单标题随回写更新(显示底座)",
+      sbv.menuItemTitlesForTesting.contains("显示底座"), "items=\(sbv.menuItemTitlesForTesting)")
+// toggleVisible 自身不应再乐观翻转本地 dockVisible（状态由回写驱动）：
+// 回写前若读菜单标题，应仍是旧值「隐藏底座」（本地状态未被 toggle 改动）。
+let sbv2 = StatusBar(
+    themes: Theme.builtins, currentThemeID: Theme.defaultID, dockVisible: true, launchAtLogin: false,
+    actions: StatusBar.Actions(onSelectTheme: { _ in }, onToggleVisible: { _ in },
+                               onToggleLaunchAtLogin: { _ in }, onQuit: {}))
+sbv2.performToggleVisibleForTesting()   // 仅外发，不回写
+check("SBV5 未回写前本地状态不变(标题仍隐藏底座)",
+      sbv2.menuItemTitlesForTesting.contains("隐藏底座"), "items=\(sbv2.menuItemTitlesForTesting)")
+
 print("\n[Shell: Theme/Settings/Store/AutoStart/StatusBar] \(pass) passed, \(fail) failed")
 exit(fail == 0 ? 0 : 1)

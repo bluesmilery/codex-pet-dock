@@ -19,6 +19,8 @@ final class StatusBar: NSObject {
     private var dockVisible: Bool
     private var launchAtLogin: Bool
     private var permissionWarning = false
+    /// rebuildMenu 调用计数（测试钩子：验证单向状态更新不产生双重 rebuild）。
+    private(set) var rebuildCount = 0
 
     init(themes: [ThemeSpec],
          currentThemeID: String,
@@ -52,9 +54,10 @@ final class StatusBar: NSObject {
         actions.onSelectTheme(id)
     }
     @objc private func toggleVisible(_ item: NSMenuItem) {
-        dockVisible.toggle()
-        actions.onToggleVisible(dockVisible)
-        rebuildMenu()
+        // 单向状态更新：不乐观翻转本地 dockVisible，也不本地 rebuild。
+        // 状态真相源是 Settings.dockVisible；外发动作 → 集成层 setVisible → 回写
+        // updateDockVisible（一并 set dockVisible + rebuildMenu）。避免本地与回写双重 rebuild。
+        actions.onToggleVisible(!dockVisible)
     }
     @objc private func toggleLaunchAtLogin(_ item: NSMenuItem) {
         launchAtLogin.toggle()
@@ -66,6 +69,7 @@ final class StatusBar: NSObject {
     // MARK: - 菜单构建
 
     func rebuildMenu() {
+        rebuildCount += 1
         let menu = NSMenu()
 
         // 屏幕录制权限缺失提示（顶部醒目，不可点击）
@@ -120,5 +124,20 @@ final class StatusBar: NSObject {
     /// 当前菜单项标题列表（测试用）。
     var menuItemTitlesForTesting: [String] {
         (statusItem.menu?.items ?? []).map { $0.title }
+    }
+
+    /// 「显示/隐藏底座」菜单项（测试用：检查 action 绑定）。
+    var visibilityItemForTesting: NSMenuItem? {
+        (statusItem.menu?.items ?? []).first {
+            $0.title.contains("底座") && $0.action != nil
+        }
+    }
+
+    /// 模拟用户点击「显示/隐藏底座」菜单项（测试用，避开 NSApp perform 路径）。
+    @discardableResult
+    func performToggleVisibleForTesting() -> Bool {
+        guard let item = visibilityItemForTesting else { return false }
+        toggleVisible(item)
+        return true
     }
 }
