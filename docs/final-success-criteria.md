@@ -83,25 +83,18 @@ Rewrite matched statement as a synthetic, number-free runtime verification state
 
 ## 已知风险（跨阶段）
 
-0. **bundle id 变更（公开发布清理）**：应用自身 bundle id 由 `io.github.bluesmilery.codexpetdock` 改为
-   `io.github.bluesmilery.codexpetdock`（目标 Codex 应用 `com.openai.codex` **不变**）。
-   代码层 `AutoStart` 用 `SMAppService.mainApp`（系统按 app bundle id 注册，未硬编码），故无需改代码；影响：
-   ① **TCC（屏幕录制）** 按 bundle id + 签名授权 → 新 id 需在「系统设置 › 隐私与安全性 › 屏幕录制」重新授予；
-   ② **登录自启**（`SMAppService`）按 app bundle id 注册 → 新 id 需重新启用；
-   ③ 旧 `io.github.bluesmilery.codexpetdock` 的 TCC 授权 / 登录项残留可在系统设置手动清理。
-   本项目以 [MIT License](LICENSE) 开源，根目录已随附 LICENSE 文件。
-1. ad-hoc 签名 TCC 不稳定（每次重签 CDHash 变 → 屏幕录制授权失效）。
-2. 屏幕录制权限是硬前提。
-3. `codex app-server` 为 experimental，协议字段可能随版本变化（已做稳定子集 + 降级）。
-4. 跨应用窗口相对 z-order 不可控（`.floating` level + 几何不重叠降级）。
-5. **codex 路径解析（已修复）**：.app 由 launchd 启动时进程 PATH 无 nvm，`/bin/sh -lc`（非交互 shell
+0. ad-hoc 签名 TCC 不稳定（每次重签 CDHash 变 → 屏幕录制授权失效）。
+1. 屏幕录制权限是硬前提。
+2. `codex app-server` 为 experimental，协议字段可能随版本变化（已做稳定子集 + 降级）。
+3. 跨应用窗口相对 z-order 不可控（`.floating` level + 几何不重叠降级）。
+4. **codex 路径解析（已修复）**：.app 由 launchd 启动时进程 PATH 无 nvm，`/bin/sh -lc`（非交互 shell
    不读 `~/.zshrc`）找不到 codex → WEEK LEFT 永久占位。已由 `CodexExecutableResolver`（文件系统查找：
    env 覆盖 > `PATH` > `~/.local/bin` / `~/.nvm/versions/node/*/bin` / `~/.volta/bin` /
    `/opt/homebrew/bin` / `/usr/local/bin`，nvm 多版本语义版本降序）+ `RateLimitClient`（`executableURL`
    直接启动，不经 `/bin/sh -lc`）修复。env 覆盖先展开 `~` 且必须为绝对路径（否则 `overrideNotAbsolute`），
    PATH 仅接受绝对目录（跳过空 / 相对），系统候选目录可注入（测试传空隔离）；解析器测试 12 项
    （env 优先 / 不可执行 / tilde 展开 / 相对拒绝、PATH 仅绝对 / 跳过空相对、nvm 多版本、缺失、不可执行、symlink）。
-6. **WEEK LEFT 到期时间 + 窗口跟随几何（已修复）**：① 主底座 WEEK LEFT 单元显示本周期到期时间
+5. **WEEK LEFT 到期时间 + 窗口跟随几何（已修复）**：① 主底座 WEEK LEFT 单元显示本周期到期时间
    （`resetsAt`，MM-dd HH:mm 本机时区，nil 占位不崩，不改底座 200x48 外框）；② `DockPanel.placeBelow`
    底座宽度固定 `dockWidth(200)`、按 pet 中心对齐，不再被 `pet.width` 撑大（Mascot 消失误选 384x95 时旧
    `max(dockWidth,pet.width)` 把底座 200→384）；③ `selectPet` 回退用 `isReasonablePet`（petShaped + 最小边≥50
