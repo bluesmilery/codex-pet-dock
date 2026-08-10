@@ -65,6 +65,105 @@ enum FixtureCalendar {
     static func iso(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
 }
 
+// MARK: - fake codex 可执行脚本（合成 stdio JSON-RPC，确定性、不联网/不读 auth）
+
+/// 生成一个合成的「fake codex」可执行 shell 脚本，模拟 `codex app-server` 的 stdio JSON-RPC 行为，
+/// 供 `RateLimitClient`（经 `CodexExecutableResolver` env override 指向它）端到端驱动真实 `rpc()` 代码路径。
+///
+/// 合规：脚本内容**明显合成**（标记 `FAKE_CODEX`、`fixture-plan`），不访问真实 auth.json / 网络 / 真实 codex。
+///
+/// 行为模式（由脚本首个参数选择，默认 normal）：
+/// - `normal`：读到 initialize(id=N) 回 result、读 notifications 跳过、读到 rateLimits/read(id=M)
+///   回合成 result；额外先吐一条 id=999 的噪声行验证请求/响应按 id 关联；
+/// - `fragmented`：同 normal，但 result 行拆成多次小 write（每次 1-2 字节），验证 LineReader 分片重组；
+/// - `silent`：读完所有输入但不回任何响应，验证超时；
+/// - `exit-early`：启动后立即退出（不读 stdin），验证「进程退出」失败路径；
+/// - `stderr-noise`：同 normal，但额外向 stderr 写垃圾，验证 stderr 被独立管道丢弃不影响 result。
+enum FakeCodex {
+    /// 合成 result（明显合成：fixture-plan / FAKE_CODEX 标记；不含任何凭证或真实账户信息）。
+    static let syntheticResultJSON = """
+    {"rateLimits":{"planType":"fixture-plan","primary":{"usedPercent":42,"windowDurationMins":10080,"resetsAt":2000000000}}}
+    """
+
+    /// 生成并写入 fake codex 脚本到临时目录，返回其 URL（已 chmod 0755）。
+    static func install(mode: String) -> URL {
+        // 目录名用 __ 分隔 mode（mode 本身可含 '-'，如 exit-early / stderr-noise），
+        // 脚本以 ${dir##*__} 提取 mode，避免被 '-' 切断。
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "pd-fakecodex-\(ProcessInfo.processInfo.processIdentifier)__\(mode)", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let script = dir.appendingPathComponent("codex")
+        // 脚本：从 stdin 逐行读，按 JSON-RPC id 回合成响应。用 grep -oE 提取 "id":N（send 格式确定）。
+        let body = """
+        #!/bin/sh
+        # FAKE_CODEX 合成测试替身（非真实 codex；不读 auth/不联网）。
+        # mode 由脚本所在目录名末段决定（install 每种 mode 独立目录，__ 分隔），不依赖命令行参数
+        # （rpc() 固定以 "app-server" 为首个参数启动 codex，参数通道不可用）。
+        dir=$(dirname "$0")
+        mode=${dir##*__}
+
+        # 按 id 回一条 JSON-RPC result 行（$1=id）。根据模式决定是否分片写出。
+        emit() {
+            id="$1"
+            line='{"jsonrpc":"2.0","id":'"$id"',\"result\":'"$SYNTH_RESULT"'}'
+            if [ "$mode" = "fragmented" ]; then
+                # 分片：先吐无换行的前半段，sleep 制造 readabilityHandler 回调间隙，
+                # 再补后半段 + 换行。验证 LineReader 跨多次回调重组同一行（不丢、不 premature）。
+                half=$((${#line} / 2))
+                printf '%s' "${line:0:half}"
+                sleep 0.1
+                printf '%s\\n' "${line:half}"
+            else
+                printf '%s\\n' "$line"
+            fi
+        }
+
+        if [ "$mode" = "exit-early" ]; then exit 0; fi
+
+        # silent: 读光 stdin 但不回（触发客户端超时）。
+        if [ "$mode" = "silent" ]; then
+            while IFS= read -r _; do :; done
+            exit 0
+        fi
+
+        # stderr-noise: 同 normal 但向 stderr 吐垃圾，验证 stderr 独立管道被丢弃。
+        if [ "$mode" = "stderr-noise" ]; then
+            echo "FAKE_CODEX_STDERR_GARBAGE_IGNORE_ME" >&2
+        fi
+
+        # 先吐一条 id=999 噪声响应（normal/fragmented/stderr-noise），验证客户端按目标 id 关联、不被噪声干扰。
+        if [ "$mode" = "normal" ] || [ "$mode" = "fragmented" ] || [ "$mode" = "stderr-noise" ]; then
+            SYNTH_RESULT='{"jsonrpc":"2.0","id":999,"result":{"noise":"FAKE_CODEX_UNRELATED"}}'
+            printf '%s\\n' "$SYNTH_RESULT"
+        fi
+
+        SYNTH_RESULT='{"rateLimits":{"planType":"fixture-plan","primary":{"usedPercent":42,"windowDurationMins":10080,"resetsAt":2000000000}}}'
+        while IFS= read -r line; do
+            # 提取首个 "id":N（send 生成格式确定：顶层带数字 id；通知无 id → 跳过）。
+            idv=$(printf '%s' "$line" | grep -oE '"id":[0-9]+' | head -n1 | grep -oE '[0-9]+')
+            [ -z "$idv" ] && continue                # notifications/initialized 无 id → 跳过
+            emit "$idv"
+        done
+        """
+        try! Data(body.utf8).write(to: script)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    /// 构造指向 fake codex 的 resolver（env override；systemCandidates=空隔离系统 brew）。
+    static func resolver(for executable: URL) -> CodexExecutableResolver {
+        CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: executable.path],
+                                homeDirectory: executable.deletingLastPathComponent(),
+                                systemCandidates: [])
+    }
+
+    /// 清理临时脚本目录。
+    static func remove(_ executable: URL) {
+        try? FileManager.default.removeItem(at: executable.deletingLastPathComponent())
+    }
+}
+
 @main
 struct DataTestRunner {
     static var pass = 0
@@ -590,6 +689,105 @@ struct DataTestRunner {
             check("LR4 EOF后再stop不挂起", Date().timeIntervalSince(eofStopStart) < 2.0, "")
         }
         section("LineReader 异步读")
+
+        // ---- T-rpc: RateLimitClient.rpc 真实 stdio 端到端（fake codex 合成子进程）----
+        // 驱动真实 readWeekLeft() → rpc() 代码路径：initialize 握手 / 请求-响应按 id 关联 /
+        // 分片行重组 / 超时 / cancel / 子进程提前退出 / stderr 独立丢弃 / PATH 环境。
+        // fake codex 为合成 shell 脚本，不读 auth、不联网、内容明显合成（fixture-plan / FAKE_CODEX）。
+        do {
+            // E1 normal：握手 + 目标请求成功，解析出合成 WeekLeft。
+            let exec1 = FakeCodex.install(mode: "normal")
+            defer { FakeCodex.remove(exec1) }
+            let client1 = RateLimitClient(resolver: FakeCodex.resolver(for: exec1), timeout: 5)
+            let e1wl = try? client1.readWeekLeft()
+            check("E1 normal 握手→readWeekLeft 成功", e1wl != nil, "nil=\(e1wl == nil)")
+            if let wl = e1wl {
+                check("E1b 解析合成 usedPercent=42", wl.usedPercent == 42, "used=\(wl.usedPercent)")
+                check("E1c 合成 planType=fixture-plan", wl.planType == "fixture-plan", "\(wl.planType ?? "")")
+                check("E1d 合成 isWeekly(10080)", wl.isWeekly, "mins=\(wl.windowMinutes ?? -1)")
+                check("E1e 合成 resetsAt=2e9", wl.resetsAt == Date(timeIntervalSince1970: 2_000_000_000), "")
+            }
+
+            // E2 噪声 id 不干扰：fake 先吐 id=999 噪声响应，客户端仍按 id 关联到目标（E1 已隐含）。
+            // 显式断言：normal 模式多次调用稳定成功（噪声行被正确忽略）。
+            var stableOK = true
+            for _ in 0..<3 {
+                if (try? client1.readWeekLeft()) == nil { stableOK = false }
+            }
+            check("E2 噪声 id=999 不干扰，多次调用稳定成功", stableOK, "")
+
+            // E3 fragmented：result 行分片写出（每次 2 字节），验证 LineReader 分片重组。
+            let exec3 = FakeCodex.install(mode: "fragmented")
+            defer { FakeCodex.remove(exec3) }
+            let client3 = RateLimitClient(resolver: FakeCodex.resolver(for: exec3), timeout: 5)
+            let e3wl = try? client3.readWeekLeft()
+            check("E3 fragmented 分片重组→成功解析", e3wl?.usedPercent == 42, "used=\(e3wl?.usedPercent ?? -1)")
+
+            // E4 stderr-noise：fake 向 stderr 吐垃圾，result 仍正常（stderr 独立管道丢弃）。
+            let exec4 = FakeCodex.install(mode: "stderr-noise")
+            defer { FakeCodex.remove(exec4) }
+            let client4 = RateLimitClient(resolver: FakeCodex.resolver(for: exec4), timeout: 5)
+            let e4wl = try? client4.readWeekLeft()
+            check("E4 stderr 垃圾不影响 result 解析", e4wl?.usedPercent == 42, "used=\(e4wl?.usedPercent ?? -1)")
+
+            // E5 超时：silent 模式不回响应，小超时后 rpc 抛错（不挂起）。
+            let exec5 = FakeCodex.install(mode: "silent")
+            defer { FakeCodex.remove(exec5) }
+            let client5 = RateLimitClient(resolver: FakeCodex.resolver(for: exec5), timeout: 1)
+            let tStart5 = Date()
+            let threw5: Bool
+            do { _ = try client5.readWeekLeft(); threw5 = false }
+            catch { threw5 = true }
+            let elapsed5 = Date().timeIntervalSince(tStart5)
+            check("E5 silent 不响应→超时抛错", threw5, "")
+            check("E5b 超时在合理窗口内返回（不挂起）", elapsed5 < 8, "elapsed=\(elapsed5)s")
+
+            // E6 子进程提前退出：exit-early 模式启动即退出，rpc 报进程退出错误（非超时）。
+            let exec6 = FakeCodex.install(mode: "exit-early")
+            defer { FakeCodex.remove(exec6) }
+            let client6 = RateLimitClient(resolver: FakeCodex.resolver(for: exec6), timeout: 5)
+            var exitErrMsg = "未抛错"
+            do { _ = try client6.readWeekLeft(); exitErrMsg = "未抛错（意外成功）" }
+            catch { exitErrMsg = "\(error)" }
+            check("E6 exit-early→进程退出错误（含「已退出」）", exitErrMsg.contains("已退出"), "err=\(exitErrMsg)")
+
+            // E7 cancel 幂等 + 无在途安全：cancel() 在无在途请求时可安全重复调用（quit 路径保护）。
+            let exec7 = FakeCodex.install(mode: "normal")
+            defer { FakeCodex.remove(exec7) }
+            let client7 = RateLimitClient(resolver: FakeCodex.resolver(for: exec7), timeout: 5)
+            // 无在途时多次 cancel 不崩（currentProc=nil，terminate 不触发）。
+            var cancelSafe = true
+            client7.cancel(); client7.cancel()
+            // 之后正常 readWeekLeft 仍能成功（cancel 标志被 rpc 内部重置，不污染后续请求）。
+            let e7wl = try? client7.readWeekLeft()
+            if e7wl == nil { cancelSafe = false }
+            check("E7 cancel 幂等+无在途不崩，后续请求仍成功", cancelSafe && e7wl?.usedPercent == 42, "used=\(e7wl?.usedPercent ?? -1)")
+
+            // E8 cancel 终止慢进程：silent（持续阻塞读）+ 小超时，发起请求后并发 cancel，
+            // 断言子进程被 terminate、客户端在超时窗口前返回（cancel 抢先）。
+            let exec8 = FakeCodex.install(mode: "silent")
+            defer { FakeCodex.remove(exec8) }
+            let client8 = RateLimitClient(resolver: FakeCodex.resolver(for: exec8), timeout: 10)
+            let cg8 = DispatchGroup()
+            cg8.enter()
+            var cancelReturnMsg = ""
+            var cancelElapsed: TimeInterval = -1
+            DispatchQueue.global().async {
+                let s = Date()
+                do { _ = try client8.readWeekLeft() }
+                catch { cancelReturnMsg = "\(error)"; cancelElapsed = Date().timeIntervalSince(s) }
+                cg8.leave()
+            }
+            Thread.sleep(forTimeInterval: 0.3)   // 等子进程起来、请求在途
+            let cancelStart = Date()
+            client8.cancel()                      // terminate 子进程 → await 检测 cancelled 抛错
+            let cancelOK = Self.waitPumpingMain({ cg8.wait(timeout: .now()) == .success }, timeout: 8)
+            check("E8 cancel 在途慢请求→客户端返回（不悬挂）", cancelOK, "msg=\(cancelReturnMsg)")
+            check("E8b 返回原因为「已取消」", cancelReturnMsg.contains("已取消"), "msg=\(cancelReturnMsg)")
+            check("E8c cancel() 自身有限时间返回", Date().timeIntervalSince(cancelStart) < 5, "")
+            check("E8d 请求在超时窗口前返回（cancel 抢先）", cancelElapsed >= 0 && cancelElapsed < 9, "elapsed=\(cancelElapsed)s")
+        }
+        section("rpc stdio 端到端")
 
         print("\n[DataTests] 全部通过")
         exit(fail == 0 ? 0 : 1)
