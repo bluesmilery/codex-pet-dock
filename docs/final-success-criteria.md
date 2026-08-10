@@ -11,11 +11,11 @@
 
 ## 测试（已验证，全绿）
 
-`make test` = test-ui + test-data + test-shell，**360 项全部通过，0 failed**。
+`make test` = test-ui + test-data + test-shell，**381 项全部通过，0 failed**。
 
 | 套件 | 项数 | 覆盖 |
 | --- | --- | --- |
-| test-ui | 138 | selectPet 识别（Mascot 优先 / 合理回退排除辅助窗）+ unionCandidates 单次枚举/PID 缓存 + Geometry 坐标（多屏 / 负坐标）+ Follower 状态机（亚像素容差）+ Dock 几何/reset + **BubbleVisibility 32（分类滞回 + 调度 + 异步 generation single-flight + 空闲态空 probe 早退）** + **障碍避让 17（链式/排除/越界/恢复）** + **水平 clamp 6** + **DetailPanel clamp/fullScreenAuxiliary 5** + **PetLogger 13（异步门控 6：no-op / 异步写 / 落盘 + 默认构造跟随 --verbose / no-op 不回归；句柄复用 + 大小上限轮转 7：lazy 常驻 / maxBytes 滚动 / flush barrier 同步 / 二次轮转）** + **FollowTickPlan 20（纯编排决策层：tick 周期 / pause 跟随 / stable 降频）** |
+| test-ui | 159 | selectPet 识别（Mascot 优先 / 合理回退排除辅助窗）+ unionCandidates 单次枚举/PID 缓存 + Geometry 坐标（多屏 / 负坐标）+ Follower 状态机（亚像素容差）+ Dock 几何/reset + **BubbleVisibility 38（分类滞回 + 调度 + 异步 generation single-flight + 空闲态空 probe 早退 + 候选消失/收起当前帧失效复位 回归 A）** + **障碍避让 32（气泡 17 链式/排除/越界/恢复 + 控制按钮 15：消息框上/下 × 按钮出现/消失矩阵 + 出现→消失/消失→出现转换 + obstacleKind 分类 回归 B）** + **水平 clamp 6** + **DetailPanel clamp/fullScreenAuxiliary 5** + **PetLogger 13（异步门控 6：no-op / 异步写 / 落盘 + 默认构造跟随 --verbose / no-op 不回归；句柄复用 + 大小上限轮转 7：lazy 常驻 / maxBytes 滚动 / flush barrier 同步 / 二次轮转）** + **FollowTickPlan 20（纯编排决策层：tick 周期 / pause 跟随 / stable 降频）** |
 | test-data | 123 | Token 聚合Σ / 脱敏 / 分项、增量缓存、缓存淘汰、parseLine 鲁棒、WeekLeft 解析 / 窗口 / 重置 / cancel、退避表、pause 语义、service 端到端、LiveDockProvider 映射、并发安全、codex 路径解析 + 子进程 PATH + resetsAt 格式化 + **LineReader 异步读 5（stop 不挂起/EOF/不完整行缓冲）** + **fixture 日期同源于 FixtureCalendar 7** + **rpc stdio 端到端 16（fake codex 真实 stdio 握手 / account/rateLimits/read 解析 / 退出码 / 超时）** |
 | test-shell | 99 | Theme 内置 / 外部安全解析（颜色 / 字体 / 徽标 / 危险关键字）、Settings 持久化、ThemeStore fixture 热加载、AutoStart 状态映射、**StatusBar TCC 权限降级提示** + **StatusBar toggleVisible 单向状态 6（消除双重 rebuild）** |
 

@@ -33,10 +33,15 @@ struct BubbleAlphaStats: Equatable, Sendable {
     let bboxRatio: Double             // 非透明 bbox 面积 / 总像素
 }
 
-/// 纯函数分类（有滞回）。stats nil（capture 失败/SC 窗口缺失）→ 保守 visible。
+/// 纯函数分类（有滞回）。
+/// - stats 有值：按 alpha 阈值判 visible/hidden，中间区滞回（沿用 previous）。
+/// - stats nil（capture 失败 / SC 窗口已从 content 移除）→ `.hidden`。
+///   收起后的气泡窗口常被 ScreenCaptureKit 视为不可捕获（返回 nil），
+///   若保守判 visible 会令该候选永久占据障碍、底座持续下移不复位（回归 A）。
+///   nil = 当前帧无可统计内容 = 收起 = 不避让。
 enum BubbleVisibilityClassifier {
     static func classify(stats: BubbleAlphaStats?, previous: BubbleVisibility) -> BubbleVisibility {
-        guard let s = stats else { return .visible }
+        guard let s = stats else { return .hidden }
         if s.nonTransparentRatio >= BubbleVisibilityThresholds.openNonTransparent
             || s.bboxRatio >= BubbleVisibilityThresholds.openBBox { return .visible }
         if s.nonTransparentRatio <= BubbleVisibilityThresholds.closeNonTransparent
@@ -61,6 +66,10 @@ final class BubbleVisibilityProbe: Sendable {
         var inFlight = false
         /// 候选版本：reset 递增。旧 Task 回调 generation 不匹配时丢弃。
         var generation = 0
+        /// 最近一次 `probe(candidates:)` 传入的 wid 集合（当前帧实际存在的候选）。
+        /// `visibility(for:)` 对不在此集合中的 wid 返回 `.hidden`（当前帧失效），
+        /// 防止已从 obstaclesNear 消失的候选残留 visible 缓存导致底座不复位（回归 A）。
+        var knownWids: Set<CGWindowID> = []
     }
 
     internal let lock: OSAllocatedUnfairLock<ProbeState>
@@ -83,11 +92,15 @@ final class BubbleVisibilityProbe: Sendable {
     }
 
     /// 异步探测候选（如果 due 且无在途）。后台 Task 捕获 → generation 校验 → 更新 cached。
+    /// 无论是否启动捕获，都同步刷新 `knownWids` 为当前候选 wid 集合 —— 这是当前帧的几何事实，
+    /// 必须每帧立即生效，使 `visibility(for:)` 对已消失候选返回 `.hidden`（当前帧失效，回归 A）。
     func probe(candidates: [WinCandidate]) {
         let gen: Int
         let prev: [CGWindowID: BubbleVisibility]
         let shouldStart: Bool
         (gen, prev, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Bool) in
+            // 同步刷新 knownWids：当前帧实际存在的候选 wid（每帧事实，立即生效）。
+            s.knownWids = Set(candidates.map { $0.wid })
             guard !candidates.isEmpty else {
                 // 完全空闲（无候选 + 无缓存 + 无在途）→ 无意义锁写，直接 return。
                 // 宠物可见但下方无会话气泡时，moving 态 20Hz 每 tick 调 probe([])，
@@ -126,17 +139,23 @@ final class BubbleVisibilityProbe: Sendable {
         }
     }
 
-    /// 同步读缓存（tick 主线程，非阻塞）。unknown → 保守 visible。
+    /// 同步读缓存（tick 主线程，非阻塞）。
+    /// - wid 在当前帧候选集（knownWids）中：返回 cached 结果；尚未完成首次探测 → `.visible`（保守避让）。
+    /// - wid 不在当前帧候选集（已从 obstaclesNear 消失）→ `.hidden`（当前帧失效，复位，回归 A）。
     func visibility(for wid: CGWindowID) -> BubbleVisibility {
-        lock.withLock { $0.cached[wid] ?? .visible }
+        lock.withLock {
+            guard $0.knownWids.contains(wid) else { return .hidden }
+            return $0.cached[wid] ?? .visible
+        }
     }
 
-    /// 候选/宠物消失 → 递增 generation（旧 Task 回调失效）+ 清 cached。
+    /// 候选/宠物消失 → 递增 generation（旧 Task 回调失效）+ 清 cached + 清 knownWids。
     /// **不设 inFlight=false**：旧 Task 在途时由其自身回调清 inFlight，保证 reset 期间新 probe 不启动（strict single-flight）。
     func reset() {
         lock.withLock { s in
             s.generation += 1
             s.cached.removeAll()
+            s.knownWids.removeAll()
         }
     }
 

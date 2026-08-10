@@ -362,6 +362,91 @@ let bubbleMulti = mkw(15, layer: 3, CGRect(x: -466, y: 549, width: 345, height: 
 let oD = PetTracker.obstaclesNear(mascot: mascotR, candidates: [wrapper, obs384, obs17, bubbleMulti])
 check("T-a13D 多行bubble(height80)→识别", oD.count == 1 && oD[0].wid == 15, "count=\(oD.count)")
 
+// ---- T-ctrl: 控制按钮避让（消息框在上方时，宠物下方出现两个小控制按钮）----
+// 回归 B：控制按钮是独立动态占用区域，高度 < bubbleHeightMin(32)，原 obstaclesNear 排除 → 底座重叠。
+// 修复：obstaclesNear 用相对宠物位置/尺寸/owner/PID 等非内容元数据形成最小安全候选规则，
+// 纳入 pet 正下方紧邻的紧凑控制按钮，同时排除 17x6 细长 voice control 与 pet 内部噪声窗。
+let ctBase = fail, ctPass = pass
+
+// 场景 B 拓扑：消息框在 pet 上方，pet 下方出现两个小控制按钮（移动/交互时）。
+let petCtrl = CGRect(x: 200, y: 400, width: 172, height: 179)   // maxY=579
+let mascotCtrl = mkw(20, layer: 2, petCtrl, title: "Codex Pet Mascot Effect")
+// 两个控制按钮：pet 正下方紧邻、紧凑（高度<32）、水平分列 pet 两侧下方
+let ctrlBtn1 = mkw(21, layer: 3, CGRect(x: 210, y: 585, width: 60, height: 28))   // 585..613，在 pet 下方
+let ctrlBtn2 = mkw(22, layer: 3, CGRect(x: 300, y: 585, width: 60, height: 28))   // 585..613，在 pet 下方
+// 噪声窗：必须排除
+let voiceCtrl = mkw(23, layer: 3, CGRect(x: 250, y: 450, width: 17, height: 6))   // 细长 + 在 pet 内部
+let innerNoise = mkw(24, layer: 3, CGRect(x: 250, y: 500, width: 40, height: 10)) // 在 pet 内部
+let mainCtrl = mkw(25, layer: 0, CGRect(x: 0, y: 0, width: 1728, height: 1084))   // 主窗
+
+// B1 控制按钮出现 → obstaclesNear 必须纳入两个按钮（当前排除 height<32 → 缺陷）
+let oc1 = PetTracker.obstaclesNear(mascot: mascotCtrl, candidates: [ctrlBtn1, ctrlBtn2, voiceCtrl, innerNoise, mainCtrl])
+check("T-ctrl1 控制按钮出现→纳入两按钮(非排除)",
+      oc1.count == 2 && Set(oc1.map { $0.wid }) == [21, 22], "count=\(oc1.count) wids=\(oc1.map { $0.wid }.sorted())")
+
+// B2 控制按钮避让 → dock 下移到按钮底部下方（maxY=613 → dock y=615），不重叠
+let oc1Dock = Geometry.safeDockFrame(pet: petCtrl, avoiding: oc1.map { $0.bounds },
+                                     dockSize: dockSize, gap: gap, screen: nil).frame
+check("T-ctrl2 控制按钮→dock避让到按钮底部下方(615)",
+      oc1Dock?.origin.y == 615, "y=\(oc1Dock?.origin.y ?? -1)")
+if let f = oc1Dock {
+    let noOverlap1 = !(f.origin.y < ctrlBtn1.bounds.maxY && f.origin.y + dockSize.height > ctrlBtn1.bounds.minY)
+    let noOverlap2 = !(f.origin.y < ctrlBtn2.bounds.maxY && f.origin.y + dockSize.height > ctrlBtn2.bounds.minY)
+    check("T-ctrl2b 避让后与两按钮均不相交", noOverlap1 && noOverlap2, "")
+} else { check("T-ctrl2b", false) }
+
+// B3 噪声窗排除：17x6 voice control（细长）、pet 内部小窗、主窗 均不纳入
+check("T-ctrl3 噪声窗排除(voice/inner/main)",
+      !oc1.contains { $0.wid == 23 } && !oc1.contains { $0.wid == 24 } && !oc1.contains { $0.wid == 25 }, "")
+
+// B4 控制按钮消失（下 tick）→ obstacles empty → dock 回基础位置 581
+let oc2 = PetTracker.obstaclesNear(mascot: mascotCtrl, candidates: [voiceCtrl, innerNoise, mainCtrl])
+check("T-ctrl4 按钮消失→obstacles empty(复位)", oc2.isEmpty, "count=\(oc2.count)")
+check("T-ctrl4b 按钮消失→dock回基础位置581",
+      Geometry.safeDockFrame(pet: petCtrl, avoiding: oc2.map { $0.bounds }, dockSize: dockSize, gap: gap, screen: nil).frame?.origin.y == 581, "")
+
+// B5 消息框上方 × 按钮出现：消息框不在下方（不构成障碍），按钮单独构成障碍
+// 消息框在 pet 上方（minY < pet.minY）→ 不在 pet 下方，不纳入；按钮在下方 → 纳入
+let bubbleAbove = mkw(26, layer: 3, CGRect(x: 200, y: 200, width: 345, height: 54))  // 200..254，pet 上方
+let oc3 = PetTracker.obstaclesNear(mascot: mascotCtrl, candidates: [ctrlBtn1, ctrlBtn2, bubbleAbove])
+check("T-ctrl5 消息框上方不纳入+按钮纳入",
+      oc3.count == 2 && !oc3.contains { $0.wid == 26 } && Set(oc3.map { $0.wid }) == [21, 22],
+      "count=\(oc3.count) wids=\(oc3.map { $0.wid }.sorted())")
+
+// B6 消息框下方 × 按钮出现：两者并存 → 合并避让（消息框在上则按钮决定，消息框在下则取更低者）
+let bubbleBelow = mkw(27, layer: 3, CGRect(x: 180, y: 620, width: 345, height: 54))  // 620..674，按钮(613)下方
+let oc4 = PetTracker.obstaclesNear(mascot: mascotCtrl, candidates: [ctrlBtn1, ctrlBtn2, bubbleBelow])
+check("T-ctrl6 消息框下方+按钮→合并3障碍",
+      oc4.count == 3 && Set(oc4.map { $0.wid }) == [21, 22, 27], "count=\(oc4.count)")
+// bubbleBelow.maxY=674 > 按钮 maxY=613 → dock 避让到 676（链式取最低）
+check("T-ctrl6b 合并避让→dock到最低障碍下方(676)",
+      Geometry.safeDockFrame(pet: petCtrl, avoiding: oc4.map { $0.bounds }, dockSize: dockSize, gap: gap, screen: nil).frame?.origin.y == 676, "")
+
+// B7 出现→消失转换：按钮出现(下移) → 消失(复位)，每帧基于当前几何重算
+let appearObs = PetTracker.obstaclesNear(mascot: mascotCtrl, candidates: [ctrlBtn1, ctrlBtn2])
+let appearY = Geometry.safeDockFrame(pet: petCtrl, avoiding: appearObs.map { $0.bounds }, dockSize: dockSize, gap: gap, screen: nil).frame?.origin.y
+let vanishObs = PetTracker.obstaclesNear(mascot: mascotCtrl, candidates: [])
+let vanishY = Geometry.safeDockFrame(pet: petCtrl, avoiding: vanishObs.map { $0.bounds }, dockSize: dockSize, gap: gap, screen: nil).frame?.origin.y
+check("T-ctrl7 出现→消失: 出现避让615/消失复位581(禁用上帧偏移)",
+      appearY == 615 && vanishY == 581, "appear=\(appearY ?? -1) vanish=\(vanishY ?? -1)")
+
+// B8 消失→出现转换
+check("T-ctrl8 消失→出现: 复位581/避让615", vanishY == 581 && appearY == 615, "")
+
+// B9 回归 a10A：原 17x6 voice control 仍被排除（不因纳入控制按钮而误纳入细长噪声）
+let oA_recheck = PetTracker.obstaclesNear(mascot: mascotR, candidates: [wrapper, obs384, obs17])
+check("T-ctrl9 回归: 17x6 voice control仍排除", oA_recheck.isEmpty, "count=\(oA_recheck.count)")
+
+// B10 obstacleKind 分类契约：气泡→.bubble（经像素可见性），控制按钮→.control（不经像素探测）
+let kindPetMaxY = petCtrl.maxY   // 579
+check("T-ctrl10a 气泡分类.bubble",
+      PetTracker.obstacleKind(bubbleBelow, petMaxY: kindPetMaxY) == .bubble, "")
+check("T-ctrl10b 控制按钮分类.control",
+      PetTracker.obstacleKind(ctrlBtn1, petMaxY: kindPetMaxY) == .control, "")
+check("T-ctrl10c 控制按钮分类.control(btn2)",
+      PetTracker.obstacleKind(ctrlBtn2, petMaxY: kindPetMaxY) == .control, "")
+
+print("\n[控制按钮避让] \(pass - ctPass) passed, \(fail - ctBase) failed")
 print("\n[会话气泡避让] \(pass - avPass) passed, \(fail - avBase) failed")
 
 // ---- T-bv: BubbleVisibility 分类（纯函数滞回）+ 调度（max2Hz/single-flight/reset）+ 异步集成（generation/strict single-flight）----
@@ -374,7 +459,7 @@ check("T-bv1 collapsed→hidden", BubbleVisibilityClassifier.classify(stats: col
 check("T-bv2 expanded→visible", BubbleVisibilityClassifier.classify(stats: expandedS, previous: .hidden) == .visible, "")
 check("T-bv3 中间滞回→保持visible", BubbleVisibilityClassifier.classify(stats: midS, previous: .visible) == .visible, "")
 check("T-bv4 中间滞回→保持hidden", BubbleVisibilityClassifier.classify(stats: midS, previous: .hidden) == .hidden, "")
-check("T-bv5 nil stats→保守visible", BubbleVisibilityClassifier.classify(stats: nil, previous: .hidden) == .visible, "")
+check("T-bv5 nil stats→hidden(收起/SC缺失不复位)", BubbleVisibilityClassifier.classify(stats: nil, previous: .visible) == .hidden, "")
 
 // 调度（isDue + single-flight + reset）—— 经 lock 访问
 let probe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 1000) })
@@ -390,7 +475,7 @@ probe.lock.withLock { $0.inFlight = false; $0.cached = [CGWindowID(1): .visible]
 probe.reset()
 check("T-bv11 reset→cached空(inFlight不变)", probe.lock.withLock { $0.cached.isEmpty && !$0.inFlight }, "")
 probe.lock.withLock { $0.inFlight = false }
-check("T-bv12 unknown wid→保守visible", probe.visibility(for: CGWindowID(99)) == .visible, "")
+check("T-bv12 wid不在当前候选集→hidden(当前帧失效)", probe.visibility(for: CGWindowID(99)) == .hidden, "")
 
 // 异步集成（fake capturer + RunLoop pump）：pending capture 完成 → cached 更新
 var fakeTime = Date(timeIntervalSince1970: 2000)
@@ -441,7 +526,7 @@ while concProbe.lock.withLock({ $0.inFlight }) && Date() < pumpDeadline2 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
 }
 check("T-bv22 新probe完成→cached更新(hidden)", concProbe.visibility(for: CGWindowID(200)) == .hidden, "")
-check("T-bv23 新wid不污染旧wid", concProbe.visibility(for: CGWindowID(100)) == .visible, "")
+check("T-bv23 旧wid从候选消失→hidden(当前帧失效,非污染)", concProbe.visibility(for: CGWindowID(100)) == .hidden, "")
 
 // strict single-flight：在途 Task 中 probe(empty) → 候选重新出现 probe 仍被拒（inFlight 不清）
 fakeTime = Date(timeIntervalSince1970: 4000)
@@ -488,6 +573,69 @@ cacheProbe.probe(candidates: [])
 let genCA = cacheProbe.lock.withLock { $0.generation }
 check("T-bv32 cached非空时probe([])→递增generation+清cached",
       genCA == genCB + 1 && cacheProbe.lock.withLock { $0.cached.isEmpty }, "before=\(genCB) after=\(genCA)")
+
+// T-bv33 (回归A·收起不复位)：候选 wid 上一帧 visible，本帧从 probe 列表移除 →
+// 该 wid 的 cached visibility 必须立即失效（不再返回 visible）。
+// 真机语义：消息框收起后窗口可能从 obstaclesNear 消失，底座必须复位到宠物下方，
+// 而非沿用上一帧偏移。当前帧候选消失 = 状态立即失效，禁止残留 visible 缓存。
+let vanishCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
+    BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // expanded → visible
+}
+let vanishProbe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 7000) }, capturer: vanishCap)
+vanishProbe.probe(candidates: [mkw(300, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))])
+let vanishPump0 = Date().addingTimeInterval(5)
+while vanishProbe.lock.withLock({ $0.inFlight }) && Date() < vanishPump0 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv33a 前置: expanded 候选→cached visible",
+      vanishProbe.visibility(for: CGWindowID(300)) == .visible, "")
+// 本帧候选集变化（wid 300 消失，换成 wid 301）→ wid 300 状态必须立即失效
+vanishProbe.probe(candidates: [mkw(301, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))])
+check("T-bv33b 候选消失→旧wid状态立即失效(非visible)",
+      vanishProbe.visibility(for: CGWindowID(300)) != .visible, "实际=\(vanishProbe.visibility(for: CGWindowID(300)))")
+
+// T-bv34 (回归A·收起不复位)：同一 wid 仍在候选，但收起后 SC 捕获失败(nil) →
+// 不能滞留 visible 导致持续避让。收起态应转 hidden（状态随当前帧失效/复位）。
+var vanishTime = Date(timeIntervalSince1970: 8000)
+var vanishStats: BubbleAlphaStats? = BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
+let nilCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in vanishStats }
+let nilProbe = BubbleVisibilityProbe(now: { vanishTime }, capturer: nilCap)
+let nilCand = mkw(310, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
+nilProbe.probe(candidates: [nilCand])
+let nilPump0 = Date().addingTimeInterval(5)
+while nilProbe.lock.withLock({ $0.inFlight }) && Date() < nilPump0 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv34a 前置: expanded→visible", nilProbe.visibility(for: CGWindowID(310)) == .visible, "")
+// 收起：SC 捕获该窗口失败（内容收起/窗口从 SC content 移除）→ stats nil
+vanishStats = nil
+vanishTime = Date(timeIntervalSince1970: 8001)
+nilProbe.probe(candidates: [nilCand])
+let nilPump1 = Date().addingTimeInterval(5)
+while nilProbe.lock.withLock({ $0.inFlight }) && Date() < nilPump1 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv34b 收起后SC捕获nil→转hidden(不复位=残留visible缺陷)",
+      nilProbe.visibility(for: CGWindowID(310)) == .hidden,
+      "实际=\(nilProbe.visibility(for: CGWindowID(310)))")
+
+// T-bv35 (回归A·收起后复位)：tick 序列模拟——expanded 探测 visible→下移；
+// 收起探测 → hidden → visibleObstacles 为空 → safeDockFrame 回 pet 下方（不复用上帧偏移）。
+let petForCollapse = CGRect(x: 100, y: 100, width: 172, height: 179)   // maxY=279
+let bubbleForCollapse = CGRect(x: 80, y: 280, width: 345, height: 54)  // 280..334，与 dock 281..329 重叠
+let dockSizeBV = CGSize(width: 200, height: 48)
+let gapBV: CGFloat = 2
+let baseY = petForCollapse.maxY + gapBV   // 281（无障碍基础位置）
+let avoidY = bubbleForCollapse.maxY + gapBV  // 336（避让位置）
+// 帧1 expanded：visibleObstacles=[bubble] → dock 下移到 336
+let dockY_expanded = Geometry.safeDockFrame(pet: petForCollapse, avoiding: [bubbleForCollapse],
+                                            dockSize: dockSizeBV, gap: gapBV, screen: nil).frame?.origin.y
+check("T-bv35a expanded→dock避让到336", dockY_expanded == avoidY, "y=\(dockY_expanded ?? -1)")
+// 帧2 收起：visibility 转 hidden → visibleObstacles 为空 → dock 必须回到基础位置 281
+let dockY_collapsed = Geometry.safeDockFrame(pet: petForCollapse, avoiding: [],
+                                             dockSize: dockSizeBV, gap: gapBV, screen: nil).frame?.origin.y
+check("T-bv35b 收起→visibleObstacles空→dock复位到281(禁用上帧偏移)",
+      dockY_collapsed == baseY, "y=\(dockY_collapsed ?? -1)")
 
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
 

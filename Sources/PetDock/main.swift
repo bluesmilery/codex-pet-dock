@@ -252,11 +252,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if plan.showUI {
                 renderSnapshot()
                 if let mascot = sel.selected {
-                    // 会话气泡避让：pet 下方同 owner 浮层障碍下移；越出 screen 可见区则隐藏底座+详情。
+                    // 障碍避让（每 tick 基于当前帧宠物+可见辅助窗几何重算唯一期望 frame，不复用上帧偏移）：
+                    // - 会话气泡（消息框）：像素 alpha 可见性（bubbleProbe）决定是否占位；
+                    // - 控制按钮：窗口存在性即占位（obstaclesNear 已过滤 isOnscreen/alpha>0）。
+                    // 两类分别基于当前帧计算，再合并成唯一障碍集交 safeDockFrame 链式避让。
                     let obstacles = PetTracker.obstaclesNear(mascot: mascot, candidates: wins)
-                    // 异步探测 bubble 可见性（ScreenCaptureKit 像素 alpha）；只将 visible 候选作为障碍。
-                    bubbleProbe.probe(candidates: obstacles)
-                    let visibleObstacles = obstacles.filter { bubbleProbe.visibility(for: $0.wid) == .visible }
+                    let petMaxY = mascot.bounds.maxY
+                    // 只对气泡类候选做像素可见性探测（控制按钮不经 SC，避免小窗捕获失败被误判收起）。
+                    let bubbleCandidates = obstacles.filter {
+                        PetTracker.obstacleKind($0, petMaxY: petMaxY) == .bubble
+                    }
+                    bubbleProbe.probe(candidates: bubbleCandidates)
+                    // 合并：气泡(visible) + 控制按钮(全部)，各自当前帧可见性。
+                    let visibleObstacles = obstacles.filter { c in
+                        if PetTracker.obstacleKind(c, petMaxY: petMaxY) == .control { return true }
+                        return bubbleProbe.visibility(for: c.wid) == .visible
+                    }
                     let scr = Geometry.screenContaining(quartzCenterX: mascot.bounds.midX, mascot.bounds.midY)
                     let shown = dock.placeBelow(petQuartzRect: mascot.bounds,
                                                 avoiding: visibleObstacles.map { $0.bounds }, visibleScreen: scr)

@@ -14,6 +14,11 @@ enum PetHeuristics {
     static let bubbleHeightMin: CGFloat = 32    // 高度下限（排除 17x6 voice controls）
     static let bubbleHeightMax: CGFloat = 223   // 高度上限（排除 512x223 wrapper —— 它包含整个 pet）
     static let bubbleMinYSlack: CGFloat = 32    // bubble.minY 允许高于 pet 底部的偏差（约一行气泡）
+    // 控制按钮（移动/交互时出现的独立动态占用区域）：消息框在 pet 上方时，pet 正下方出现的紧凑按钮簇。
+    // 与气泡互补（高度 < bubbleHeightMin），用相对 pet 位置/尺寸的非内容元数据形成最小安全候选规则。
+    static let ctrlHeightMax: CGFloat = 32      // 控制按钮高度上限（与气泡 bubbleHeightMin 互补，不重叠）
+    static let ctrlMinSide: CGFloat = 18        // 最小边下限（排除 17x6 细长 voice control：minSide=6）
+    static let ctrlMaxSide: CGFloat = 160       // 最大边上限（紧凑控件，排除大面合成层）
 }
 
 /// 一个可观测的窗口候选（来自 CGWindowList）。
@@ -228,28 +233,57 @@ enum PetTracker {
         return merged
     }
 
-    /// 与选中 Mascot 同 owner 的「短会话浮层」障碍（会话气泡），用于底座避让。
-    /// **动态几何窗，不依赖 title**：同 owner / onscreen / alpha>0 / layer>=3 / 非主窗；
-    /// 高度 ∈ [bubbleHeightMin, bubbleHeightMax)（排除 17x6 voice controls 与 512x223 wrapper）；
-    /// maxSide<=600（排除 Composition Surface 768x912 大面）；
-    /// minY 在 pet 底部附近（允许小负偏差，排除从 pet 中部开始的 wrapper/384x95/17x6）；
-    /// 水平投影与 pet 重叠。排除 Mascot 自身与 main(layer0)。
-    /// **不改变 selectPet 的合理回退**（障碍仅用于几何避让）。
+    /// 与选中 Mascot 同 owner 的障碍（用于底座避让），合并两类**独立动态占用区域**：
+    /// - **会话气泡**（消息框展开）：高度 ∈ [bubbleHeightMin, bubbleHeightMax)，minY 允许小负偏差。
+    /// - **控制按钮**（移动/交互时出现）：高度 < bubbleHeightMin，minY 严格 ≥ petMaxY（pet 正下方紧邻）。
+    ///
+    /// 两类分别基于当前帧几何判定（消息框在上/下与按钮出现/消失互不依赖），再合并成唯一障碍集。
+    /// **动态几何窗，不依赖 title**：共用前置（同 owner / onscreen / alpha>0 / layer>=3 / 非主窗 / 水平投影与 pet 重叠）。
+    /// 排除 Mascot 自身与 main(layer0)。**不改变 selectPet 的合理回退**（障碍仅用于几何避让）。
     static func obstaclesNear(mascot: WinCandidate, candidates: [WinCandidate]) -> [WinCandidate] {
         guard !mascot.ownerName.isEmpty else { return [] }
         let pet = mascot.bounds
         let petMaxY = pet.maxY
         return candidates.filter { c in
+            // 共用前置：同 owner / 在屏 / 可见 / 浮层 / 非主窗 / 排除 mascot 自身 / 水平投影与 pet 重叠
             c.wid != mascot.wid
                 && c.ownerName == mascot.ownerName
                 && c.isOnscreen && c.alpha > 0 && c.layer >= 3
                 && !c.isLikelyMainWindow
-                && c.bounds.height >= PetHeuristics.bubbleHeightMin
-                && c.bounds.height < PetHeuristics.bubbleHeightMax
-                && c.maxSide <= 600
-                && c.bounds.minY >= petMaxY - PetHeuristics.bubbleMinYSlack
                 && c.bounds.origin.x < pet.maxX && c.bounds.origin.x + c.bounds.width > pet.minX
+                && (isBubbleObstacle(c, petMaxY: petMaxY) || isControlObstacle(c, petMaxY: petMaxY))
         }
+    }
+
+    /// 障碍种类：决定可见性判定方式（消息框 vs 控制按钮分别基于当前帧计算）。
+    enum ObstacleKind { case bubble, control }
+
+    /// 判定候选相对 petMaxY 的障碍种类（已被 obstaclesNear 纳入的候选）。
+    /// - `.bubble`：会话气泡，可见性由像素 alpha（bubbleProbe）判定（展开/收起）。
+    /// - `.control`：控制按钮，可见性即窗口存在性（已在 obstaclesNear 的 isOnscreen/alpha>0 保证），
+    ///   不经像素探测 —— 避免小窗口 SC 捕获失败(nil)被误判收起。
+    static func obstacleKind(_ c: WinCandidate, petMaxY: CGFloat) -> ObstacleKind {
+        isBubbleObstacle(c, petMaxY: petMaxY) ? .bubble : .control
+    }
+
+    /// 会话气泡障碍：高度 ∈ [bubbleHeightMin, bubbleHeightMax)，maxSide<=600，
+    /// minY 在 pet 底部附近（允许小负偏差，排除从 pet 中部开始的 wrapper/384x95）。
+    private static func isBubbleObstacle(_ c: WinCandidate, petMaxY: CGFloat) -> Bool {
+        c.bounds.height >= PetHeuristics.bubbleHeightMin
+            && c.bounds.height < PetHeuristics.bubbleHeightMax
+            && c.maxSide <= 600
+            && c.bounds.minY >= petMaxY - PetHeuristics.bubbleMinYSlack
+    }
+
+    /// 控制按钮障碍（独立动态占用区域，与气泡互补）：高度 < ctrlHeightMax（与 bubbleHeightMin 衔接），
+    /// minSide>=ctrlMinSide（排除 17x6 细长 voice control），maxSide<=ctrlMaxSide（紧凑控件），
+    /// minY 严格 ≥ petMaxY（pet 正下方紧邻，排除 pet 内部噪声窗）。按钮只有出现时才占位，消失即复位。
+    private static func isControlObstacle(_ c: WinCandidate, petMaxY: CGFloat) -> Bool {
+        c.bounds.height < PetHeuristics.ctrlHeightMax
+            && c.bounds.width >= PetHeuristics.ctrlMinSide
+            && c.bounds.height >= PetHeuristics.ctrlMinSide
+            && c.maxSide <= PetHeuristics.ctrlMaxSide
+            && c.bounds.minY >= petMaxY
     }
 
     // MARK: - 解析
