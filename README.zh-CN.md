@@ -158,10 +158,10 @@ make clean-logs   # 清理 /tmp 下的运行 / 诊断日志
 全部为纯函数 / fixture 测试，用 `swiftc` 编译真实源码后运行，**不依赖屏幕录制权限、不联网**：
 
 ```sh
-make test-ui      # 宠物识别 + 坐标转换 + 跟随状态机 + 气泡可见性 + 障碍避让 + 边缘 clamp + 日志门控（113 项）
-make test-data    # 数据层：周窗口聚合 / 增量缓存 / 退避 / 暂停 / 脱敏（100 项）
-make test-shell   # 主题安全解析 / 设置持久化 / 热加载 / 自启状态映射（93 项）
-make test         # 全量（共 306 项）
+make test-ui      # 宠物识别 + 坐标转换 + 跟随状态机 + 气泡可见性 + 障碍避让 + 边缘 clamp + 日志轮转 + FollowTickPlanner（140 项）
+make test-data    # 数据层：周窗口聚合 / 增量缓存 / 退避 / 暂停 / 脱敏 / codex 路径解析 / rpc stdio 端到端（123 项）
+make test-shell   # 主题安全解析 / 设置持久化 / 热加载 / 自启状态映射 / StatusBar TCC 提示（99 项）
+make test         # 全量（共 362 项）
 ```
 
 隐私边界由 fixture 测试固化：数据层结果不包含会话正文诱饵、不包含凭证。详见 `docs/data-layer.md` 与 `tests/`。
@@ -184,7 +184,7 @@ make test         # 全量（共 306 项）
 
 欢迎通过 issue 与 pull request 反馈问题与改进。提交前请确保：
 
-1. `make test` 全量（306 项）通过；
+1. `make test` 全量（362 项）通过；
 2. 不引入读取凭证、会话正文或调用私有 API 的代码；
 3. 提交信息遵循约定式提交（Conventional Commits）风格。
 
@@ -215,7 +215,7 @@ make test         # 全量（共 306 项）
 - 新功能在从 `dev` 派生的 `feature/*` 分支上开发，完成后合并回 `dev`。
 - `dev` → `main` 的合并，以及 `main` 推送到 GitHub，均需**人工确认**后执行，绝不自动推送。
 - **禁止**使用 `git push --all`，以免误推本地或临时分支到远端。
-- 不在本文虚构远端地址或 CI；所有变更以本地 `swift build -c release` 与 `make test`（306 项）验证为准。
+- 不在本文虚构远端地址或 CI；所有变更以本地 `swift build -c release` 与 `make test`（362 项）验证为准。
 
 ---
 
