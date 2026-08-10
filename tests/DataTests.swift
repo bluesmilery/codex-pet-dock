@@ -37,6 +37,34 @@ final class SlowRateLimit: RateLimitFetching {
     func cancel() {}
 }
 
+// fixture 日期与测试窗口单一来源：所有路径日期、时间窗口、now 基线均由 anchor 经日历偏移派生，
+// 消除分散硬编码；fixture 文件本身（tests/fixtures/sessions/...）保持脱敏可读不变。
+// 基准 anchorDay 与 test-a 文件所在日（2026/08/03）对齐，其余 fixture 日与窗口均按相对偏移生成。
+enum FixtureCalendar {
+    static let utc = Calendar(identifier: .gregorian)
+    /// test-a 所在日（2026-08-03T00:00:00Z）；其余日期与窗口均相对它偏移。
+    static let anchorDay = iso("2026-08-03T00:00:00Z")
+    /// test-b 所在日 = anchor - 1d（2026-08-02）。
+    static let dayB = utc.date(byAdding: .day, value: -1, to: anchorDay)!
+    /// test-c 所在日 = anchor + 2d（2026-08-05）。
+    static let dayC = utc.date(byAdding: .day, value: 2, to: anchorDay)!
+    /// 主聚合窗口 [winFrom, winTo] = [anchor-2d, anchor+1d]（含 test-a/test-b，排除 test-c）。
+    static let winFrom = utc.date(byAdding: .day, value: -2, to: anchorDay)!
+    static let winTo = utc.date(byAdding: .day, value: 1, to: anchorDay)!
+    /// service now 基线 = winTo（覆盖 [winFrom, now] 一周窗口的右端）。
+    static let now = winTo
+    /// test-c 独立窗口 [dayC, dayC+1d]（2026-08-05 → 2026-08-06）。
+    static let dayCFrom = dayC
+    static let dayCTo = utc.date(byAdding: .day, value: 1, to: dayC)!
+    /// fixture 下 test-a/test-b/test-c 的期望路径（与 sessions 目录布局一致）。
+    static func sessionFile(_ root: URL, _ rel: String) -> URL {
+        root.appendingPathComponent(rel)
+    }
+
+    /// ISO8601 解析辅助（仅 fixture 日期源使用）。
+    static func iso(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
+}
+
 @main
 struct DataTestRunner {
     static var pass = 0
@@ -64,8 +92,36 @@ struct DataTestRunner {
     static func main() {
         func D(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
         let fixtureRoot = URL(fileURLWithPath: "tests/fixtures/sessions")
-        let winFrom = D("2026-08-01T00:00:00Z")
-        let winTo = D("2026-08-04T00:00:00Z")
+        let winFrom = FixtureCalendar.winFrom
+        let winTo = FixtureCalendar.winTo
+
+        // ---- T0: 候选文件选择与窗口一致性（路径日期/窗口均同源于 FixtureCalendar）----
+        // 证明 candidateFiles 逻辑用派生窗口选中预期文件集合：主窗口含 test-a/test-b，排除 test-c。
+        // fixture 相对路径的 YYYY/MM/DD 也由 anchor/dayB/dayC 经日历组件派生，与磁盘布局一致。
+        func dayRel(_ day: Date, _ file: String) -> String {
+            let c = FixtureCalendar.utc.dateComponents([.year, .month, .day], from: day)
+            return String(format: "%04d/%02d/%02d/%@", c.year!, c.month!, c.day!, file as NSString)
+        }
+        do {
+            var r0 = TokenUsageLogReader(sessionsRoot: fixtureRoot)
+            let win0 = try! r0.readPoints(from: winFrom, to: winTo)
+            let relA = dayRel(FixtureCalendar.anchorDay, "rollout-test-a.jsonl")
+            let relB = dayRel(FixtureCalendar.dayB, "rollout-test-b.jsonl")
+            let relC = dayRel(FixtureCalendar.dayC, "rollout-test-c.jsonl")
+            check("T0a 主窗口 sessionFileCount=2（test-a + test-b）", win0.sessionFileCount == 2, "files=\(win0.sessionFileCount)")
+            // 验证 test-a/test-b 点落在窗口内、test-c 点落在窗口外（候选裁剪与点的窗口过滤一致）。
+            let aPts = win0.points.filter { $0.timestamp >= FixtureCalendar.anchorDay }   // test-a 在 anchor 日
+            check("T0b 主窗口含 test-a 点（anchor 日）", !aPts.isEmpty, "aPts=\(aPts.count)")
+            let winC = try! r0.readPoints(from: FixtureCalendar.dayCFrom, to: FixtureCalendar.dayCTo)
+            check("T0c test-c 独立窗口仅选 test-c（sessionFileCount=1）", winC.sessionFileCount == 1, "files=\(winC.sessionFileCount)")
+            check("T0d test-c 文件在主窗口外（主窗口不含 test-c 点）",
+                  !win0.points.contains { $0.timestamp >= FixtureCalendar.dayCFrom }, "")
+            // 候选文件存在性：路径日期派生与磁盘布局一致。
+            check("T0e fixture test-a 路径存在", FileManager.default.fileExists(atPath: FixtureCalendar.sessionFile(fixtureRoot, relA).path), "")
+            check("T0f fixture test-b 路径存在", FileManager.default.fileExists(atPath: FixtureCalendar.sessionFile(fixtureRoot, relB).path), "")
+            check("T0g fixture test-c 路径存在", FileManager.default.fileExists(atPath: FixtureCalendar.sessionFile(fixtureRoot, relC).path), "")
+        }
+        section("fixture 日期同源/候选一致")
 
         // ---- T1/T2/T10: 周窗口聚合 + 只用 last_token_usage + 脱敏 + 分项 ----
         var reader = TokenUsageLogReader(sessionsRoot: fixtureRoot)
@@ -99,13 +155,14 @@ struct DataTestRunner {
         section("增量缓存")
 
         // ---- T-evict: 缓存淘汰（范围外 / 已删除 / 过期）----
+        // 窗口全部由 FixtureCalendar 派生：[dayB, winTo] 含 a+b；[anchorDay, winTo] 仅含 a。
         do {
             var r = TokenUsageLogReader(sessionsRoot: fixtureRoot)
-            _ = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))   // a(08-03)+b(08-02)
+            _ = try! r.readPoints(from: FixtureCalendar.dayB, to: winTo)   // a(anchorDay)+b(dayB)
             check("T-evict1 首次 parse a,b=2", r.debugFilesParsed == 2, "实际=\(r.debugFilesParsed)")
-            _ = try! r.readPoints(from: D("2026-08-03T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))   // 只 a 在范围
+            _ = try! r.readPoints(from: FixtureCalendar.anchorDay, to: winTo)   // 只 a 在范围
             check("T-evict2 窄范围 a 命中不重parse（仍2），b 移出范围", r.debugFilesParsed == 2, "实际=\(r.debugFilesParsed)")
-            _ = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))   // a 命中；b 已淘汰→重 parse
+            _ = try! r.readPoints(from: FixtureCalendar.dayB, to: winTo)   // a 命中；b 已淘汰→重 parse
             check("T-evict3 b 被淘汰后重 parse（=3）", r.debugFilesParsed == 3, "实际=\(r.debugFilesParsed)")
         }
 
@@ -113,19 +170,22 @@ struct DataTestRunner {
         do {
             let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("pd-evict-del", isDirectory: true)
             try? FileManager.default.removeItem(at: tmp)
-            let src = fixtureRoot.appendingPathComponent("2026/08/03/rollout-test-a.jsonl")
-            let dst = tmp.appendingPathComponent("2026/08/03/rollout-test-a.jsonl")
-            try! FileManager.default.createDirectory(at: tmp.appendingPathComponent("2026/08/03", isDirectory: true),
+            // test-a 路径日期由 anchorDay 派生（YYYY/MM/DD）。
+            let comps = FixtureCalendar.utc.dateComponents([.year, .month, .day], from: FixtureCalendar.anchorDay)
+            let dayPath = String(format: "%04d/%02d/%02d", comps.year!, comps.month!, comps.day!)
+            let src = fixtureRoot.appendingPathComponent("\(dayPath)/rollout-test-a.jsonl")
+            let dst = tmp.appendingPathComponent("\(dayPath)/rollout-test-a.jsonl")
+            try! FileManager.default.createDirectory(at: tmp.appendingPathComponent("\(dayPath)", isDirectory: true),
                                                      withIntermediateDirectories: true)
             try! FileManager.default.copyItem(at: src, to: dst)
             var r = TokenUsageLogReader(sessionsRoot: tmp)
-            _ = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))
+            _ = try! r.readPoints(from: FixtureCalendar.dayB, to: winTo)
             check("T-evict4 临时副本首次 parse=1", r.debugFilesParsed == 1, "实际=\(r.debugFilesParsed)")
             try! FileManager.default.removeItem(at: dst)
-            let win5 = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))
+            let win5 = try! r.readPoints(from: FixtureCalendar.dayB, to: winTo)
             check("T-evict5 删除后 scan 不崩且 0 点", win5.points.isEmpty, "count=\(win5.points.count)")
             try! FileManager.default.copyItem(at: src, to: dst)
-            let win6 = try! r.readPoints(from: D("2026-08-02T00:00:00Z"), to: D("2026-08-04T00:00:00Z"))
+            let win6 = try! r.readPoints(from: FixtureCalendar.dayB, to: winTo)
             check("T-evict6 删除时淘汰→恢复后重 parse（=2）且非空",
                   r.debugFilesParsed == 2 && !win6.points.isEmpty, "parsed=\(r.debugFilesParsed)")
             try? FileManager.default.removeItem(at: tmp)
@@ -206,7 +266,7 @@ struct DataTestRunner {
         // ---- T8: service fetchWeekTokens（真实 reader + 注入时钟）----
         let svc8 = PetDockDataService(rateLimit: MockOKRateLimit(),
                                       tokenLog: TokenUsageLogReader(sessionsRoot: fixtureRoot),
-                                      now: { D("2026-08-04T00:00:00Z") })
+                                      now: { FixtureCalendar.now })
         if case .success(let wt) = svc8.fetchWeekTokens() {
             check("T8 Σ=710 sampleCount=5", wt.totalTokens == 710 && wt.sampleCount == 5,
                   "tokens=\(wt.totalTokens) count=\(wt.sampleCount)")
@@ -224,9 +284,9 @@ struct DataTestRunner {
         check("T9b nextDelay=3600", svc9.weekLeftNextDelay == 3600, "\(svc9.weekLeftNextDelay)")
         section("service 退避")
 
-        // ---- T11: 分项累计 / 缺字段 / cached（test-c 独立窗口 [08-05,08-06]）----
+        // ---- T11: 分项累计 / 缺字段 / cached（test-c 独立窗口 [dayCFrom, dayCTo]）----
         var readerC = TokenUsageLogReader(sessionsRoot: fixtureRoot)
-        let winC = try! readerC.readPoints(from: D("2026-08-05T00:00:00Z"), to: D("2026-08-06T00:00:00Z"))
+        let winC = try! readerC.readPoints(from: FixtureCalendar.dayCFrom, to: FixtureCalendar.dayCTo)
         let ptsC = winC.points
         check("T11a test-c 3 个点", ptsC.count == 3, "count=\(ptsC.count)")
         check("T11b total=1500（含无 total→0 的点）", ptsC.reduce(Int64(0)) { $0 + $1.tokens } == 1500, "")
