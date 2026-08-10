@@ -159,10 +159,10 @@ Refreshing is paused while the pet is not visible and resumes when it reappears.
 All tests are pure-function / fixture tests, compiled with `swiftc` against the real sources — **no screen-recording permission and no network required**:
 
 ```sh
-make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance + clamp + logger rotation + FollowTickPlanner (140 tests)
+make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance + clamp + logger rotation + FollowTickPlanner (138 tests)
 make test-data    # data layer: weekly aggregation / incremental cache / backoff / pause / desensitization / codex path resolve / rpc stdio e2e (123 tests)
 make test-shell   # theme safe-parsing / settings persistence / hot-reload / autostart state mapping / StatusBar TCC hint (99 tests)
-make test         # full suite (362 tests in total)
+make test         # full suite (360 tests in total)
 ```
 
 Privacy boundaries are pinned by fixture tests: data-layer results contain no conversation-content decoys and no credentials. See `docs/data-layer.md` and `tests/`.
@@ -185,7 +185,7 @@ Privacy boundaries are pinned by fixture tests: data-layer results contain no co
 
 Issues and pull requests are welcome. Before submitting, please ensure:
 
-1. `make test` (full suite, 362 tests) passes;
+1. `make test` (full suite, 360 tests) passes;
 2. the change introduces no code that reads credentials or conversation content, and no private-API calls;
 3. commit messages follow Conventional Commits.
 
@@ -216,7 +216,7 @@ More design rationale in [`docs/pet-window-detection.md`](docs/pet-window-detect
 - New work happens on `feature/*` branches cut from `dev`, merged back into `dev` when done.
 - Merging `dev` → `main`, and pushing `main` to GitHub, both require **manual confirmation** — never automated.
 - **Do not** use `git push --all`, to avoid pushing local or temporary branches to the remote.
-- No remote URL or CI is fabricated in this document; all changes are validated by local `swift build -c release` and `make test` (362 tests).
+- No remote URL or CI is fabricated in this document; all changes are validated by local `swift build -c release` and `make test` (360 tests).
 
 ---
 
