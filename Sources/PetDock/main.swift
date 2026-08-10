@@ -211,8 +211,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dataTimer = nil
     }
 
-    /// 一次跟随 tick：枚举 → 识别 → Follower 决策 → 数据 pause/resume（跟随宠物）→
-    /// UI 可见性（宠物 && 用户）→ 应用位置 → 重排。
+    /// 一次跟随 tick：枚举 → 识别 → Follower 决策（频率/setFrame）→ FollowTickPlan 纯编排
+    /// （数据 pause/resume、UI show/hide）→ 执行计划输出（应用位置/可见性）→ 重排。
+    /// tick 只执行纯计划输出；编排判断（边沿/dockVisible/候选为空）集中在 FollowTickPlanner。
     private func tick() {
         let wins = PetTracker.unionCandidates()
         let sel = PetTracker.selectPet(candidates: wins, lastWID: lastWID)
@@ -229,23 +230,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let needsTCCWarning = consecutiveEmptyTicks >= 3 && !CGPreflightScreenCaptureAccess()
         statusBar?.updatePermissionWarning(needsTCCWarning)
 
-        // 数据探测仅跟随宠物可见性（与用户是否隐藏 UI 解耦）。
+        // 纯编排决策：数据探测仅跟随宠物可见性；UI 可见 = 宠物可见 && 用户可见。
         let petVisible = d.showDock
-        if petVisible && !wasPetVisible {
+        let plan = FollowTickPlanner.decide(
+            input: FollowTickInput(petVisible: petVisible,
+                                   wasPetVisible: wasPetVisible,
+                                   dockVisible: settings.dockVisible))
+        // 执行数据边沿（petVisible 边沿驱动 pause/resume，与 UI 解耦）。
+        if plan.resumeData {
             provider.resume()
             refreshData()
-        } else if !petVisible && wasPetVisible {
+        } else if plan.pauseData {
             provider.pause()
             stopDataRefresh()
         }
         wasPetVisible = petVisible
 
-        // UI 可见 = 宠物可见 && 用户可见；用户隐藏只关 UI，仍跟踪宠物。
-        let showUI = petVisible && settings.dockVisible
         if petVisible {
             lastPet = pet
             lastWID = sel.selected?.wid
-            if showUI {
+            if plan.showUI {
                 renderSnapshot()
                 if let mascot = sel.selected {
                     // 会话气泡避让：pet 下方同 owner 浮层障碍下移；越出 screen 可见区则隐藏底座+详情。
@@ -265,11 +269,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             } else {
+                // plan.hideUI：宠物可见但用户隐藏 → 只关 UI，仍跟踪宠物（lastPet/lastWID 已更新）。
                 dock.hideIfNeeded()
                 detail.close()
             }
         } else {
-            // 宠物消失：隐藏 UI + 详情，清状态，等待重现重捕
+            // plan.petDisappeared：宠物消失 → 隐藏 UI + 详情，清状态，等待重现重捕。
             dock.hideIfNeeded()
             detail.close()
             lastPet = nil
@@ -279,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state = d.state
         stableCount = d.stableCount
 
-        log("follow state=\(d.state.rawValue) pet=\(petVisible) show=\(showUI) setFrame=\(d.shouldSetFrame) "
+        log("follow state=\(d.state.rawValue) pet=\(petVisible) show=\(plan.showUI) setFrame=\(d.shouldSetFrame) "
             + "interval=\(d.nextInterval) stable=\(d.stableCount) wid=\(sel.selected?.wid ?? 0)")
 
         schedule(after: d.nextInterval)

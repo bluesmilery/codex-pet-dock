@@ -722,5 +722,71 @@ try? FileManager.default.removeItem(at: noopTmp)
 
 print("\n[PetLogger] \(pass - lgPass) passed, \(fail - lgBase) failed")
 
+// ---- T-plan: FollowTickPlan 纯决策层（数据 pause/resume 边沿 + UI show/hide + dockVisible + 候选为空）----
+let plBase = fail, plPass = pass
+
+// P1: 宠物首次可见（false→true 边沿）→ resumeData，UI 取决于 dockVisible
+let p1 = FollowTickPlanner.decide(input: FollowTickInput(petVisible: true, wasPetVisible: false, dockVisible: true))
+check("P1 宠物首次可见→resumeData边沿", p1.resumeData && !p1.pauseData, "")
+check("P1b dockVisible→showUI", p1.showUI && !p1.hideUI, "")
+check("P1c 宠物可见→petDisappeared=false", !p1.petDisappeared, "")
+
+// P2: 宠物持续可见（true→true，无边沿）→ 不 resume 也不 pause
+let p2 = FollowTickPlanner.decide(input: FollowTickInput(petVisible: true, wasPetVisible: true, dockVisible: true))
+check("P2 持续可见→无resume无pause", !p2.resumeData && !p2.pauseData, "")
+check("P2b 持续可见+dockVisible→showUI", p2.showUI, "")
+
+// P3: 宠物消失（true→false 边沿）→ pauseData + hideUI + petDisappeared
+let p3 = FollowTickPlanner.decide(input: FollowTickInput(petVisible: false, wasPetVisible: true, dockVisible: true))
+check("P3 宠物消失→pauseData边沿", p3.pauseData && !p3.resumeData, "")
+check("P3b 宠物消失→hideUI", p3.hideUI && !p3.showUI, "")
+check("P3c 宠物消失→petDisappeared=true", p3.petDisappeared, "")
+
+// P4: 持续隐藏（false→false）→ 无边沿，不 resume/pause
+let p4 = FollowTickPlanner.decide(input: FollowTickInput(petVisible: false, wasPetVisible: false, dockVisible: true))
+check("P4 持续隐藏→无resume无pause", !p4.resumeData && !p4.pauseData, "")
+check("P4b 持续隐藏→hideUI+petDisappeared", p4.hideUI && p4.petDisappeared, "")
+
+// P5: dockVisible=false（用户隐藏）—— 宠物仍可见但 UI 隐藏；数据探测不受影响（仍跟随宠物）
+let p5 = FollowTickPlanner.decide(input: FollowTickInput(petVisible: true, wasPetVisible: false, dockVisible: false))
+check("P5 用户隐藏→hideUI(宠物可见但UI关)", p5.hideUI && !p5.showUI, "")
+check("P5b 用户隐藏不影响数据→resumeData仍触发", p5.resumeData, "")
+check("P5c 用户隐藏→petDisappeared=false(仍跟踪宠物)", !p5.petDisappeared, "")
+
+// P6: dockVisible 在持续可见时切换 → 仅 UI 变化，数据无边沿
+let p6 = FollowTickPlanner.decide(input: FollowTickInput(petVisible: true, wasPetVisible: true, dockVisible: false))
+check("P6 持续可见+用户隐藏→hideUI且无数据边沿", p6.hideUI && !p6.resumeData && !p6.pauseData, "")
+
+// P7: showUI 与 hideUI 严格互斥（覆盖所有 8 种输入组合）
+var mutexOk = true
+for pv in [false, true] {
+    for wpv in [false, true] {
+        for dv in [false, true] {
+            let pl = FollowTickPlanner.decide(input: FollowTickInput(petVisible: pv, wasPetVisible: wpv, dockVisible: dv))
+            if pl.showUI == pl.hideUI { mutexOk = false }
+        }
+    }
+}
+check("P7 showUI/hideUI 严格互斥(全8组合)", mutexOk, "")
+
+// P8: resumeData/pauseData 仅在 petVisible 边沿触发（互斥，且持续态均为 false）
+var edgeOk = true
+for pv in [false, true] {
+    for wpv in [false, true] {
+        let pl = FollowTickPlanner.decide(input: FollowTickInput(petVisible: pv, wasPetVisible: wpv, dockVisible: true))
+        if pl.resumeData && pl.pauseData { edgeOk = false }                          // 不可同时触发
+        if pv == wpv && (pl.resumeData || pl.pauseData) { edgeOk = false }           // 持续态无边沿
+    }
+}
+check("P8 resume/pause 仅边沿触发且互斥", edgeOk, "")
+
+// P9: showUI = petVisible && dockVisible（真值表精确）
+check("P9a pv=T dv=T → showUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: true, wasPetVisible: false, dockVisible: true)).showUI)
+check("P9b pv=T dv=F → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: true, wasPetVisible: false, dockVisible: false)).hideUI)
+check("P9c pv=F dv=T → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: false, wasPetVisible: true, dockVisible: true)).hideUI)
+check("P9d pv=F dv=F → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: false, wasPetVisible: true, dockVisible: false)).hideUI)
+
+print("\n[FollowTickPlan] \(pass - plPass) passed, \(fail - plBase) failed")
+
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)
