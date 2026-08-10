@@ -26,34 +26,7 @@ struct DockSnapshot {
     }
 }
 
-/// 展示数据来源接口。LiveDockProvider 提供真实数据（官方额度 + 本机 token）；
-/// StaticDockProvider 仅演示用，不触碰真实数据源。
+/// 展示数据来源接口。LiveDockProvider 提供真实数据（官方额度 + 本机 token）。
 protocol DockModelProvider: AnyObject {
     func currentSnapshot() -> DockSnapshot
-}
-
-/// 静态假数据 provider：演示 UI 与跟随，不触碰任何真实数据源。
-final class StaticDockProvider: DockModelProvider {
-    func currentSnapshot() -> DockSnapshot {
-        DockSnapshot(
-            weekLeft: "73%",
-            weekTokens: "1.2M",
-            plan: "Pro（演示）",
-            resetAt: "2026-08-10 00:00",
-            cacheRatio: "42%",
-            inputTokens: "820K",
-            outputTokens: "380K",
-            sessionCount: 17,
-            updatedAt: "—",
-            localEstimateNote: "本机估算 · 演示数据（未读取真实额度）"
-        )
-    }
-
-    /// 全缺失快照：演示「无数据」占位态。
-    static func emptyDemo() -> DockSnapshot {
-        DockSnapshot(weekLeft: nil, weekTokens: nil, plan: nil, resetAt: nil,
-                     cacheRatio: nil, inputTokens: nil, outputTokens: nil,
-                     sessionCount: nil, updatedAt: nil,
-                     localEstimateNote: "本机估算 · 暂无数据")
-    }
 }
