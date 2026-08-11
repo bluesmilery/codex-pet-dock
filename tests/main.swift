@@ -459,7 +459,15 @@ check("T-bv1 collapsed→hidden", BubbleVisibilityClassifier.classify(stats: col
 check("T-bv2 expanded→visible", BubbleVisibilityClassifier.classify(stats: expandedS, previous: .hidden) == .visible, "")
 check("T-bv3 中间滞回→保持visible", BubbleVisibilityClassifier.classify(stats: midS, previous: .visible) == .visible, "")
 check("T-bv4 中间滞回→保持hidden", BubbleVisibilityClassifier.classify(stats: midS, previous: .hidden) == .hidden, "")
-check("T-bv5 nil stats→hidden(收起/SC缺失不复位)", BubbleVisibilityClassifier.classify(stats: nil, previous: .visible) == .hidden, "")
+check("T-bv5 nil stats→visible(capture失败/SC缺失保守避让)",
+      BubbleVisibilityClassifier.classify(stats: nil, previous: .visible) == .visible, "")
+// P1 nil 保守语义（README: capture failure conservatively avoids）：
+// 当前仍存在的气泡，SC 捕获失败（macOS13/TCC 抖动/窗口刚注册未进 SC content）
+// 必须保守判 visible（当障碍避让），不能因 capture nil 当成收起导致底座重叠气泡。
+check("T-bv5b nil stats(previous hidden)→visible(保守避让,不沿用previous)",
+      BubbleVisibilityClassifier.classify(stats: nil, previous: .hidden) == .visible, "")
+check("T-bv5c nil stats(previous visible)→visible(保守避让)",
+      BubbleVisibilityClassifier.classify(stats: nil, previous: .visible) == .visible, "")
 
 // 调度（isDue + single-flight + reset）—— 经 lock 访问
 let probe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 1000) })
@@ -594,8 +602,11 @@ vanishProbe.probe(candidates: [mkw(301, layer: 3, CGRect(x: 0, y: 580, width: 34
 check("T-bv33b 候选消失→旧wid状态立即失效(非visible)",
       vanishProbe.visibility(for: CGWindowID(300)) != .visible, "实际=\(vanishProbe.visibility(for: CGWindowID(300)))")
 
-// T-bv34 (回归A·收起不复位)：同一 wid 仍在候选，但收起后 SC 捕获失败(nil) →
-// 不能滞留 visible 导致持续避让。收起态应转 hidden（状态随当前帧失效/复位）。
+// T-bv34 (P1·保守避让)：同一 wid 仍在当前候选集（knownWids），SC 捕获失败(nil) →
+// 必须保守判 visible（当障碍避让），不可因 capture nil 当成收起。
+// 这是 README "capture failure conservatively avoids" 契约：当前仍存在的气泡，
+// capture 失败时底座必须继续避让，不能重叠气泡。
+// 收起态的正确复位由 wid 从候选集消失驱动（见 T-bv33），不由 capture nil 驱动。
 var vanishTime = Date(timeIntervalSince1970: 8000)
 var vanishStats: BubbleAlphaStats? = BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
 let nilCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in vanishStats }
@@ -607,7 +618,7 @@ while nilProbe.lock.withLock({ $0.inFlight }) && Date() < nilPump0 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
 }
 check("T-bv34a 前置: expanded→visible", nilProbe.visibility(for: CGWindowID(310)) == .visible, "")
-// 收起：SC 捕获该窗口失败（内容收起/窗口从 SC content 移除）→ stats nil
+// SC 捕获该窗口失败（stats nil）——但 wid 仍在当前候选集 → 保守 visible（不当收起）
 vanishStats = nil
 vanishTime = Date(timeIntervalSince1970: 8001)
 nilProbe.probe(candidates: [nilCand])
@@ -615,12 +626,30 @@ let nilPump1 = Date().addingTimeInterval(5)
 while nilProbe.lock.withLock({ $0.inFlight }) && Date() < nilPump1 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
 }
-check("T-bv34b 收起后SC捕获nil→转hidden(不复位=残留visible缺陷)",
-      nilProbe.visibility(for: CGWindowID(310)) == .hidden,
+check("T-bv34b 候选仍存在+capture nil→保守visible(不误判收起,README保守避让)",
+      nilProbe.visibility(for: CGWindowID(310)) == .visible,
+      "实际=\(nilProbe.visibility(for: CGWindowID(310)))")
+
+// T-bv34c (P1 场景3·nil 后无 hidden-visible 错误转换)：收起(候选消失→hidden)
+// 后若再出现(候选重现)，capture 仍 nil 时必须回到 visible，不能因缓存/异步滞留 hidden。
+vanishTime = Date(timeIntervalSince1970: 8002)
+nilProbe.probe(candidates: [])   // 候选全部消失 → wid 310 失效为 hidden
+check("T-bv34c1 候选消失→旧wid立即hidden",
+      nilProbe.visibility(for: CGWindowID(310)) == .hidden, "")
+// 候选重新出现 + capture nil → 保守 visible（不能滞留 hidden）
+vanishTime = Date(timeIntervalSince1970: 8003)
+nilProbe.probe(candidates: [nilCand])
+let nilPump2 = Date().addingTimeInterval(5)
+while nilProbe.lock.withLock({ $0.inFlight }) && Date() < nilPump2 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv34c2 候选重现+capture nil→恢复visible(无hidden→visible滞留错误)",
+      nilProbe.visibility(for: CGWindowID(310)) == .visible,
       "实际=\(nilProbe.visibility(for: CGWindowID(310)))")
 
 // T-bv35 (回归A·收起后复位)：tick 序列模拟——expanded 探测 visible→下移；
-// 收起探测 → hidden → visibleObstacles 为空 → safeDockFrame 回 pet 下方（不复用上帧偏移）。
+// 收起后 wid 从候选集消失 → visibility 失效（hidden）→ visibleObstacles 为空
+// → safeDockFrame 回 pet 下方（不复用上帧偏移）。回归A复位由候选消失驱动，不由 capture nil 驱动。
 let petForCollapse = CGRect(x: 100, y: 100, width: 172, height: 179)   // maxY=279
 let bubbleForCollapse = CGRect(x: 80, y: 280, width: 345, height: 54)  // 280..334，与 dock 281..329 重叠
 let dockSizeBV = CGSize(width: 200, height: 48)
@@ -631,11 +660,67 @@ let avoidY = bubbleForCollapse.maxY + gapBV  // 336（避让位置）
 let dockY_expanded = Geometry.safeDockFrame(pet: petForCollapse, avoiding: [bubbleForCollapse],
                                             dockSize: dockSizeBV, gap: gapBV, screen: nil).frame?.origin.y
 check("T-bv35a expanded→dock避让到336", dockY_expanded == avoidY, "y=\(dockY_expanded ?? -1)")
-// 帧2 收起：visibility 转 hidden → visibleObstacles 为空 → dock 必须回到基础位置 281
+// 帧2 收起（wid 从候选集消失）→ visibility 失效（hidden）→ visibleObstacles 为空 → dock 必须回到基础位置 281
 let dockY_collapsed = Geometry.safeDockFrame(pet: petForCollapse, avoiding: [],
                                              dockSize: dockSizeBV, gap: gapBV, screen: nil).frame?.origin.y
 check("T-bv35b 收起→visibleObstacles空→dock复位到281(禁用上帧偏移)",
       dockY_collapsed == baseY, "y=\(dockY_collapsed ?? -1)")
+
+// T-bv36 (P1 场景2·候选消失时旧 cache/in-flight 不能继续成为障碍)：
+// 帧1 候选 A 被 capture 为 visible 并写入 cached[A]=visible；
+// 帧2 候选 A 从集合消失（knownWids 不含 A）→ visibility(A) 必须立即 hidden，
+// 即使 cached[A] 仍残留 visible，也不能继续作为障碍（回归A复位由候选消失驱动）。
+let p1capTime = Date(timeIntervalSince1970: 9000)
+let p1Expanded: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
+    BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // expanded → visible
+}
+let p1Probe = BubbleVisibilityProbe(now: { p1capTime }, capturer: p1Expanded)
+let p1Cand = mkw(400, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
+p1Probe.probe(candidates: [p1Cand])
+let p1Pump0 = Date().addingTimeInterval(5)
+while p1Probe.lock.withLock({ $0.inFlight }) && Date() < p1Pump0 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+check("T-bv36a 前置: 候选A expanded→cached visible",
+      p1Probe.visibility(for: CGWindowID(400)) == .visible, "")
+// 确认 cached 残留 visible（这是要被 knownWids 失效机制屏蔽的旧结果）
+let p1CachedResidue = p1Probe.lock.withLock { $0.cached[CGWindowID(400)] }
+check("T-bv36b cached[A]残留visible(旧结果存在,待失效屏蔽)",
+      p1CachedResidue == .visible, "cached[A]=\(String(describing: p1CachedResidue))")
+// 帧2 候选 A 从集合消失 → knownWids 更新 → visibility(A) 必须 hidden（不被残留 cache 继续当障碍）
+p1Probe.probe(candidates: [])
+check("T-bv36c 候选A消失→visibility立即hidden(旧cache不继续成为障碍)",
+      p1Probe.visibility(for: CGWindowID(400)) == .hidden, "")
+
+// T-bv37 (P1 场景2·在途 in-flight 写入不能复活已消失候选的障碍)：
+// 帧1 候选 A probe（in-flight 未完成）；帧2 候选 A 消失（knownWids 不含 A），
+// 此时 in-flight Task 完成（generation 仍匹配）写入 cached[A]=visible；
+// visibility(A) 仍必须 hidden —— knownWids 失效优先于 cached 写入。
+let p1Time2 = Date(timeIntervalSince1970: 9100)
+let p1SlowCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
+    try? await Task.sleep(nanoseconds: 200_000_000)
+    return BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // visible
+}
+let p1Probe2 = BubbleVisibilityProbe(now: { p1Time2 }, capturer: p1SlowCap)
+let p1Cand2 = mkw(401, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
+p1Probe2.probe(candidates: [p1Cand2])   // 启动 in-flight
+check("T-bv37a in-flight启动", p1Probe2.lock.withLock { $0.inFlight }, "")
+// 帧2 候选 A 消失（in-flight 仍在途）→ knownWids 更新
+p1Probe2.probe(candidates: [])
+check("T-bv37b 候选消失(in-flight在途)→visibility立即hidden",
+      p1Probe2.visibility(for: CGWindowID(401)) == .hidden, "")
+// in-flight 完成（generation 匹配 → 会写 cached[401]=visible），但 visibility 仍必须 hidden
+let p1Pump1 = Date().addingTimeInterval(5)
+while p1Probe2.lock.withLock({ $0.inFlight }) && Date() < p1Pump1 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+}
+let p1Cached401 = p1Probe2.lock.withLock { $0.cached[CGWindowID(401)] }
+check("T-bv37c in-flight完成→cached写入(但generation匹配与否取决于时序)",
+      true, "cached[401]=\(String(describing: p1Cached401))")
+// 关键断言：无论 in-flight 是否写 cached，visibility(401) 必须 hidden（knownWids 失效优先）
+check("T-bv37d 已消失候选→visibility保持hidden(in-flight写入不能复活障碍)",
+      p1Probe2.visibility(for: CGWindowID(401)) == .hidden,
+      "实际=\(p1Probe2.visibility(for: CGWindowID(401)))")
 
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
 

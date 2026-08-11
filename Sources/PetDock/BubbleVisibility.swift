@@ -35,13 +35,15 @@ struct BubbleAlphaStats: Equatable, Sendable {
 
 /// 纯函数分类（有滞回）。
 /// - stats 有值：按 alpha 阈值判 visible/hidden，中间区滞回（沿用 previous）。
-/// - stats nil（capture 失败 / SC 窗口已从 content 移除）→ `.hidden`。
-///   收起后的气泡窗口常被 ScreenCaptureKit 视为不可捕获（返回 nil），
-///   若保守判 visible 会令该候选永久占据障碍、底座持续下移不复位（回归 A）。
-///   nil = 当前帧无可统计内容 = 收起 = 不避让。
+/// - stats nil（capture 失败 / SC 窗口未进 content / macOS 13 / TCC 抖动）→ `.visible`（保守避让）。
+///   README 契约："on macOS 13 or capture failure, it conservatively avoids"。
+///   当前仍存在的气泡（wid 在候选集内），capture 失败时必须保守当障碍避让，
+///   不能因 capture nil 误判为收起导致底座重叠气泡。
+///   收起态的正确复位由 `BubbleVisibilityProbe.knownWids` 失效机制承担
+///   （wid 从候选集消失 → visibility 立即 hidden），不依赖 capture nil。
 enum BubbleVisibilityClassifier {
     static func classify(stats: BubbleAlphaStats?, previous: BubbleVisibility) -> BubbleVisibility {
-        guard let s = stats else { return .hidden }
+        guard let s = stats else { return .visible }
         if s.nonTransparentRatio >= BubbleVisibilityThresholds.openNonTransparent
             || s.bboxRatio >= BubbleVisibilityThresholds.openBBox { return .visible }
         if s.nonTransparentRatio <= BubbleVisibilityThresholds.closeNonTransparent
