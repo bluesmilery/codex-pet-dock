@@ -709,14 +709,16 @@ check("T-bv37a in-flight启动", p1Probe2.lock.withLock { $0.inFlight }, "")
 p1Probe2.probe(candidates: [])
 check("T-bv37b 候选消失(in-flight在途)→visibility立即hidden",
       p1Probe2.visibility(for: CGWindowID(401)) == .hidden, "")
-// in-flight 完成（generation 匹配 → 会写 cached[401]=visible），但 visibility 仍必须 hidden
+// in-flight 完成：候选消失时 probe([]) 已递增 generation，在途 Task 持有的旧 generation 失配
+// → 其结果被丢弃，绝不写 cached[401]（generation 校验是防止旧 in-flight 结果复活已消失候选
+// 障碍的第一道防线；第二道 knownWids 失效由 T-bv37d 覆盖）。
 let p1Pump1 = Date().addingTimeInterval(5)
 while p1Probe2.lock.withLock({ $0.inFlight }) && Date() < p1Pump1 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
 }
 let p1Cached401 = p1Probe2.lock.withLock { $0.cached[CGWindowID(401)] }
-check("T-bv37c in-flight完成→cached写入(但generation匹配与否取决于时序)",
-      true, "cached[401]=\(String(describing: p1Cached401))")
+check("T-bv37c in-flight完成→generation失配→cached不写入(旧结果被丢弃)",
+      p1Cached401 == nil, "cached[401]=\(String(describing: p1Cached401))")
 // 关键断言：无论 in-flight 是否写 cached，visibility(401) 必须 hidden（knownWids 失效优先）
 check("T-bv37d 已消失候选→visibility保持hidden(in-flight写入不能复活障碍)",
       p1Probe2.visibility(for: CGWindowID(401)) == .hidden,

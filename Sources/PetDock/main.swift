@@ -258,16 +258,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // 两类分别基于当前帧计算，再合并成唯一障碍集交 safeDockFrame 链式避让。
                     let obstacles = PetTracker.obstaclesNear(mascot: mascot, candidates: wins)
                     let petMaxY = mascot.bounds.maxY
+                    // 每个 obstacle 的种类只分类一次（obstaclesNear 已用 isBubble/isControl 过滤，
+                    // 这里仅区分气泡 vs 控制按钮以决定可见性判定路径），避免对同一候选重复调用 obstacleKind。
+                    let classified = obstacles.map { ($0, PetTracker.obstacleKind($0, petMaxY: petMaxY)) }
                     // 只对气泡类候选做像素可见性探测（控制按钮不经 SC，避免小窗捕获失败被误判收起）。
-                    let bubbleCandidates = obstacles.filter {
-                        PetTracker.obstacleKind($0, petMaxY: petMaxY) == .bubble
-                    }
+                    let bubbleCandidates = classified.filter { $0.1 == .bubble }.map { $0.0 }
                     bubbleProbe.probe(candidates: bubbleCandidates)
-                    // 合并：气泡(visible) + 控制按钮(全部)，各自当前帧可见性。
-                    let visibleObstacles = obstacles.filter { c in
-                        if PetTracker.obstacleKind(c, petMaxY: petMaxY) == .control { return true }
-                        return bubbleProbe.visibility(for: c.wid) == .visible
-                    }
+                    // 合并：气泡(visible) + 控制按钮(全部)，各自当前帧可见性。顺序与 obstacles 一致。
+                    let visibleObstacles = classified.filter { pair in
+                        pair.1 == .control ? true : bubbleProbe.visibility(for: pair.0.wid) == .visible
+                    }.map { $0.0 }
                     let scr = Geometry.screenContaining(quartzCenterX: mascot.bounds.midX, mascot.bounds.midY)
                     let shown = dock.placeBelow(petQuartzRect: mascot.bounds,
                                                 avoiding: visibleObstacles.map { $0.bounds }, visibleScreen: scr)
