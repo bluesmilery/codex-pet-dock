@@ -12,6 +12,7 @@ app: build
 	@mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	@cp $(BINARY) $(APP)/Contents/MacOS/PetDock
 	@cp build-resources/Info.plist $(APP)/Contents/Info.plist
+	@cp build-resources/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	@printf 'APPL????' > $(APP)/Contents/PkgInfo
 	@codesign -s - --force --identifier $(IDENT) $(APP)
 	@echo "已构建: $(APP)"

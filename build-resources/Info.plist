@@ -6,6 +6,8 @@
     <string>io.github.bluesmilery.codexpetdock</string>
     <key>CFBundleExecutable</key>
     <string>PetDock</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
     <key>CFBundleName</key>
     <string>PetDock</string>
     <key>CFBundleDisplayName</key>
