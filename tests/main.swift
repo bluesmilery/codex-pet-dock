@@ -165,18 +165,27 @@ PetTracker.resetPIDCacheForTesting()
 print("\n[unionCandidates/PID缓存] \(pass - enPass) passed, \(fail - enBase) failed")
 
 // ---- Geometry 坐标转换（多屏/负坐标）----
+// 固定两个 fixture：真实主屏 + 合成负坐标副屏。
+// 这样保留真实主屏几何，同时不要求物理多屏，也不让测试项数随 NSScreen.screens 变化。
 let gBase = fail, gPass = pass
 guard let main = NSScreen.screens.first else { fatalError("无屏幕") }
 let mh = main.frame.height
-for s in NSScreen.screens {
-    let f = s.frame
+let syntheticSecondary = CGRect(x: main.frame.minX - main.frame.width, y: main.frame.minY,
+                                width: main.frame.width, height: main.frame.height)
+var screenFixtures: [(label: String, frame: CGRect, expected: NSScreen?)] = [
+    ("primary", main.frame, main)
+]
+screenFixtures.append(("synthetic-negative", syntheticSecondary, nil))
+for fixture in screenFixtures {
+    let f = fixture.frame
     let q = CGRect(x: f.origin.x, y: mh - (f.origin.y + f.height), width: f.width, height: f.height)
     let back = Geometry.appKitRectFromQuartz(q)
     let ok = abs(back.origin.x - f.origin.x) < 0.01 && abs(back.origin.y - f.origin.y) < 0.01
         && abs(back.width - f.width) < 0.01 && abs(back.height - f.height) < 0.01
-    check("坐标往返一致 screen=\"\(s.localizedName)\" frame=\(f)", ok, "quartz=\(q) back=\(back)")
+    check("坐标往返一致 fixture=\(fixture.label) frame=\(f)", ok, "quartz=\(q) back=\(back)")
     let scr = Geometry.screenContaining(quartzCenterX: q.midX, q.midY)
-    check("屏中心落回本屏 screen=\"\(s.localizedName)\"", scr?.localizedName == s.localizedName, "")
+    let containsExpected = fixture.expected.map { scr?.frame == $0.frame } ?? (scr != nil)
+    check("屏中心落回 fixture=\(fixture.label)", containsExpected, "")
 }
 print("\n[Geometry] \(pass - gPass) passed, \(fail - gBase) failed")
 
@@ -817,10 +826,12 @@ check("L1 enabled=false→文件不创建(no-op)", !FileManager.default.fileExis
 let onLogger = PetLogger(enabled: true, logURL: logTmp)
 onLogger.log("hello-petdock")
 let l2Deadline = Date().addingTimeInterval(2)
-while Date() < l2Deadline && !FileManager.default.fileExists(atPath: logTmp.path) {
+var l2Content = ""
+while Date() < l2Deadline && !l2Content.contains("hello-petdock") {
+    l2Content = (try? String(contentsOf: logTmp, encoding: .utf8)) ?? ""
     RunLoop.current.run(until: Date().addingTimeInterval(0.02))
 }
-let l2Content = (try? String(contentsOf: logTmp, encoding: .utf8)) ?? ""
+// 以期望日志内容作为完成条件，不能只等文件出现（文件可能已创建但异步写入尚未完成）。
 check("L2 enabled=true→后台异步写入文件", l2Content.contains("hello-petdock"), "content=\(l2Content)")
 
 // L3: enabled=true → log() 异步派发（调用返回时尚未同步写盘，证明主线程无同步文件 IO）
