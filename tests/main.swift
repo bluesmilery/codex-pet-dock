@@ -183,9 +183,16 @@ for fixture in screenFixtures {
     let ok = abs(back.origin.x - f.origin.x) < 0.01 && abs(back.origin.y - f.origin.y) < 0.01
         && abs(back.width - f.width) < 0.01 && abs(back.height - f.height) < 0.01
     check("坐标往返一致 fixture=\(fixture.label) frame=\(f)", ok, "quartz=\(q) back=\(back)")
-    let scr = Geometry.screenContaining(quartzCenterX: q.midX, q.midY)
-    let containsExpected = fixture.expected.map { scr?.frame == $0.frame } ?? (scr != nil)
-    check("屏中心落回 fixture=\(fixture.label)", containsExpected, "")
+    if let expected = fixture.expected {
+        let scr = Geometry.screenContaining(quartzCenterX: q.midX, q.midY)
+        check("屏中心落回 fixture=\(fixture.label)", scr?.frame == expected.frame,
+              "actual=\(String(describing: scr?.frame))")
+    } else {
+        // NSScreen 是系统只读集合，不能注入合成屏供 screenContaining 查询；
+        // 合成 fixture 只验证负 x 边界和 Quartz↔AppKit 转换，不虚称命中系统屏。
+        let negativeBoundary = f.minX < 0 && q.minX == f.minX && back.minX == f.minX
+        check("合成负坐标 fixture 边界", negativeBoundary, "quartz=\(q) back=\(back)")
+    }
 }
 print("\n[Geometry] \(pass - gPass) passed, \(fail - gBase) failed")
 

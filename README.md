@@ -159,7 +159,7 @@ Refreshing is paused while the pet is not visible and resumes when it reappears.
 All tests are pure-function / fixture tests, compiled with `swiftc` against the real sources — **no screen-recording permission and no network required**:
 
 ```sh
-make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance (bubble + control button) + clamp + logger rotation + FollowTickPlanner (172 tests; geometry uses one real primary-screen fixture plus one synthetic negative-coordinate fixture)
+make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance (bubble + control button) + clamp + logger rotation + FollowTickPlanner (172 tests; geometry uses one real primary-screen fixture plus one synthetic negative-coordinate conversion fixture; synthetic screen selection is not asserted)
 make test-data    # data layer: weekly aggregation / incremental cache / backoff / pause / desensitization / codex path resolve / rpc stdio e2e (123 tests)
 make test-shell   # theme safe-parsing / settings persistence / hot-reload / autostart state mapping / StatusBar TCC hint (99 tests)
 make test         # full suite (394 tests in total)

@@ -158,7 +158,7 @@ make clean-logs   # 清理 /tmp 下的运行 / 诊断日志
 全部为纯函数 / fixture 测试，用 `swiftc` 编译真实源码后运行，**不依赖屏幕录制权限、不联网**：
 
 ```sh
-make test-ui      # 宠物识别 + 坐标转换 + 跟随状态机 + 气泡可见性 + 障碍避让（气泡 + 控制按钮）+ 边缘 clamp + 日志轮转 + FollowTickPlanner（172 项；几何测试固定使用真实主屏与一个合成负坐标副屏 fixture）
+make test-ui      # 宠物识别 + 坐标转换 + 跟随状态机 + 气泡可见性 + 障碍避让（气泡 + 控制按钮）+ 边缘 clamp + 日志轮转 + FollowTickPlanner（172 项；几何测试固定使用真实主屏与一个仅验证负坐标转换的合成 fixture，不断言合成屏幕选择）
 make test-data    # 数据层：周窗口聚合 / 增量缓存 / 退避 / 暂停 / 脱敏 / codex 路径解析 / rpc stdio 端到端（123 项）
 make test-shell   # 主题安全解析 / 设置持久化 / 热加载 / 自启状态映射 / StatusBar TCC 提示（99 项）
 make test         # 全量（共 394 项）
