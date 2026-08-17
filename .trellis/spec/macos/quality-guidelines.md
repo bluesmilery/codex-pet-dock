@@ -7,8 +7,15 @@
 ## 硬门禁
 
 - `swift build -c release` **0 warning**（不是「忽略 warning」，是 0）。
-- `make test` 全绿 = test-ui + test-data + test-shell 三个独立 swiftc 入口。
+- `make docs-check` 与 `make test-docs` 必须通过；它们离线检查公开 Markdown 的本地链接、目录完整性、旧路径和隐私残留。
+- `make test` 全绿 = docs gate + test-ui + test-data + test-shell 三个独立 swiftc 入口；公开口径仍为 172 + 123 + 99 = **394 项 Swift 断言**，文档测试另计。
 - 自动验证**不能代替**真机 QA：TCC 屏幕录制 / ScreenCaptureKit 像素捕获 / 多屏负坐标 / Instruments 内存。
+
+## Docs Impact
+
+- 每个实现任务在规划和 Review 中必须填写 `Docs Impact: none | update | new`。
+- 行为、接口、数据边界、验证状态或开发门禁变化时，`Docs Impact` 不能填写 `none`；相关 `docs/` 事实和验证说明应与代码在同一提交中更新。
+- 规则文档只保留执行约束和链接，不复制产品事实全文；详见 [Documentation Guidelines](./documentation-guidelines.md)。
 
 ## TDD 纪律
 

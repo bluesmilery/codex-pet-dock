@@ -16,10 +16,14 @@
 
 ```sh
 swift build -c release
+make docs-check
+make test-docs
 make test
 ```
 
-通过条件是 release 构建退出码 0 且 0 warning，`make test` 的 test-ui、test-data、test-shell 三个独立入口全部通过。当前公开套件口径为 **test-ui 172、test-data 123、test-shell 99（合计 394）**；BubbleVisibility 在 test-ui 中为 **49 项**。细分用例以测试源码为准，新增用例不要求同步修改本页的覆盖说明。
+通过条件是 release 构建退出码 0 且 0 warning，docs gate 通过，`make test` 的 test-ui、test-data、test-shell 三个独立入口全部通过。当前公开套件口径为 **test-ui 172、test-data 123、test-shell 99（合计 394 项 Swift 断言）**；BubbleVisibility 在 test-ui 中为 **49 项**。文档测试是额外门禁，不计入 394；细分用例以测试源码为准，新增用例不要求同步修改本页的覆盖说明。
+
+文档变更还需在任务和 Review 中记录 `Docs Impact: none | update | new`。`make docs-check` 离线检查本地链接、`docs/README.md` 目录完整性、旧顶层 docs 路径和公开隐私模式；它不检查外部 URL 可达性，也不替代真机验证。
 
 release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启动、UI 已渲染或真机交互已通过。
 

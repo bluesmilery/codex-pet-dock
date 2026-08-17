@@ -39,6 +39,21 @@ trellis platforms       # 确认 Codex 为 active
 
 上述目录已由仓库的 Trellis / Git ignore 规则覆盖。`.trellis/tasks/` 是任务工作流产生的本地任务资料，当前不属于本次文档候选；它可能以未跟踪状态出现，提交时不要将其加入候选。项目配置、源码和公开文档仍按正常 Git 跟踪。
 
+## 文档门禁与 Docs Impact
+
+公开文档目录入口是 [`docs/README.md`](../README.md)，其中记录 architecture、development、verification 文档的事实来源和更新触发条件。规则与事实分离：`.trellis/spec/macos/` 只保存开发门禁，单次任务的需求和证据保存在 `.trellis/tasks/`。
+
+每个实现任务在规划和 Review 中填写 `Docs Impact: none | update | new`。行为、接口、数据边界、验证状态或开发流程变化时，必须在同一提交中同步相关文档，不能以 README 重复数字代替测试源码或验收记录。
+
+提交文档或行为变更前运行：
+
+```sh
+make docs-check
+make test-docs
+```
+
+`make test` 会先执行这两个 docs gate，再执行 test-ui、test-data、test-shell；公开口径仍为 **172 + 123 + 99 = 394 项 Swift 断言**，文档测试不计入该数字。检查器只读仓库内公开 Markdown，不联网，也不读取认证文件、会话正文或浏览器 Profile。
+
 ## 日常检查
 
 ```sh

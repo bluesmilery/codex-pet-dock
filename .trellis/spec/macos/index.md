@@ -20,6 +20,7 @@
 | [AppKit Conventions](./appkit-conventions.md) | NSPanel/AppKit 坐标系/主线程约束 |
 | [Quality Guidelines](./quality-guidelines.md) | 0 warning / TDD / 真机 QA |
 | [Privacy Guidelines](./privacy-guidelines.md) | TCC / 隐私脱敏边界 |
+| [Documentation Guidelines](./documentation-guidelines.md) | docs-as-code 单一事实源 / 可发现性 / Docs Impact / 文档门禁 |
 
 ---
 

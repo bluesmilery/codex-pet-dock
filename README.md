@@ -154,6 +154,10 @@ Refreshing is paused while the pet is not visible and resumes when it reappears.
 
 ---
 
+## 📚 Documentation
+
+The [documentation catalog](docs/README.md) is the single entry point for architecture facts, development workflow, and candidate verification evidence. `.trellis/spec/macos/` contains executable development rules, while `.trellis/tasks/` contains per-task requirements and evidence. When behavior, interfaces, data boundaries, verification status, or development gates change, record `Docs Impact: none | update | new` and update the relevant source in the same commit.
+
 ## 🧪 Testing
 
 All tests are pure-function / fixture tests, compiled with `swiftc` against the real sources — **no screen-recording permission and no network required**:
@@ -162,7 +166,9 @@ All tests are pure-function / fixture tests, compiled with `swiftc` against the 
 make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance (bubble + control button) + clamp + logger rotation + FollowTickPlanner (172 tests; geometry uses one real primary-screen fixture plus one synthetic negative-coordinate conversion fixture; synthetic screen selection is not asserted)
 make test-data    # data layer: weekly aggregation / incremental cache / backoff / pause / desensitization / codex path resolve / rpc stdio e2e (123 tests)
 make test-shell   # theme safe-parsing / settings persistence / hot-reload / autostart state mapping / StatusBar TCC hint (99 tests)
-make test         # full suite (394 tests in total)
+make docs-check   # offline public-Markdown links / catalog / legacy-path / privacy gate
+make test-docs    # documentation checker unit tests
+make test         # full suite (394 Swift assertions + docs gate; docs tests are additional)
 ```
 
 Privacy boundaries are pinned by fixture tests: data-layer results contain no conversation-content decoys and no credentials. See `docs/architecture/data-layer.md` and `tests/`.
@@ -185,9 +191,10 @@ Privacy boundaries are pinned by fixture tests: data-layer results contain no co
 
 Issues and pull requests are welcome. Before submitting, please ensure:
 
-1. `make test` (full suite, 394 tests) passes;
+1. `make test` (docs gate + 394 Swift assertions) passes;
 2. the change introduces no code that reads credentials or conversation content, and no private-API calls;
-3. commit messages follow Conventional Commits.
+3. record `Docs Impact: none | update | new` and update the catalog when documentation changes;
+4. commit messages follow Conventional Commits.
 
 Project layout and key files:
 
@@ -216,7 +223,7 @@ More design rationale in [`docs/architecture/pet-window-detection.md`](docs/arch
 - New work happens on `feature/*` branches cut from `dev`, merged back into `dev` when done.
 - Merging `dev` → `main`, and pushing `main` to GitHub, both require **manual confirmation** — never automated.
 - **Do not** use `git push --all`, to avoid pushing local or temporary branches to the remote.
-- No remote URL or CI is fabricated in this document; all changes are validated by local `swift build -c release` and `make test` (394 tests).
+- No remote URL or CI is fabricated in this document; all changes are validated by local `swift build -c release` and `make test` (docs gate + 394 Swift assertions).
 
 ---
 

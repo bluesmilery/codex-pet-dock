@@ -1,8 +1,9 @@
+PYTHON ?= python3
 BINARY := .build/release/PetDock
 APP    := build/PetDock.app
 IDENT  := io.github.bluesmilery.codexpetdock
 
-.PHONY: build app run diagnose clean clean-logs test test-ui test-data test-shell
+.PHONY: build app run diagnose clean clean-logs docs-check test-docs test test-ui test-data test-shell
 
 build:
 	swift build -c release
@@ -53,6 +54,12 @@ test-shell:
 	swiftc tests/shell/main.swift Sources/PetDock/Theme.swift Sources/PetDock/Settings.swift Sources/PetDock/AutoStart.swift Sources/PetDock/StatusBar.swift -framework Cocoa -framework ServiceManagement -o /tmp/petdock-shelltests
 	/tmp/petdock-shelltests
 
-# 全量测试：UI + 数据(含 LiveDockProvider 映射) + Shell。
-test: test-ui test-data test-shell
-	@echo "全部测试通过"
+docs-check:
+	$(PYTHON) tools/check_docs.py .
+
+test-docs:
+	$(PYTHON) tests/test_check_docs.py
+
+# 全量测试：文档门禁 + UI + 数据(含 LiveDockProvider 映射) + Shell。
+test: docs-check test-docs test-ui test-data test-shell
+	@echo "全部测试通过（394 项 Swift 断言 + docs gate）"
