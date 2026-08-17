@@ -127,6 +127,25 @@ class CheckDocsTests(unittest.TestCase):
         )
         self.assertEqual(findings, [])
 
+    def test_link_targets_are_excluded_but_labels_and_coordinates_are_scanned(self):
+        findings = self.check(
+            {
+                "README.md": "[Docs](docs/README.md)\n",
+                "README.zh-CN.md": "[文档](docs/README.md)\n",
+                "docs/README.md": "- [Guide](guide.md)\n- [Query](query.md)\n",
+                "docs/guide.md": (
+                    "[x=1](query.md?x=1#frag)\n"
+                    "![image](query.md?x=1#frag)\n"
+                    "[remote](https://example.com/?x=1&y=2)\n"
+                    "CGRect(x: 12, y: 34)\n"
+                ),
+                "docs/query.md": "# Query\n",
+                ".trellis/spec/macos/index.md": "# Index\n",
+            }
+        )
+        coordinates = [finding for finding in findings if finding.code == "private-coordinate"]
+        self.assertEqual({finding.line for finding in coordinates}, {1, 4})
+
     def test_private_coordinates_hashes_and_trailer(self):
         findings = self.check(
             {

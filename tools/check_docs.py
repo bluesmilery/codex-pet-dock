@@ -111,6 +111,18 @@ def _iter_links(contents: str) -> Iterator[tuple[int, str, bool]]:
             yield _line_number(contents, match.start()), target, match.group(0).startswith("!")
 
 
+def _mask_link_targets(contents: str) -> str:
+    """Replace Markdown link destinations while preserving labels and prose."""
+
+    masked = list(contents)
+    for match in _MARKDOWN_LINK_RE.finditer(contents):
+        group = 1 if match.group(1) is not None else 2
+        start, end = match.span(group)
+        for index in range(start, end):
+            masked[index] = " "
+    return "".join(masked)
+
+
 def _local_target(root: Path, source: Path, raw_target: str) -> Optional[Path]:
     """Resolve a Markdown target, returning None for intentionally ignored URLs."""
 
@@ -243,7 +255,8 @@ def _check_legacy_paths(root: Path, paths: Iterable[Path]) -> list[Finding]:
 def _privacy_findings(path: Path, root: Path, contents: str) -> list[Finding]:
     findings: list[Finding] = []
     for line_number, line in enumerate(contents.splitlines(), start=1):
-        if _USER_PATH_RE.search(line):
+        scan_line = _mask_link_targets(line)
+        if _USER_PATH_RE.search(scan_line):
             findings.append(
                 _finding(
                     path,
@@ -253,7 +266,7 @@ def _privacy_findings(path: Path, root: Path, contents: str) -> list[Finding]:
                     "literal user path under /Users is not allowed",
                 )
             )
-        if _WINDOW_ID_RE.search(line):
+        if _WINDOW_ID_RE.search(scan_line):
             findings.append(
                 _finding(
                     path,
@@ -263,7 +276,7 @@ def _privacy_findings(path: Path, root: Path, contents: str) -> list[Finding]:
                     "numeric window id is not allowed",
                 )
             )
-        if _COORDINATE_RE.search(line):
+        if _COORDINATE_RE.search(scan_line):
             findings.append(
                 _finding(
                     path,
@@ -273,7 +286,7 @@ def _privacy_findings(path: Path, root: Path, contents: str) -> list[Finding]:
                     "runtime coordinate value is not allowed",
                 )
             )
-        if _CDHASH_RE.search(line):
+        if _CDHASH_RE.search(scan_line):
             findings.append(
                 _finding(
                     path,
@@ -283,7 +296,7 @@ def _privacy_findings(path: Path, root: Path, contents: str) -> list[Finding]:
                     "CDHash value is not allowed",
                 )
             )
-        if _LONG_HASH_RE.search(line):
+        if _LONG_HASH_RE.search(scan_line):
             findings.append(
                 _finding(
                     path,
@@ -293,7 +306,7 @@ def _privacy_findings(path: Path, root: Path, contents: str) -> list[Finding]:
                     "build-specific 40/64-character hash is not allowed",
                 )
             )
-        if _COAUTHORED_TRAILER_RE.search(line):
+        if _COAUTHORED_TRAILER_RE.search(scan_line):
             findings.append(
                 _finding(
                     path,
