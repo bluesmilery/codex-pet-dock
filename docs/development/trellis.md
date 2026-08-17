@@ -52,7 +52,7 @@ make docs-check
 make test-docs
 ```
 
-`make test` 会先执行这两个 docs gate，再执行 test-ui、test-data、test-shell；公开口径仍为 **172 + 123 + 99 = 394 项 Swift 断言**，文档测试不计入该数字。检查器只读仓库内公开 Markdown，不联网，也不读取认证文件、会话正文或浏览器 Profile。
+`make test` 会先执行这两个 docs gate，再执行 test-ui、test-data、test-shell；当前测试数字和证据以 [`docs/verification/dev-candidate.md`](../verification/dev-candidate.md) 为准，文档测试另计。检查器只读仓库内公开 Markdown，不联网，也不读取认证文件、会话正文或浏览器 Profile。
 
 ## 日常检查
 

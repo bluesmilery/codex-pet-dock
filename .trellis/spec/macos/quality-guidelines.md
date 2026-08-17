@@ -8,7 +8,7 @@
 
 - `swift build -c release` **0 warning**（不是「忽略 warning」，是 0）。
 - `make docs-check` 与 `make test-docs` 必须通过；它们离线检查公开 Markdown 的本地链接、目录完整性、旧路径和隐私残留。
-- `make test` 全绿 = docs gate + test-ui + test-data + test-shell 三个独立 swiftc 入口；公开口径仍为 172 + 123 + 99 = **394 项 Swift 断言**，文档测试另计。
+- `make test` 全绿 = docs gate + test-ui + test-data + test-shell 三个独立 swiftc 入口；当前测试数字和证据以 [dev 候选验收](../../../docs/verification/dev-candidate.md) 为准，文档测试另计。
 - 自动验证**不能代替**真机 QA：TCC 屏幕录制 / ScreenCaptureKit 像素捕获 / 多屏负坐标 / Instruments 内存。
 
 ## Docs Impact

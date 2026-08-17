@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
+import io
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from check_docs import check_repository
+from check_docs import check_repository, main
 
 
 class CheckDocsTests(unittest.TestCase):
@@ -53,12 +55,28 @@ class CheckDocsTests(unittest.TestCase):
             {
                 "README.md": "[Docs](docs/README.md)\n",
                 "README.zh-CN.md": "[文档](docs/README.md)\n",
-                "docs/README.md": "# Docs\n",
+                "docs/README.md": "# Docs\n![Guide](guide.md)\n",
                 "docs/guide.md": "# Guide\n",
                 ".trellis/spec/macos/index.md": "# Index\n",
             }
         )
         self.assertTrue(any(f.code == "uncatalogued-doc" for f in findings))
+
+    def test_cli_reports_failure_and_exit_status(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "README.md").write_text("[Missing](docs/missing.md)\n", encoding="utf-8")
+            (root / "README.zh-CN.md").write_text("# README\n", encoding="utf-8")
+            (root / "docs").mkdir()
+            (root / "docs/README.md").write_text("# Docs\n", encoding="utf-8")
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main([str(root)])
+
+        self.assertEqual(status, 1)
+        self.assertIn("broken-link", output.getvalue())
+        self.assertIn("finding(s)", output.getvalue())
 
     def test_legacy_top_level_document_path(self):
         findings = self.check(
@@ -78,13 +96,36 @@ class CheckDocsTests(unittest.TestCase):
                 "README.md": "[Docs](docs/README.md)\n",
                 "README.zh-CN.md": "[文档](docs/README.md)\n",
                 "docs/README.md": "# Docs\n- [Guide](guide.md)\n",
-                "docs/guide.md": "Runtime path /Users/alice/project and wid=12345.\n",
+                "docs/guide.md": (
+                    "Runtime path /Users/" + "alice/project\n"
+                    + '{"wid": ' + "12345" + '}\n'
+                    + '{"windowID": ' + "23456" + '}\n'
+                    + '{"kCGWindowNumber": ' + "34567" + '}\n'
+                    + "`wid`: " + "45678" + "\n"
+                ),
                 ".trellis/spec/macos/index.md": "# Index\n",
             }
         )
         codes = {finding.code for finding in findings}
         self.assertIn("private-path", codes)
         self.assertIn("private-window-id", codes)
+        self.assertGreaterEqual(sum(f.code == "private-window-id" for f in findings), 4)
+
+    def test_percent_encoded_path_survives_fragment_and_query_stripping(self):
+        findings = self.check(
+            {
+                "README.md": "[Docs](docs/README.md)\n",
+                "README.zh-CN.md": "[文档](docs/README.md)\n",
+                "docs/README.md": (
+                    "- [hash](hash%23name.md?version=1#section)\n"
+                    "- [query](query%3Fname.md#section)\n"
+                ),
+                "docs/hash#name.md": "# Hash\n",
+                "docs/query?name.md": "# Query\n",
+                ".trellis/spec/macos/index.md": "# Index\n",
+            }
+        )
+        self.assertEqual(findings, [])
 
     def test_private_coordinates_hashes_and_trailer(self):
         findings = self.check(

@@ -50,7 +50,8 @@ _MARKDOWN_LINK_RE = re.compile(
 _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _USER_PATH_RE = re.compile(r"/Users/(?P<user>[^/\s<>]+)(?:/|$)")
 _WINDOW_ID_RE = re.compile(
-    r"\b(?:wid|window[_ -]?id|kCGWindowNumber)\s*(?:=|:)\s*"
+    r"(?<![A-Za-z0-9_])[`\"']?(?:wid|window[_ -]?id|kCGWindowNumber)"
+    r"[`\"']?\s*(?:=|:)\s*"
     r"(?P<value>\d+)\b",
     re.IGNORECASE,
 )
@@ -103,17 +104,17 @@ def _line_number(contents: str, offset: int) -> int:
     return contents.count("\n", 0, offset) + 1
 
 
-def _iter_links(contents: str) -> Iterator[tuple[int, str]]:
+def _iter_links(contents: str) -> Iterator[tuple[int, str, bool]]:
     for match in _MARKDOWN_LINK_RE.finditer(contents):
         target = match.group(1) or match.group(2)
         if target is not None:
-            yield _line_number(contents, match.start()), target
+            yield _line_number(contents, match.start()), target, match.group(0).startswith("!")
 
 
 def _local_target(root: Path, source: Path, raw_target: str) -> Optional[Path]:
     """Resolve a Markdown target, returning None for intentionally ignored URLs."""
 
-    target = unquote(raw_target.strip())
+    target = raw_target.strip()
     if not target or target.startswith("#"):
         return None
     if target.lower().startswith(("http:", "https:", "mailto:")):
@@ -123,6 +124,9 @@ def _local_target(root: Path, source: Path, raw_target: str) -> Optional[Path]:
 
     target = target.split("#", 1)[0].split("?", 1)[0]
     if not target:
+        return None
+    target = unquote(target)
+    if _SCHEME_RE.match(target):
         return None
 
     resolved = (source.parent / target).resolve()
@@ -142,7 +146,7 @@ def _check_links(root: Path, paths: Iterable[Path]) -> list[Finding]:
     root_resolved = root.resolve()
     for path in paths:
         contents = path.read_text(encoding="utf-8")
-        for line, raw_target in _iter_links(contents):
+        for line, raw_target, _is_image in _iter_links(contents):
             target = _local_target(root_resolved, path, raw_target)
             if target is None:
                 continue
@@ -181,7 +185,9 @@ def _check_catalog(root: Path, paths: Iterable[Path]) -> list[Finding]:
 
     contents = catalog.read_text(encoding="utf-8")
     linked_docs: set[Path] = set()
-    for line, raw_target in _iter_links(contents):
+    for line, raw_target, is_image in _iter_links(contents):
+        if is_image:
+            continue
         target = _local_target(root, catalog, raw_target)
         if target is not None and target.is_relative_to(root.resolve()):
             linked_docs.add(target)

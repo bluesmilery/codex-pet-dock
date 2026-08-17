@@ -21,4 +21,4 @@
 - 新增或移动 `docs/**/*.md` 时，必须更新 [`docs/README.md`](../../../docs/README.md) 的目录表和本地链接；链接目标必须留在仓库内。
 - 文档改动提交前运行 `make docs-check` 与 `make test-docs`。检查器离线验证输入清单、Markdown 本地链接、目录完整性、旧顶层 docs 路径和公开隐私模式。
 - 每个实现任务在规划阶段填写 `Docs Impact: none | update | new`，在 Review 中复核：行为、接口、数据边界、验证状态或开发门禁变化时，不能填写 `none`。
-- `make test` 包含 docs gate 和三套 Swift 入口；docs 测试是额外门禁，不计入公开的 394 项 Swift 断言。
+- `make test` 包含 docs gate 和三套 Swift 入口；当前测试数字以 [dev 候选验收](../../../docs/verification/dev-candidate.md) 为准，docs 测试是额外门禁。

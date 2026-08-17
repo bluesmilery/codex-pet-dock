@@ -163,13 +163,15 @@ The [documentation catalog](docs/README.md) is the single entry point for archit
 All tests are pure-function / fixture tests, compiled with `swiftc` against the real sources — **no screen-recording permission and no network required**:
 
 ```sh
-make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance (bubble + control button) + clamp + logger rotation + FollowTickPlanner (172 tests; geometry uses one real primary-screen fixture plus one synthetic negative-coordinate conversion fixture; synthetic screen selection is not asserted)
-make test-data    # data layer: weekly aggregation / incremental cache / backoff / pause / desensitization / codex path resolve / rpc stdio e2e (123 tests)
-make test-shell   # theme safe-parsing / settings persistence / hot-reload / autostart state mapping / StatusBar TCC hint (99 tests)
+make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance (bubble + control button) + clamp + logger rotation + FollowTickPlanner
+make test-data    # data layer: weekly aggregation / incremental cache / backoff / pause / desensitization / codex path resolve / rpc stdio e2e
+make test-shell   # theme safe-parsing / settings persistence / hot-reload / autostart state mapping / StatusBar TCC hint
 make docs-check   # offline public-Markdown links / catalog / legacy-path / privacy gate
 make test-docs    # documentation checker unit tests
-make test         # full suite (394 Swift assertions + docs gate; docs tests are additional)
+make test         # full suite (Swift tests + docs gate; docs tests are additional)
 ```
+
+The current Swift test counts and verification evidence are maintained in [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md).
 
 Privacy boundaries are pinned by fixture tests: data-layer results contain no conversation-content decoys and no credentials. See `docs/architecture/data-layer.md` and `tests/`.
 
@@ -191,7 +193,7 @@ Privacy boundaries are pinned by fixture tests: data-layer results contain no co
 
 Issues and pull requests are welcome. Before submitting, please ensure:
 
-1. `make test` (docs gate + 394 Swift assertions) passes;
+1. `make test` (docs gate + Swift suite) passes;
 2. the change introduces no code that reads credentials or conversation content, and no private-API calls;
 3. record `Docs Impact: none | update | new` and update the catalog when documentation changes;
 4. commit messages follow Conventional Commits.
@@ -223,7 +225,7 @@ More design rationale in [`docs/architecture/pet-window-detection.md`](docs/arch
 - New work happens on `feature/*` branches cut from `dev`, merged back into `dev` when done.
 - Merging `dev` → `main`, and pushing `main` to GitHub, both require **manual confirmation** — never automated.
 - **Do not** use `git push --all`, to avoid pushing local or temporary branches to the remote.
-- No remote URL or CI is fabricated in this document; all changes are validated by local `swift build -c release` and `make test` (docs gate + 394 Swift assertions).
+- No remote URL or CI is fabricated in this document; all changes are validated by local `swift build -c release` and `make test` (docs gate + Swift suite). Current test-count evidence lives in [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md).
 
 ---
 
