@@ -204,7 +204,7 @@ make test         # 全量（共 394 项）
 | `Sources/PetDock/AutoStart.swift` | 登录自启（`SMAppService`） |
 | `Sources/PetDock/Settings.swift` | `UserDefaults` 偏好 |
 
-更多设计依据见 [`docs/architecture/pet-window-detection.md`](docs/architecture/pet-window-detection.md)、[`docs/architecture/data-layer.md`](docs/architecture/data-layer.md) 与 [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md)。
+更多设计依据见 [`docs/architecture/pet-window-detection.md`](docs/architecture/pet-window-detection.md)、[`docs/architecture/data-layer.md`](docs/architecture/data-layer.md)、[`docs/architecture/dock-obstacle-avoidance.md`](docs/architecture/dock-obstacle-avoidance.md) 与 [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md)。
 
 ---
 

@@ -32,33 +32,33 @@ codex app-server generate-json-schema --out <dir>
 | 字段 | 路径 | 说明 |
 | --- | --- | --- |
 | 时间戳 | 行顶层 `timestamp`（ISO8601 字符串） | 归入时间窗口 |
-| Token 增量 | `payload.info.last_token_usage.total_tokens`（number） | 单次增量 |
+| Token 增量 | `payload.info.last_token_usage.{total_tokens,input_tokens,cached_input_tokens,output_tokens}`（number） | 单次增量；缺失字段按 0 |
 
-计数口径是同一会话内对 `last_token_usage.total_tokens` 求和；`total_token_usage` 是会话累计值，不能直接跨行求和。损坏行、无 token 行或无 timestamp 行均跳过。
+计数口径是同一会话内分别对 `last_token_usage` 的四个数值字段求和；`total_tokens` 是总量，`total_token_usage` 是会话累计值，不能直接跨行求和。损坏行、无 token 行或无 timestamp 行均跳过。
 
-仅提取 `timestamp` 与 `last_token_usage.total_tokens` 两个数值字段，缓存也只持久化这两个字段，不含正文。
+仅提取 `timestamp` 与 `last_token_usage` 的 total/input/cached/output 四个数值字段，缓存也只持久化这五个字段，不含正文。
 
 ## 数据模型与服务
 
 `Sources/PetDock/Data/Models.swift` 定义：
 
-- `WeekLeft`：`usedPercent`、`remainingPercent`（`100 - used`）、`resetsAt`、`windowMinutes`、`isWeekly`（≥10080）和 `planType`。
-- `WeekTokens`：`totalTokens`、`windowStart`、`windowEnd` 和 `sampleCount`。
-- `TokenUsagePoint`：可缓存的 `timestamp` + `tokens`。
+- `WeekLeft`：`usedPercent`、`remainingPercent`（`100 - used`）、`resetsAt`、`windowMinutes`、`isWeekly`（≥10080）、`planType` 和 `fetchedAt`。
+- `WeekTokens`：`totalTokens`、`inputTokens`、`cachedInputTokens`、`outputTokens`、`windowStart`、`windowEnd`、`sampleCount`、`sessionFileCount` 和 `fetchedAt`。
+- `TokenUsagePoint`：可缓存的 `timestamp` + `tokens`、`input`、`cached`、`output` 四个 Int64 数值。
 - `DataResult<T>` / `DataError`：统一结果类型，仅承载可读错误，不承载凭证或正文。
 - `Backoff.nextDelay(afterFailures:)`：纯函数退避表。
 
 | 文件 | 责任 |
 | --- | --- |
 | `CodexExecutableResolver.swift` | 解析 codex 绝对路径：环境变量覆盖（展开 `~` 且必须绝对）→ 绝对目录 `PATH` → `~/.local/bin`、nvm 语义版本降序、`~/.volta/bin` 与可注入的系统候选；跟随符号链接。 |
-| `RateLimitClient.swift` | 通过 `Process.executableURL` 启动 codex，完成 stdio JSON-RPC；`parse(_:)` 与 `childEnvironment(_:)` 为纯函数，子进程 PATH 会以前置 codex 父目录并保留其余绝对目录。 |
+| `RateLimitClient.swift` | 通过 `Process.executableURL` 启动 codex，完成 stdio JSON-RPC；`parse(_:)` 与 `childEnvironment(_:)` 为纯函数，子进程 PATH 会以前置 codex 父目录并保留原 PATH 条目（不做绝对路径过滤）。 |
 | `TokenUsageLogReader.swift` | 按日期桶扫描日志，只取数值并维护增量缓存；`parseLine` / `parseISO` 为纯函数。 |
 | `PetDockDataService.swift` | 组合两数据源，分别维护退避计数，并提供 `pause()` / `resume()`。 |
 | `LiveDockProvider.swift` | 在主线程缓存快照，后台刷新后映射为 UI 数据。 |
 
 ### 增量缓存
 
-`TokenUsageLogReader` 按「文件路径 → `{size, points}`」缓存整文件解析结果：文件大小不变时复用，变化时重读该文件。缓存可落盘以跨进程复用，但只保存 timestamp + tokens。进程内增量由 `readPoints` 维护。
+`TokenUsageLogReader` 按「文件路径 → `{size, points}`」维护进程内缓存：文件大小不变时复用，变化时重读该文件；当前扫描范围之外或已删除的条目会被淘汰。若提供 `cacheURL`，同一结构以 JSON 原子写入供跨进程复用；每个 point 只含 timestamp 与四个 token 数值。未提供 `cacheURL` 时仅使用进程内缓存。
 
 ### 退避与暂停
 
@@ -80,6 +80,6 @@ make build
 make test-data
 ```
 
-`make test-data` 使用 `tests/DataTests.swift` 与脱敏 fixture，不联网且不需要屏幕录制权限。当前公开口径为 **test-data 123 项**，覆盖周窗口聚合、脱敏、增量缓存与淘汰、`parseLine` 鲁棒性、WeekLeft 窗口与重置时间、退避、暂停、服务组合、LiveDockProvider 映射、并发安全、codex 路径解析、子进程 PATH、LineReader、日期 fixture 以及 rpc stdio fixture。细分编号以测试入口源码为准，避免文档数字随新增用例漂移。
+`make test-data` 使用 `tests/DataTests.swift` 与脱敏 fixture，不联网且不需要屏幕录制权限。当前公开口径为 **test-data 123 项**，覆盖周窗口聚合、四项 token 数值与脱敏、增量缓存与淘汰、`parseLine` 鲁棒性、WeekLeft 窗口与重置时间、退避、暂停、服务组合、LiveDockProvider 映射、并发安全、codex 路径解析、子进程 PATH、LineReader、日期 fixture 以及 rpc stdio fixture。细分编号以测试入口源码为准，避免文档数字随新增用例漂移。
 
 集成入口为 `PetDockDataService(rateLimit:tokenLog:now:)` 的 `fetchWeekLeft()`、`fetchWeekTokens()`、`weekLeftNextDelay`、`weekTokensNextDelay`、`pause()` 和 `resume()`。

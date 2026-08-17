@@ -21,6 +21,8 @@ make test
 
 通过条件是 release 构建退出码 0 且 0 warning，`make test` 的 test-ui、test-data、test-shell 三个独立入口全部通过。当前公开套件口径为 **test-ui 172、test-data 123、test-shell 99（合计 394）**；BubbleVisibility 在 test-ui 中为 **49 项**。细分用例以测试源码为准，新增用例不要求同步修改本页的覆盖说明。
 
+release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启动、UI 已渲染或真机交互已通过。
+
 自动测试使用纯函数、依赖注入和脱敏 fixture，不联网、不读取认证文件、不读取会话正文，也不需要屏幕录制权限。数据层只聚合 `last_token_usage` 数值；BubbleVisibility 只在内存计算 alpha 比例。
 
 ## 静态结论
@@ -43,6 +45,10 @@ make test
 6. 展开和收起会话气泡，确认展开时底座下移、收起时回到宠物下方；控制按钮出现 / 消失不改变避让分类结论。
 7. 在真实屏幕录制授权下验证 BubbleVisibility 的展开→收起→展开可逆性，以及捕获失败时的保守避让。
 8. 使用状态栏菜单验证主题、显示 / 隐藏底座、退出和登录自启等 Accessibility / SMAppService 交互。
+9. 验证底座与详情卡的透明渲染、字段布局和详情卡点击展开 / 收起。
+10. 验证三种内置主题切换，以及外部 JSON 主题文件的安全解析和热加载。
+11. 在已登录的真实 Codex 环境中验证 WEEK LEFT / WEEK TOKENS 刷新、窗口边界和独立退避；不输出账户或会话内容。
+12. 观察 Follower 移动升频、稳定降频、隐藏与重捕的实际性能和体感。
 
 这些项目依赖 TCC、ScreenCaptureKit、Accessibility、真实多显示器和 `.app` 运行环境，不能由 `make test` 代替。`make app` 属于发布 / 真机阶段命令，本页不把其执行状态写成当前候选结论。
 

@@ -8,7 +8,8 @@
 
 - Codex 桌面应用的 bundle identifier 为 `com.openai.codex`；安装版本可能不同。
 - 应用基于 Electron。主进程 `ChatGPT` 之外还有 Framework、Renderer、node_repl 等 helper，窗口的 `kCGWindowOwnerPID` 不一定等于 `NSRunningApplication` 返回的主 PID。
-- 诊断同时按 PID 与 ownerName 枚举以发现真实归属；运行期默认主通道，必要时把诊断确认的 helper PID 纳入 `codexPIDs()`。
+- 诊断和运行期都按 PID 与 ownerName 两个通道枚举以发现真实归属；运行期 `unionCandidates()` 每 tick 基于同一份窗口快照合并 PID 通道与 ownerName 关键词通道（`Chat`、`GPT`、`Codex`、`OpenAI`），ownerName 是 helper / renderer 窗口的运行兜底，不只是诊断扩展。
+- `codexPIDs()` 只通过 bundle id 查询并缓存 Codex 主进程 PID；helper PID 不写入该缓存，统一由每 tick 的 ownerName 通道补足。
 - `CGWindowList` 的 `kCGWindowBounds` 使用 Quartz 全局坐标（主屏左上原点、y 向下），`NSScreen.frame` 使用 AppKit 全局坐标（主屏左下原点、y 向上）；统一换算见 `Geometry.swift`，支持多显示器和负坐标。
 
 所有枚举均为只读公开 API，不修改 Codex，不使用私有 CGS / SPI。
@@ -59,3 +60,5 @@
 ## 校准依据
 
 曾观察到 Mascot 本体与 Composition Surface、Voice Controls 等周边窗口同时存在，且周边 layer 可能更高、尺寸跨度更大。仅按 layer 会选中辅助窗，因此当前规则把 title 含 `Mascot` 的合理候选置于高 layer 回退之前，并用最小边与标题黑名单排除辅助控件。该顺序由纯函数回归用例持续锁定。
+
+`Mascot` title 是当前可观测的稳定标识，但 Codex 未来可能改名或移除该 title。届时识别会降级到 layer + `isReasonablePet` 几何回退；需要同步更新规则、fixture 与本说明，不能把 title 命中视为永久协议。

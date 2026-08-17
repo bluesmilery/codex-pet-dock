@@ -205,7 +205,7 @@ Project layout and key files:
 | `Sources/PetDock/AutoStart.swift` | Launch at login (`SMAppService`) |
 | `Sources/PetDock/Settings.swift` | `UserDefaults` preferences |
 
-More design rationale in [`docs/architecture/pet-window-detection.md`](docs/architecture/pet-window-detection.md), [`docs/architecture/data-layer.md`](docs/architecture/data-layer.md), and [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md).
+More design rationale in [`docs/architecture/pet-window-detection.md`](docs/architecture/pet-window-detection.md), [`docs/architecture/data-layer.md`](docs/architecture/data-layer.md), [`docs/architecture/dock-obstacle-avoidance.md`](docs/architecture/dock-obstacle-avoidance.md), and [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md).
 
 ---
 
