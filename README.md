@@ -107,7 +107,7 @@ Diagnostic mode (`--diagnose`) enumerates windows, locates the Codex pet, and wr
 
 ## 📊 Data Sources & Semantics
 
-Only two pieces of data are surfaced; their fields and semantics are documented in `docs/data-layer.md`. The example values below are illustrative placeholders, not any real account data.
+Only two pieces of data are surfaced; their fields and semantics are documented in `docs/architecture/data-layer.md`. The example values below are illustrative placeholders, not any real account data.
 
 | Metric | Source | Parsed fields | Example (placeholder) |
 | --- | --- | --- | --- |
@@ -165,7 +165,7 @@ make test-shell   # theme safe-parsing / settings persistence / hot-reload / aut
 make test         # full suite (394 tests in total)
 ```
 
-Privacy boundaries are pinned by fixture tests: data-layer results contain no conversation-content decoys and no credentials. See `docs/data-layer.md` and `tests/`.
+Privacy boundaries are pinned by fixture tests: data-layer results contain no conversation-content decoys and no credentials. See `docs/architecture/data-layer.md` and `tests/`.
 
 ---
 
@@ -177,7 +177,7 @@ Privacy boundaries are pinned by fixture tests: data-layer results contain no co
 - **Cross-app relative z-order is not controllable**: mitigated with a `.floating` level and non-overlapping geometry.
 - **Limited platform scope**: currently only Apple Silicon on macOS 13+, and only for the Codex desktop pet.
 - **Launch at login requires running as an `.app`**: `SMAppService` is unavailable for a raw command-line run (not an `.app` bundle); this is expected.
-- **Some interactions await real-device verification**: UI automation is blocked by system Accessibility; some manual-interaction items are not yet verified one by one on a real device (see `docs/final-success-criteria.md`).
+- **Some interactions await real-device verification**: UI automation is blocked by system Accessibility; some manual-interaction items are not yet verified one by one on a real device (see `docs/verification/dev-candidate.md`).
 
 ---
 
@@ -205,7 +205,7 @@ Project layout and key files:
 | `Sources/PetDock/AutoStart.swift` | Launch at login (`SMAppService`) |
 | `Sources/PetDock/Settings.swift` | `UserDefaults` preferences |
 
-More design rationale in [`docs/pet-window-detection.md`](docs/pet-window-detection.md), [`docs/data-layer.md`](docs/data-layer.md), and [`docs/final-success-criteria.md`](docs/final-success-criteria.md).
+More design rationale in [`docs/architecture/pet-window-detection.md`](docs/architecture/pet-window-detection.md), [`docs/architecture/data-layer.md`](docs/architecture/data-layer.md), and [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md).
 
 ---
 

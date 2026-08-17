@@ -1,6 +1,6 @@
 import Cocoa
 
-/// 宠物窗口识别阈值（候选，与 docs/pet-window-detection.md 对应，待真实数据校准）。
+/// 宠物窗口识别阈值（与 docs/architecture/pet-window-detection.md 对应）。
 enum PetHeuristics {
     static let mainMinArea: CGFloat = 150_000   // 主聊天窗口面积下限
     static let mainMinSide: CGFloat = 400       // 主窗口最大边下限

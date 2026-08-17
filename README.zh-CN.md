@@ -106,7 +106,7 @@ make clean-logs   # 清理 /tmp 下的运行 / 诊断日志
 
 ## 📊 数据来源与口径
 
-仅承载两项数据，均已在 `docs/data-layer.md` 中记录字段与口径。下表示例值为说明用占位，非任何真实账户数据。
+仅承载两项数据，均已在 `docs/architecture/data-layer.md` 中记录字段与口径。下表示例值为说明用占位，非任何真实账户数据。
 
 | 指标 | 来源 | 解析字段 | 显示示例（占位） |
 | --- | --- | --- | --- |
@@ -164,7 +164,7 @@ make test-shell   # 主题安全解析 / 设置持久化 / 热加载 / 自启状
 make test         # 全量（共 394 项）
 ```
 
-隐私边界由 fixture 测试固化：数据层结果不包含会话正文诱饵、不包含凭证。详见 `docs/data-layer.md` 与 `tests/`。
+隐私边界由 fixture 测试固化：数据层结果不包含会话正文诱饵、不包含凭证。详见 `docs/architecture/data-layer.md` 与 `tests/`。
 
 ---
 
@@ -176,7 +176,7 @@ make test         # 全量（共 394 项）
 - **跨应用窗口相对 z-order 不可控**：以 `.floating` 层级 + 几何不重叠的方式降级处理。
 - **平台范围有限**：当前仅适配 Apple Silicon 上的 macOS 13+，且仅针对 Codex 桌面宠物。
 - **登录自启需作为 `.app` 运行**：命令行裸跑（非 `.app` bundle）时 `SMAppService` 不可用，属预期。
-- **部分交互待真机验证**：UI 自动化受系统 Accessibility 限制，部分手工交互项尚未在真机逐项验证（见 `docs/final-success-criteria.md`）。
+- **部分交互待真机验证**：UI 自动化受系统 Accessibility 限制，部分手工交互项尚未在真机逐项验证（见 `docs/verification/dev-candidate.md`）。
 
 ---
 
@@ -204,7 +204,7 @@ make test         # 全量（共 394 项）
 | `Sources/PetDock/AutoStart.swift` | 登录自启（`SMAppService`） |
 | `Sources/PetDock/Settings.swift` | `UserDefaults` 偏好 |
 
-更多设计依据见 [`docs/pet-window-detection.md`](docs/pet-window-detection.md)、[`docs/data-layer.md`](docs/data-layer.md) 与 [`docs/final-success-criteria.md`](docs/final-success-criteria.md)。
+更多设计依据见 [`docs/architecture/pet-window-detection.md`](docs/architecture/pet-window-detection.md)、[`docs/architecture/data-layer.md`](docs/architecture/data-layer.md) 与 [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md)。
 
 ---
 
