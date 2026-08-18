@@ -1,6 +1,6 @@
 // diagnose.swift — Codex 宠物窗口枚举诊断工具（纯公开 API）
-// 用途：枚举 bundle id com.openai.codex 主进程名下所有窗口及其属性，
-//       输出每个窗口的可观测特征，供人工提炼"宠物窗口"识别规则。
+// 用途：枚举 bundle id com.openai.codex 主进程名下窗口的脱敏结构特征，
+//       输出候选数量、层级与可见性，供人工提炼"宠物窗口"识别规则。
 // 运行：swift diagnose.swift            （可读文本）
 //       swift diagnose.swift --json     （机器可读，便于测试）
 // 说明：只读取窗口元数据，不修改 Codex，不触碰任何认证文件。
@@ -27,14 +27,9 @@ let pid = app.processIdentifier
 if !jsonMode {
     print("=== 进程定位 ===")
     print("bundle id : \(bundleID)")
-    print("name      : \(app.localizedName ?? "?")")
-    print("pid       : \(pid)")
-    print("bundleURL : \(app.bundleURL?.path ?? "?")")
-    print("\n=== 屏幕（NSScreen，AppKit 左下原点）===")
-    for (i, s) in NSScreen.screens.enumerated() {
-        print("[screen \(i)] frame=\(s.frame) visibleFrame=\(s.visibleFrame)")
-    }
-    print("\n=== 该 PID 名下的窗口（CGWindowList，Quartz 左上原点）===")
+    print("主进程数量: 1")
+    print("屏幕数量: \(NSScreen.screens.count)")
+    print("\n=== 该应用名下的脱敏窗口特征 ===")
 }
 
 // --- 2. 枚举窗口 ---
@@ -55,31 +50,28 @@ func readRect(_ w: [String: Any]) -> CGRect {
 }
 
 struct WinInfo {
-    let wid: CGWindowID
-    let title: String
-    let ownerName: String
     let layer: Int
     let alpha: Double
     let isOnscreen: Bool
     let sharingState: Int
     let storeType: Int
-    let quartzBounds: CGRect
+    let sizeClass: String
 }
 
 var wins: [WinInfo] = []
 for w in infos {
     let op = num(w, kCGWindowOwnerPID as String)?.int32Value ?? -1
     guard op == pid else { continue }
+    let rect = readRect(w)
+    let maxSide = max(rect.width, rect.height)
+    let sizeClass = maxSide <= 64 ? "tiny" : (maxSide <= 320 ? "small" : (maxSide <= 800 ? "medium" : "large"))
     wins.append(WinInfo(
-        wid: CGWindowID(num(w, kCGWindowNumber as String)?.uint32Value ?? 0),
-        title: (w[kCGWindowName as String] as? String) ?? "",
-        ownerName: (w[kCGWindowOwnerName as String] as? String) ?? "",
         layer: num(w, kCGWindowLayer as String)?.intValue ?? 0,
         alpha: num(w, kCGWindowAlpha as String)?.doubleValue ?? 1.0,
         isOnscreen: (w[kCGWindowIsOnscreen as String] as? Bool) ?? false,
         sharingState: num(w, kCGWindowSharingState as String)?.intValue ?? 0,
         storeType: num(w, kCGWindowStoreType as String)?.intValue ?? 0,
-        quartzBounds: readRect(w)
+        sizeClass: sizeClass
     ))
 }
 
@@ -91,26 +83,15 @@ if jsonMode {
     var arr: [[String: Any]] = []
     for x in wins {
         arr.append([
-            "wid": x.wid, "title": x.title, "owner": x.ownerName,
             "layer": x.layer, "alpha": x.alpha, "onscreen": x.isOnscreen,
-            "sharing": x.sharingState, "store": x.storeType,
-            "bounds": ["x": x.quartzBounds.origin.x, "y": x.quartzBounds.origin.y,
-                       "w": x.quartzBounds.width, "h": x.quartzBounds.height]
+            "sharing": x.sharingState, "store": x.storeType, "sizeClass": x.sizeClass
         ])
     }
-    let data = (try? JSONSerialization.data(withJSONObject: ["pid": pid, "windows": arr], options: [.prettyPrinted])) ?? Data()
+    let data = (try? JSONSerialization.data(withJSONObject: ["windowCount": wins.count, "windows": arr], options: [.prettyPrinted])) ?? Data()
     print(String(data: data, encoding: .utf8) ?? "{}")
 } else {
     for (i, x) in wins.enumerated() {
-        print("[\(i + 1)] wid=\(x.wid)")
-        print("    title      = \"\(x.title)\"")
-        print("    owner      = \(x.ownerName)")
-        print("    layer      = \(x.layer)        (0=普通桌面层; >0 浮于桌面之上)")
-        print("    alpha      = \(x.alpha)")
-        print("    onscreen   = \(x.isOnscreen)")
-        print("    sharing    = \(x.sharingState) (0=不可捕捉;1=只读;2=共享)")
-        print("    store      = \(x.storeType)")
-        print("    bounds(Q)  = \(short(x.quartzBounds))   (Quartz 左上原点)")
+        print("[\(i + 1)] sizeClass=\(x.sizeClass) layer=\(x.layer) alpha=\(x.alpha) onscreen=\(x.isOnscreen) sharing=\(x.sharingState) store=\(x.storeType)")
     }
     print("\n共 \(wins.count) 个窗口。")
 }

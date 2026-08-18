@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 // MARK: - codex 可执行文件路径解析（不依赖交互式 shell）
 
@@ -83,9 +86,40 @@ struct CodexExecutableResolver {
 
     /// 是否为可执行普通文件（存在、非目录、有可执行权限；跟随符号链接到目标）。
     func isExecutableFile(_ url: URL) -> Bool {
+        guard !url.path.isEmpty else { return false }
+        let target = url.resolvingSymlinksInPath().standardizedFileURL
         var isDir: ObjCBool = false
-        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return false }
-        return fileManager.isExecutableFile(atPath: url.path)
+        guard fileManager.fileExists(atPath: target.path, isDirectory: &isDir), !isDir.boolValue,
+              fileManager.isExecutableFile(atPath: target.path),
+              isTrustedPath(target) else { return false }
+        return true
+    }
+
+    /// Verify the canonical target and each directory on its launch path.
+    /// Ownership is limited to the current user or root and no component may
+    /// be group/world writable.  The original URL is still returned by
+    /// `resolve()` so safe nvm/npm symlink launch URLs remain compatible.
+    private func isTrustedPath(_ target: URL) -> Bool {
+        let fm = fileManager
+        guard let attrs = try? fm.attributesOfItem(atPath: target.path),
+              let permissions = (attrs[.posixPermissions] as? NSNumber)?.uint16Value,
+              permissions & 0o022 == 0,
+              let owner = (attrs[.ownerAccountID] as? NSNumber)?.intValue,
+              owner == 0 || owner == Int(getuid()) else { return false }
+
+        var current = target.deletingLastPathComponent()
+        while true {
+            guard let dirAttrs = try? fm.attributesOfItem(atPath: current.path),
+                  let mode = (dirAttrs[.posixPermissions] as? NSNumber)?.uint16Value,
+                  mode & 0o022 == 0,
+                  let dirOwner = (dirAttrs[.ownerAccountID] as? NSNumber)?.intValue,
+                  dirOwner == 0 || dirOwner == Int(getuid()) else { return false }
+            if current.path == "/" { break }
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path { break }
+            current = parent
+        }
+        return true
     }
 
     /// 展开 `~` / `~/...` 为 homeDirectory 绝对路径；其余原样返回（由调用方判断绝对性）。

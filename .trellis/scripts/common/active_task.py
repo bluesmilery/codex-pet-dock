@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -261,12 +262,10 @@ def _detect_platform(platform_input: dict[str, Any] | None, platform: str | None
 
 def _context_key(platform_name: str, kind: str, value: str) -> str:
     platform_name = _CONTEXT_KEY_PLATFORM_ALIASES.get(platform_name, platform_name)
-    if kind == "transcript":
-        return f"{platform_name}_transcript_{_hash_value(value)}"
-    safe_value = _sanitize_key(value)
-    if safe_value:
-        return f"{platform_name}_{safe_value}"
-    return f"{platform_name}_{_hash_value(value)}"
+    # The key is deliberately opaque.  Earlier versions embedded a sanitized
+    # session/conversation id in the runtime filename, which made otherwise
+    # private metadata recoverable from ``.trellis/.runtime/sessions``.
+    return f"{platform_name}_{kind}_{_hash_value(value)}"
 
 
 def _iter_env_keys(
@@ -479,7 +478,13 @@ def resolve_context_key(
     if allow_environment_context:
         override = _string_value(os.environ.get("TRELLIS_CONTEXT_ID"))
         if override:
-            return _sanitize_key(override) or _hash_value(override)
+            safe = _sanitize_key(override)
+            # Hooks pass the already-derived opaque form through this
+            # variable.  Any other value (including a raw host id) is hashed
+            # before it can become a runtime filename.
+            if re.fullmatch(r"[A-Za-z0-9._-]+_(?:session|conversation|transcript)_[0-9a-f]{24}", safe):
+                return safe
+            return f"override_{_hash_value(override)}"
 
     data = _as_dict(platform_input)
     platform_name = _detect_platform(data, platform) if data or platform else None
@@ -511,6 +516,12 @@ def resolve_context_key(
 
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
+        stat = path.lstat()
+        if not path.is_file() or stat.st_mode & 0o170000 != 0o100000:
+            return None
+    except OSError:
+        return None
+    try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
@@ -518,14 +529,32 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> bool:
+    """Write a runtime record with private permissions and atomic replace."""
+    temp_path: Path | None = None
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # mkdir's mode is umask-dependent and existing directories may have
+        # been created by an older release. Tighten both runtime levels.
+        for directory in (path.parent.parent, path.parent):
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            directory.chmod(0o700)
+        payload = (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        temp_path = Path(name)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
         return True
-    except OSError:
+    except (OSError, TypeError, ValueError):
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
         return False
 
 
@@ -533,13 +562,18 @@ def _canonical_task_ref(task_path: str, repo_root: Path) -> str | None:
     normalized = normalize_task_ref(task_path)
     if not normalized:
         return None
+    path_obj = Path(normalized)
+    if path_obj.is_absolute() or any(part == ".." for part in path_obj.parts):
+        return None
     full_path = resolve_task_ref(normalized, repo_root)
     if full_path is None or not full_path.is_dir():
         return None
     try:
-        return full_path.relative_to(repo_root).as_posix()
-    except ValueError:
-        return str(full_path)
+        resolved_root = repo_root.resolve(strict=True)
+        resolved_path = full_path.resolve(strict=True)
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        return None
 
 
 def _active_from_ref(
@@ -640,11 +674,15 @@ def _context_metadata(
         "platform": platform_name,
         "last_seen_at": _utc_now(),
     }
-    for key in (*_SESSION_KEYS, *_CONVERSATION_KEYS, *_TRANSCRIPT_KEYS):
-        value = _lookup_string(data, (key,))
-        if value:
-            metadata[key] = value
     return metadata
+
+
+_RUNTIME_METADATA_KEYS = {"platform", "last_seen_at", "current_task", "current_run"}
+
+
+def _minimal_runtime_metadata(context: dict[str, Any]) -> dict[str, Any]:
+    """Drop legacy/raw identity fields before a runtime record is rewritten."""
+    return {key: value for key, value in context.items() if key in _RUNTIME_METADATA_KEYS}
 
 
 def set_active_task(
@@ -667,7 +705,7 @@ def set_active_task(
         return None
 
     context_path = _context_path(repo_root, context_key)
-    context = _read_json(context_path) or {}
+    context = _minimal_runtime_metadata(_read_json(context_path) or {})
     context.update(_context_metadata(platform_input, platform, context_key))
     context["current_task"] = canonical
     context.setdefault("current_run", None)

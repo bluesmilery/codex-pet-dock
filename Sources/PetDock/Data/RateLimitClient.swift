@@ -113,16 +113,19 @@ final class RateLimitClient: RateLimitFetching {
 
     // MARK: - 子进程环境构造
 
-    /// 构造 codex 子进程环境：复制 `baseEnvironment`，把 codex 可执行文件**父目录** prepend 到
-    /// `PATH`（去重，保留原 PATH）。使 codex 脚本的 `#!/usr/bin/env node` 能在子进程找到同目录的
-    /// node（nvm：codex 与 node 同在 `~/.nvm/versions/node/*/bin`）。纯函数，便于测试。
+    /// 构造 codex 子进程环境。只复制 app-server 启动所需的非秘密白名单
+    /// （HOME/TMPDIR/locale/CODEX_HOME），并用 codex 所在目录加系统目录
+    /// 组成受控 PATH；父进程中的 token/cookie/proxy/未知变量全部丢弃。
     static func childEnvironment(codexExecutable: URL, baseEnvironment: [String: String]) -> [String: String] {
-        var env = baseEnvironment
-        let binDir = codexExecutable.deletingLastPathComponent().path
-        let existing = (env["PATH"] ?? "").split(separator: ":").map(String.init)
-        if !existing.contains(binDir) {
-            env["PATH"] = ([binDir] + existing).joined(separator: ":")
+        var env: [String: String] = [:]
+        for key in ["HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "CODEX_HOME"] {
+            if let value = baseEnvironment[key], !value.isEmpty { env[key] = value }
         }
+        let binDir = codexExecutable.deletingLastPathComponent().path
+        var pathEntries = [binDir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        var seen = Set<String>()
+        pathEntries = pathEntries.filter { seen.insert($0).inserted }
+        env["PATH"] = pathEntries.joined(separator: ":")
         return env
     }
 

@@ -238,16 +238,42 @@ class _Budget:
         self.used += size
 
 
+def _safe_context_path(base_path: str, file_path: str) -> Path | None:
+    """Resolve a manifest path while enforcing repository containment.
+
+    JSONL manifests are untrusted data.  Reject absolute paths and explicit
+    parent traversal before resolving symlinks, then check the canonical
+    target is still below the canonical repository root.  ``strict=False`` is
+    intentional: callers can report a missing path without exposing it, while
+    existing symlinks are still resolved and checked.
+    """
+    if not isinstance(file_path, str) or not file_path.strip():
+        return None
+    normalized = file_path.replace("\\", "/")
+    path = Path(normalized)
+    if path.is_absolute() or any(part == ".." for part in path.parts):
+        return None
+    try:
+        root = Path(base_path).resolve(strict=True)
+        candidate = (root / normalized).resolve(strict=False)
+        candidate.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return candidate
+
+
 def _read_file_bytes(base_path: str, file_path: str) -> bytes | None:
-    """Read raw file bytes, return None if file doesn't exist."""
-    full_path = os.path.join(base_path, file_path)
-    if os.path.exists(full_path) and os.path.isfile(full_path):
-        try:
-            with open(full_path, "rb") as f:
-                return f.read()
-        except Exception:
+    """Read raw file bytes only when the canonical path stays in the repo."""
+    full_path = _safe_context_path(base_path, file_path)
+    if full_path is None:
+        return None
+    try:
+        if not full_path.is_file():
             return None
-    return None
+        with full_path.open("rb") as f:
+            return f.read()
+    except (OSError, RuntimeError):
+        return None
 
 
 def _truncate_notice(path: str, cap: int) -> str:
@@ -336,16 +362,18 @@ def _materialize_directory(
 ) -> list[str]:
     """Read all .md files in a directory, applying the same per-file and
     total caps as a single-file JSONL entry."""
-    full_path = os.path.join(base_path, dir_path)
-    if not os.path.exists(full_path) or not os.path.isdir(full_path):
+    full_path_obj = _safe_context_path(base_path, dir_path)
+    if full_path_obj is None or not full_path_obj.is_dir():
         return []
 
     blocks: list[str] = []
     try:
         md_files = sorted(
             f
-            for f in os.listdir(full_path)
-            if f.endswith(".md") and os.path.isfile(os.path.join(full_path, f))
+            for f in os.listdir(full_path_obj)
+            if f.endswith(".md")
+            and _safe_context_path(base_path, os.path.join(dir_path, f)) is not None
+            and _safe_context_path(base_path, os.path.join(dir_path, f)).is_file()
         )
         for filename in md_files[:max_files]:
             relative_path = os.path.join(dir_path, filename)

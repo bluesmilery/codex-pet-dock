@@ -83,14 +83,16 @@
 ```sh
 make build        # swift build -c release，产出 .build/release/PetDock
 make app          # 组装 build/PetDock.app 并 ad-hoc 签名（Identifier=io.github.bluesmilery.codexpetdock）
-make run          # 构建 app、启动（运行日志写入 /tmp/petdock.log）
-make diagnose     # 构建并跑一次识别诊断（输出到 /tmp/petdock-diagnose.txt）
+make run          # 构建 app、启动（日志写入 Application Support/PetDock/Logs 私有目录）
+make diagnose     # 构建并跑一次脱敏诊断（写入 Diagnostics/diagnose.txt 私有文件）
 pkill -f PetDock  # 停止运行
 make clean        # 清理构建产物
-make clean-logs   # 清理 /tmp 下的运行 / 诊断日志
+make clean-logs   # 清理 Application Support/PetDock 私有运行 / 诊断日志
 ```
 
-诊断模式（`--diagnose`）会枚举窗口、定位 Codex 宠物并把结果写入 `/tmp/petdock-diagnose.txt`，用于排查「识别不到宠物」类问题；若该文件未生成，通常意味着屏幕录制权限尚未授予。
+诊断模式（`--diagnose`）会枚举窗口、定位 Codex 宠物，并仅将数量/层级/可见性等脱敏结构写入 `~/Library/Application Support/PetDock/Diagnostics/diagnose.txt`，用于排查「识别不到宠物」类问题；默认不落盘标题、owner、真实 WID/PID 或精确坐标。若该文件未生成，通常意味着屏幕录制权限尚未授予。
+
+日志、诊断与 token 缓存统一位于 `~/Library/Application Support/PetDock/` 私有目录（目录 0700、文件 0600），日志拒绝 symlink 重定向。Codex helper 仅接收最小白名单环境，不继承 API key、cookie、代理凭证或未知变量；依赖环境变量认证的用户请改用 Codex 自身登录态。
 
 **分发**：当前发布包为 ad-hoc 签名（无 team ID）、未 notarized 的 arm64 预编译包。具体校验值与下载方式以发布说明为准。
 

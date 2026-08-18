@@ -84,14 +84,16 @@ Run from the repository root:
 ```sh
 make build        # swift build -c release, produces .build/release/PetDock
 make app          # assembles build/PetDock.app and ad-hoc signs it (Identifier=io.github.bluesmilery.codexpetdock)
-make run          # builds the app and launches it (logs to /tmp/petdock.log)
-make diagnose     # builds and runs a one-shot detection diagnostic (output to /tmp/petdock-diagnose.txt)
+make run          # builds the app and launches it (private log under Application Support/PetDock/Logs)
+make diagnose     # builds and runs a one-shot redacted diagnostic (private Diagnostics/diagnose.txt)
 pkill -f PetDock  # stop the app
 make clean        # clean build artifacts
-make clean-logs   # clean the /tmp runtime / diagnostic logs
+make clean-logs   # clean the private Application Support runtime / diagnostic logs
 ```
 
-Diagnostic mode (`--diagnose`) enumerates windows, locates the Codex pet, and writes the result to `/tmp/petdock-diagnose.txt` — useful for troubleshooting "pet not detected" issues. If that file is not produced, it usually means screen-recording permission has not been granted.
+Diagnostic mode (`--diagnose`) enumerates windows, locates the Codex pet, and writes only redacted structure/count information to `~/Library/Application Support/PetDock/Diagnostics/diagnose.txt` — useful for troubleshooting "pet not detected" issues. Titles, owners, WID/PID values, and exact coordinates are not persisted. If that file is not produced, it usually means screen-recording permission has not been granted.
+
+PetDock stores logs and the token cache under its private `~/Library/Application Support/PetDock/` directories (0700 directories, 0600 files). The Codex helper receives a minimal environment and does not inherit API keys, cookies, proxy credentials, or unknown variables; use Codex's own login state rather than environment-variable authentication.
 
 **Distribution**: the current release is an ad-hoc-signed (no team ID), unnotarized arm64 prebuilt package. Exact checksums and download channels are provided with the release notes.
 

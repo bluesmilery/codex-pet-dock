@@ -578,11 +578,18 @@ struct DataTestRunner {
             let r11 = CodexExecutableResolver(environment: [CodexExecutableResolver.envOverride: linkPath.path], homeDirectory: linkHome, systemCandidates: [])
             if case .success(let u) = r11.resolve() { check("T-r11 symlink→可执行目标命中", u.path == linkPath.path, u.path) } else { check("T-r11", false) }
 
+            // T-r12: group/world writable target is not trusted, even when executable.
+            let writable = makeExec(linkHome, "writable/codex")
+            try! FileManager.default.setAttributes([.posixPermissions: 0o775], ofItemAtPath: writable.path)
+            check("T-r12 group 可写目标→拒绝", !CodexExecutableResolver(
+                environment: [CodexExecutableResolver.envOverride: writable.path],
+                homeDirectory: linkHome, systemCandidates: []).isExecutableFile(writable), "")
+
             try? FileManager.default.removeItem(at: tmp)
         }
         section("codex 路径解析")
 
-        // ---- T-env: RateLimitClient.childEnvironment（prepend codex 父目录到 PATH，去重；端到端复现 env node）----
+        // ---- T-env: childEnvironment 严格白名单 + 受控 PATH（端到端复现 env node）----
         do {
             let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "pd-env-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
@@ -603,22 +610,37 @@ struct DataTestRunner {
                 return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             }
 
-            // T-env1: prepend 到空 PATH
+            let expectedSuffix = ":/usr/bin:/bin:/usr/sbin:/sbin"
+
+            // T-env1: codex 目录 + 固定系统 PATH
             let bin1 = tmp.appendingPathComponent("bin1/codex")
             let e1 = RateLimitClient.childEnvironment(codexExecutable: bin1, baseEnvironment: ["PATH": ""])
-            check("T-env1 空 PATH→prepend codex 父目录", e1["PATH"] == bin1.deletingLastPathComponent().path, e1["PATH"] ?? "")
+            check("T-env1 空 PATH→codex 目录+受控系统 PATH", e1["PATH"] == bin1.deletingLastPathComponent().path + expectedSuffix, e1["PATH"] ?? "")
 
-            // T-env2: prepend 到已有 PATH（不含 codex 父目录）
+            // T-env2: 父 PATH 被丢弃，不把未知目录带入 helper
             let bin2 = tmp.appendingPathComponent("bin2/codex")
-            let e2 = RateLimitClient.childEnvironment(codexExecutable: bin2, baseEnvironment: ["PATH": "/usr/bin:/bin"])
-            check("T-env2 prepend 到已有 PATH（去重）",
-                  e2["PATH"] == "\(bin2.deletingLastPathComponent().path):/usr/bin:/bin", e2["PATH"] ?? "")
+            let e2 = RateLimitClient.childEnvironment(codexExecutable: bin2, baseEnvironment: ["PATH": "/tmp/untrusted:/usr/bin:/bin"])
+            check("T-env2 丢弃父 PATH 未知目录",
+                  e2["PATH"] == "\(bin2.deletingLastPathComponent().path)\(expectedSuffix)", e2["PATH"] ?? "")
 
-            // T-env3: 已含 codex 父目录 → 不重复
+            // T-env3: 受控 PATH 去重
             let bin3Dir = tmp.appendingPathComponent("bin3")
             let bin3 = bin3Dir.appendingPathComponent("codex")
             let e3 = RateLimitClient.childEnvironment(codexExecutable: bin3, baseEnvironment: ["PATH": "\(bin3Dir.path):/usr/bin"])
-            check("T-env3 已含 codex 父目录→不重复", e3["PATH"] == "\(bin3Dir.path):/usr/bin", e3["PATH"] ?? "")
+            check("T-env3 受控 PATH 不重复", e3["PATH"] == "\(bin3Dir.path)\(expectedSuffix)", e3["PATH"] ?? "")
+            let sensitive = RateLimitClient.childEnvironment(
+                codexExecutable: bin3,
+                baseEnvironment: ["PATH": "/tmp/untrusted", "OPENAI_API_KEY": "fixture-key",
+                                  "HTTP_PROXY": "http://fixture-proxy", "COOKIE": "fixture-cookie",
+                                  "UNKNOWN": "fixture-unknown", "HOME": "/fixture/home",
+                                  "TMPDIR": "/fixture/tmp", "LANG": "zh_CN.UTF-8"])
+            check("T-env3b 敏感/未知变量被剔除",
+                  sensitive["OPENAI_API_KEY"] == nil && sensitive["HTTP_PROXY"] == nil
+                  && sensitive["COOKIE"] == nil && sensitive["UNKNOWN"] == nil,
+                  sensitive.keys.sorted().joined(separator: ","))
+            check("T-env3c 白名单 HOME/TMPDIR/LANG 保留",
+                  sensitive["HOME"] == "/fixture/home" && sensitive["TMPDIR"] == "/fixture/tmp"
+                  && sensitive["LANG"] == "zh_CN.UTF-8", sensitive.description)
 
             // T-env4: 端到端复现 — 假 codex shebang #!/usr/bin/env fake-node + 同目录 fake-node
             let fakeBin = tmp.appendingPathComponent("fakebin")

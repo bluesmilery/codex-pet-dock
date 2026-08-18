@@ -43,12 +43,13 @@ final class PetLogger {
     ///   故不在此快照 `DebugLog.enabled`。
     /// - parameter maxBytes: 日志大小上限（字节），超出后滚动一份 `.1` 副本；0 表示不限。
     init(enabled: Bool? = nil,
-         logURL: URL = URL(fileURLWithPath: "/tmp/petdock.log"),
+         logURL: URL? = nil,
          maxBytes: Int = 1_048_576,   // 1 MiB 默认上限
          queue: DispatchQueue = DispatchQueue(label: "petdock.logger")) {
         self.enabled = enabled
-        self.logURL = logURL
-        self.rollURL = URL(fileURLWithPath: logURL.path + ".1")
+        let resolvedURL = logURL ?? PrivateStorage.logsURL.appendingPathComponent("petdock.log")
+        self.logURL = resolvedURL
+        self.rollURL = URL(fileURLWithPath: resolvedURL.path + ".1")
         self.maxBytes = maxBytes
         self.queue = queue
     }
@@ -56,7 +57,7 @@ final class PetLogger {
     /// 记录一行日志。release 默认 no-op；开启时异步写入后台队列（主线程无文件 IO）。
     func log(_ s: String) {
         guard enabled ?? DebugLog.enabled else { return }
-        let line = "[\(s)]\n"
+        let line = "[\(Self.redact(s))]\n"
         guard let data = line.data(using: .utf8) else { return }
         queue.async { [weak self] in
             self?.append(data)
@@ -93,15 +94,16 @@ final class PetLogger {
     /// lazy 打开（或重新打开）常驻句柄。文件不存在时先创建空文件。
     private func ensureHandle() {
         if handle != nil { return }
-        if !FileManager.default.fileExists(atPath: logURL.path) {
-            FileManager.default.createFile(atPath: logURL.path, contents: nil)
-            writtenBytes = 0
-        } else {
-            // 句柄首次打开时按现有文件大小初始化计数（断点续写场景）。
+        guard !PrivateStorage.isSymlink(logURL) else { return }
+        // Read the existing size before the secure no-follow open.  A
+        // symlink or non-regular file is rejected by the storage primitive.
+        if FileManager.default.fileExists(atPath: logURL.path) {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: logURL.path, isDirectory: &isDirectory),
+                  !isDirectory.boolValue else { return }
             writtenBytes = (try? FileManager.default.attributesOfItem(atPath: logURL.path)[.size] as? Int64) ?? 0
         }
-        handle = try? FileHandle(forWritingTo: logURL)
-        handle?.seekToEndOfFile()
+        handle = try? PrivateStorage.openAppendFile(at: logURL)
     }
 
     /// 轮转：关闭当前句柄 → 旧主文件覆盖式重命名为 `.1` → 重置计数并重开空主文件。
@@ -109,10 +111,24 @@ final class PetLogger {
         try? handle?.synchronize()
         try? handle?.close()
         handle = nil
-        // 覆盖旧副本（若存在）：先删再换，避开 FileManager.replaceItem 对同名目标的要求。
+        // 覆盖旧副本（若存在）：先删再换，且只操作日志目录中的路径。
         try? FileManager.default.removeItem(at: rollURL)
         _ = try? FileManager.default.moveItem(at: logURL, to: rollURL)
         writtenBytes = 0
         ensureHandle()
+    }
+
+    /// Remove identifiers that can correlate a log line with a real window.
+    /// The logger does not need to retain WID/PID values for operation.
+    private static func redact(_ input: String) -> String {
+        var value = input
+        for pattern in [#"(?i)\bwid\s*=\s*\d+"#, #"(?i)\bpid\s*=\s*\d+"#] {
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let range = NSRange(value.startIndex..<value.endIndex, in: value)
+                value = regex.stringByReplacingMatches(in: value, options: [], range: range,
+                                                        withTemplate: "<redacted>")
+            }
+        }
+        return value
     }
 }

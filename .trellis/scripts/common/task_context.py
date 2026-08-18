@@ -178,7 +178,30 @@ def _resolve_context_entry_path(
     Exact historical self-references are remapped only for archived tasks.
     ``None`` means the remapped path traversed or resolved outside that archive.
     """
-    repo_path = repo_root / file_path
+    # Context manifests are repository-relative by contract.  Do not let
+    # ``Path`` silently normalize an absolute path or ``..`` before the
+    # containment check: both are untrusted input and must never reach the
+    # model context.
+    if not isinstance(file_path, str) or not file_path.strip():
+        return None
+    raw_path = file_path.replace("\\", "/")
+    path_obj = Path(raw_path)
+    if path_obj.is_absolute() or any(part == ".." for part in path_obj.parts):
+        return None
+
+    def contained(candidate: Path, root: Path) -> Path | None:
+        try:
+            root_resolved = root.resolve(strict=True)
+            resolved = candidate.resolve(strict=False)
+            resolved.relative_to(root_resolved)
+            return resolved
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    repo_root = repo_root.resolve()
+    repo_path = contained(repo_root / raw_path, repo_root)
+    if repo_path is None:
+        return None
     if task_dir is None:
         return repo_path
 
@@ -201,7 +224,7 @@ def _resolve_context_entry_path(
         return repo_path
 
     historical_root = f"{DIR_WORKFLOW}/{DIR_TASKS}/{task_dir.name}"
-    posix_path = file_path.replace("\\", "/")
+    posix_path = raw_path
     if posix_path == historical_root:
         relative_parts: tuple[str, ...] = ()
     elif posix_path.startswith(f"{historical_root}/"):
@@ -215,9 +238,8 @@ def _resolve_context_entry_path(
         return repo_path
 
     try:
-        archive_root = task_dir.resolve()
-        resolved_path = task_dir.joinpath(*relative_parts).resolve()
-        resolved_path.relative_to(archive_root)
+        archive_root = task_dir.resolve(strict=True)
+        resolved_path = contained(task_dir.joinpath(*relative_parts), archive_root)
     except (OSError, RuntimeError, ValueError):
         return None
     return resolved_path

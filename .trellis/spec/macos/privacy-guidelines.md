@@ -19,6 +19,13 @@
 
 - `TokenUsageLogReader` 只解析 `last_token_usage` 的**数值**字段，不读会话正文。
 - `RateLimitClient` 经 stdio JSON-RPC 只取状态 / 比例 / 重置时间，不复制 auth.json。
+- `RateLimitClient` 子进程环境从 HOME/TMPDIR/locale、非秘密 CODEX_HOME 与受控 PATH 白名单构建；不得继承 API key、token、cookie、代理凭证或未知变量。resolver 只接受 canonical 普通可执行文件，owner 为当前用户或 root 且无 group/world writable。
+
+## 私有运行时存储
+
+- 日志、诊断和 token cache 只能写入 `~/Library/Application Support/PetDock/` 私有目录；目录显式 0700，文件显式 0600，日志 no-follow 打开并拒绝外部 symlink。
+- 默认诊断只落盘脱敏结构统计；不得写入标题、owner、真实 WID/PID、精确 bounds、screen 名称或 frame。
+- Token cache key 使用版本化 SHA-256（sessionsRoot 相对路径输入）；序列化内容不得包含 home、`.codex`、rollout UUID，旧格式直接失效重建。
 
 ## 公开分发前扫描
 
@@ -30,3 +37,4 @@
 - `.trellis/workspace/<developer>/` 是开发者机器身份（journal / session 痕迹），**不入库**，由各克隆者 `trellis init -u <name>` 本地生成。
 - `.trellis/.gitignore` 已排除 `.developer` / `.current-task` / `.runtime/` 等本地状态。
 - `config.yaml` 设 `session_auto_commit: false`，journal 不自动提交。
+- `.trellis/.runtime/sessions/` 只保存 opaque context key 与最小工作流元数据；原始 session/conversation/transcript 值不得持久化。写入使用 0600 临时文件 + atomic replace，读取拒绝 symlink。

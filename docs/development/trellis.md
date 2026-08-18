@@ -63,3 +63,7 @@ git status --short
 ```
 
 检查结果应显示 Codex active，且工作树只包含本次任务明确允许的文件。不要提交开发者身份、session/journal、runtime 指针或平台私有配置；不要把本地认证文件、会话正文或用户路径写入文档。
+
+## Runtime 隐私边界
+
+`.trellis/.runtime/sessions/` 只写入由 session/conversation/transcript 派生的 opaque context key 与最小工作流元数据；原始身份值和 transcript 路径不会持久化。runtime 与 session 目录使用 0700，JSON 以 0600 临时文件 fsync 后 atomic replace。JSONL context 引用必须是仓库内相对路径，读取前 canonical containment 检查会拒绝绝对路径、`..` 和逃逸 symlink。

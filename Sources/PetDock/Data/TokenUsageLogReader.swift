@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // MARK: - 本机 Token 日志解析（WEEK TOKENS）
 
@@ -15,14 +16,14 @@ protocol TokenLogReading {
 /// （单次增量；已验证 Σ last_token_usage.total_tokens = 会话累计，跨会话求和不重复）。
 /// **绝不读取 / 记录 / 输出会话正文**；缓存也只持久化 timestamp + tokens。
 ///
-/// 增量缓存：按「文件路径 → {size, points}」缓存整文件解析结果。size 不变则复用，变化则重读全文件
-/// （rollout 文件均较小，<5MB）。缓存落盘以跨进程复用。
+/// 增量缓存：按「版本化路径摘要 → {size, points}」缓存整文件解析结果。size 不变则复用，变化则重读全文件
+/// （rollout 文件均较小，<5MB）。缓存落盘以跨进程复用，绝不持久化原始路径。
 struct TokenUsageLogReader: TokenLogReading {
     let sessionsRoot: URL
     /// 增量缓存落盘位置（nil=仅进程内）。
     let cacheURL: URL?
 
-    /// 进程内增量缓存（path → {size, points}）。
+    /// 进程内增量缓存（opaque key → {size, points}）。
     private var memCache: [String: CacheEntry]
 
     /// 仅供测试：累计发生实际文件解析（未命中缓存）的次数，用于验证增量缓存命中。
@@ -40,35 +41,42 @@ struct TokenUsageLogReader: TokenLogReading {
         if let cacheURL,
            let data = try? Data(contentsOf: cacheURL),
            let obj = try? JSONDecoder().decode([String: CacheEntry].self, from: data) {
-            loaded = obj
+            // v1 keys embedded the absolute rollout path.  They are not
+            // migrated: dropping them is the safe, deterministic rebuild.
+            loaded = obj.filter { $0.key.hasPrefix("v2:") }
         }
         self.memCache = loaded
+        if loaded.isEmpty, let cacheURL,
+           let data = try? JSONEncoder().encode(loaded) {
+            writeCache(data, to: cacheURL)
+        }
     }
 
     mutating func readPoints(from: Date, to: Date) throws -> TokenWindow {
         let files = candidateFiles(from: from, to: to)
         // 淘汰：移除已删除 / 移出当前扫描范围的缓存条目，避免 memCache 无界增长与陈旧数据。
-        let currentPaths = Set(files.map { $0.path })
-        for stale in memCache.keys where !currentPaths.contains(stale) {
+        let currentKeys = Set(files.compactMap { Self.cacheKey(for: $0, sessionsRoot: sessionsRoot) })
+        for stale in memCache.keys where !currentKeys.contains(stale) {
             memCache.removeValue(forKey: stale)
         }
         var all: [TokenUsagePoint] = []
         var filesWithPoints = Set<String>()
         let fm = FileManager.default
         for file in files {
+            guard let key = Self.cacheKey(for: file, sessionsRoot: sessionsRoot) else { continue }
             let size = ((try? fm.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value ?? -1
             let points: [TokenUsagePoint]
-            if size >= 0, let hit = memCache[file.path], hit.size == size {
+            if size >= 0, let hit = memCache[key], hit.size == size {
                 points = hit.points           // size 未变 → 复用缓存
             } else {
                 points = parseFile(file)
                 debugFilesParsed += 1
-                memCache[file.path] = CacheEntry(size: size, points: points)
+                memCache[key] = CacheEntry(size: size, points: points)
             }
             // 仅纳入窗口内点；该文件贡献了至少一个窗口内点 → 计入唯一会话文件数。
             let inWindow = points.filter { $0.timestamp >= from && $0.timestamp <= to }
             if !inWindow.isEmpty {
-                filesWithPoints.insert(file.path)
+                filesWithPoints.insert(key)
                 all.append(contentsOf: inWindow)
             }
         }
@@ -78,7 +86,36 @@ struct TokenUsageLogReader: TokenLogReading {
 
     private func persist() {
         guard let cacheURL, let data = try? JSONEncoder().encode(memCache) else { return }
-        try? data.write(to: cacheURL, options: .atomic)
+        writeCache(data, to: cacheURL)
+    }
+
+    private func writeCache(_ data: Data, to url: URL) {
+        // Production cacheURL is under PrivateStorage.  Tests may inject a
+        // file directly under the OS temporary directory; never chmod that
+        // shared directory, but still tighten the cache file itself.
+        let tempRoot = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        let parent = url.deletingLastPathComponent().standardizedFileURL
+        if parent.path == tempRoot || parent.path == "/tmp" || parent.path == "/private/tmp" {
+            try? data.write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: 0o600)],
+                                                    ofItemAtPath: url.path)
+        } else {
+            try? PrivateStorage.atomicWrite(data, to: url)
+        }
+    }
+
+    /// Stable, non-reversible cache identity derived from the sessions-root
+    /// relative path.  Absolute homes, `.codex` prefixes and rollout UUIDs
+    /// never appear in serialized cache keys or values.
+    static func cacheKey(for file: URL, sessionsRoot: URL) -> String? {
+        let root = sessionsRoot.resolvingSymlinksInPath().standardizedFileURL
+        let canonical = file.resolvingSymlinksInPath().standardizedFileURL
+        let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard canonical.path.hasPrefix(rootPath) else { return nil }
+        let relative = String(canonical.path.dropFirst(rootPath.count))
+        guard !relative.isEmpty, !relative.hasPrefix("../"), relative != ".." else { return nil }
+        let digest = SHA256.hash(data: Data(relative.utf8))
+        return "v2:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// 列出覆盖时间窗口的候选 jsonl 文件（按 YYYY/MM/DD 日期桶裁剪）。

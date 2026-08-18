@@ -7,47 +7,35 @@ func runDiagnoseAndExit() -> Never {
     let pids = PetTracker.codexPIDs()
     out += "=== 进程定位 ===\n"
     out += "bundle id : \(PetTracker.bundleID)\n"
-    out += "主进程 PID: \(pids)\n"
+    out += "主进程数量: \(pids.count)\n"
     out += "屏幕录制权限(preflight): \(CGPreflightScreenCaptureAccess())  (false→CGWindowList 被系统过滤为空)\n\n"
 
     let byPID = PetTracker.enumerate(pids: pids)
-    out += "=== 按 PID 过滤的候选窗口（\(byPID.count)）===\n"
-    for (i, w) in byPID.enumerated() { out += "[\(i)] \(w.detailed())\n" }
+    out += "=== 按主进程过滤的候选窗口（\(byPID.count)）===\n"
+    for (i, w) in byPID.enumerated() { out += "[\(i)] \(DiagnosticFormatter.candidateSummary(w))\n" }
 
     let byOwner = PetTracker.enumerateByOwnerName(["Chat", "GPT", "Codex", "OpenAI"])
     let extra = byOwner.filter { w in !byPID.contains { $0.wid == w.wid } }
-    out += "\n=== ownerName 命中（关键词 Chat/GPT/Codex/OpenAI）但 PID 不在主进程集的窗口（\(extra.count)）===\n"
-    for (i, w) in extra.enumerated() { out += "[\(i)] \(w.detailed())\n" }
+    out += "\n=== 关键词通道命中但不在主进程集的窗口（\(extra.count)）===\n"
+    for (i, w) in extra.enumerated() { out += "[\(i)] \(DiagnosticFormatter.candidateSummary(w))\n" }
 
-    // 全局统计：授权后确认 CGWindowList 实际可见性，并定位 ChatGPT 窗口的真实 ownerName/ownerPID。
+    // 全局统计：授权后确认 CGWindowList 的实际可见性；只保留数量，不记录窗口身份。
     let allInfos = CGWindowListCopyWindowInfo([], kCGNullWindowID) as? [[String: Any]] ?? []
-    out += "\n=== 全局窗口统计（总数 \(allInfos.count)）===\n"
-    var ownerCount: [String: Int] = [:]
-    for w in allInfos {
-        let name = (w[kCGWindowOwnerName as String] as? String) ?? "(空)"
-        ownerCount[name, default: 0] += 1
-    }
-    let keywords = ["chat", "gpt", "codex", "openai"]
-    for (name, cnt) in ownerCount.sorted(by: { $0.value > $1.value }) {
-        let hit = keywords.contains { name.lowercased().contains($0) } ? "  ← 候选" : ""
-        out += "  \(name): \(cnt)\(hit)\n"
-    }
+    out += "\n=== 全局窗口统计（总数 \(allInfos.count)，仅记录数量）===\n"
 
     let union = PetTracker.unionCandidates()
     let sel = PetTracker.selectPet(candidates: union, lastWID: nil)
     out += "\n=== 识别结果（union 通道，候选 \(union.count)，运行模式使用）===\n"
-    out += "选中 : \(sel.selected?.detailed() ?? "nil")\n"
-    out += "理由 : \(sel.reason)\n"
-    out += "命中 : \(sel.hitFlags.joined(separator: ", "))\n"
+    out += DiagnosticFormatter.selectionSummary(sel) + "\n"
 
-    out += "\n=== 屏幕（AppKit 左下原点）===\n"
-    for (i, s) in NSScreen.screens.enumerated() {
-        out += "[screen \(i)] \(s.localizedName) frame=\(s.frame) visibleFrame=\(s.visibleFrame)\n"
-    }
+    out += "\n=== 屏幕统计（AppKit）===\n"
+    out += "screenCount=\(NSScreen.screens.count)\n"
 
     print(out)
-    let url = URL(fileURLWithPath: "/tmp/petdock-diagnose.txt")
-    try? out.write(to: url, atomically: true, encoding: .utf8)
+    let url = PrivateStorage.diagnosticsURL.appendingPathComponent("diagnose.txt")
+    if let data = out.data(using: .utf8) {
+        try? PrivateStorage.atomicWrite(data, to: url)
+    }
     exit(0)
 }
 
@@ -296,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stableCount = d.stableCount
 
         log("follow state=\(d.state.rawValue) pet=\(petVisible) show=\(plan.showUI) setFrame=\(d.shouldSetFrame) "
-            + "interval=\(d.nextInterval) stable=\(d.stableCount) wid=\(sel.selected?.wid ?? 0)")
+            + "interval=\(d.nextInterval) stable=\(d.stableCount) selected=\(sel.selected != nil)")
 
         schedule(after: d.nextInterval)
     }

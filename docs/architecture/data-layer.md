@@ -50,9 +50,13 @@ codex app-server generate-json-schema --out <dir>
 
 | 文件 | 责任 |
 | --- | --- |
-| `CodexExecutableResolver.swift` | 解析 codex 绝对路径：环境变量覆盖（展开 `~` 且必须绝对）→ 绝对目录 `PATH` → `~/.local/bin`、nvm 语义版本降序、`~/.volta/bin` 与可注入的系统候选；跟随符号链接。 |
+| `CodexExecutableResolver.swift` | 解析 codex 绝对路径：环境变量覆盖（展开 `~` 且必须绝对）→ 绝对目录 `PATH` → `~/.local/bin`、nvm 语义版本降序、`~/.volta/bin` 与可注入的系统候选；校验 canonical target、owner、普通可执行文件和 group/world writable 状态，同时保留安全 nvm/npm symlink 启动 URL。 |
 | `RateLimitClient.swift` | 通过 `Process.executableURL` 启动 codex，完成 stdio JSON-RPC；`parse(_:)` 与 `childEnvironment(_:)` 为纯函数，子进程 PATH 会以前置 codex 父目录并保留原 PATH 条目（不做绝对路径过滤）。 |
-| `TokenUsageLogReader.swift` | 按日期桶扫描日志，只取数值并维护增量缓存；`parseLine` / `parseISO` 为纯函数。 |
+| `TokenUsageLogReader.swift` | 按日期桶扫描日志，只取数值并维护增量缓存；`parseLine` / `parseISO` 为纯函数。落盘 key 为 `v2:` + sessionsRoot 相对路径 SHA-256，旧格式安全失效，cache 位于私有目录。 |
+
+### 私有存储与 helper 边界
+
+PetDock 的日志、诊断和 token cache 位于 `~/Library/Application Support/PetDock/` 下的私有子目录（目录 0700、文件 0600）。日志使用 no-follow 打开并去除 WID/PID；默认 `--diagnose` 只持久化脱敏结构统计，不保存标题、owner、真实窗口标识或精确坐标。Codex app-server 通过无 shell 的 `Process.executableURL` 启动，子环境只保留 HOME/TMPDIR/locale、非秘密 CODEX_HOME 和受控 PATH，不传递认证、cookie 或代理凭证。
 | `PetDockDataService.swift` | 组合两数据源，分别维护退避计数，并提供 `pause()` / `resume()`。 |
 | `LiveDockProvider.swift` | 在主线程缓存快照，后台刷新后映射为 UI 数据。 |
 

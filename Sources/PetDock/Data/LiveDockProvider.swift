@@ -102,12 +102,8 @@ final class LiveDockProvider: DockModelProvider {
     // MARK: - token 缓存落盘位置（Application Support，跨进程复用；失败兜底 nil）
 
     static func tokenCacheURL() -> URL? {
-        guard let support = try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true) else { return nil }
-        let dir = support.appendingPathComponent("PetDock", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("token-cache.json")
+        guard (try? PrivateStorage.ensureLayout()) != nil else { return nil }
+        return PrivateStorage.tokenCacheURL
     }
 
     // MARK: - 映射（纯函数，可测）

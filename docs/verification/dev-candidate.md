@@ -21,7 +21,7 @@ make test-docs
 make test
 ```
 
-通过条件是 release 构建退出码 0 且 0 warning，docs gate 通过，`make test` 的 test-ui、test-data、test-shell 三个独立入口全部通过。当前公开套件口径为 **test-ui 172、test-data 123、test-shell 99（合计 394 项 Swift 断言）**；BubbleVisibility 在 test-ui 中为 **49 项**。文档测试是额外门禁，不计入 394；细分用例以测试源码为准，新增用例不要求同步修改本页的覆盖说明。
+通过条件是 release 构建退出码 0 且 0 warning，docs gate 通过，`make test` 的 test-ui、test-data、test-shell 三个独立入口全部通过。Swift 断言细分以各入口测试源码和实际输出为准，避免在 README/spec 复制易漂移计数。文档测试是额外门禁，不计入 Swift 断言。
 
 文档变更还需在任务和 Review 中记录 `Docs Impact: none | update | new`。`make docs-check` 离线检查本地链接、`docs/README.md` 目录完整性、旧顶层 docs 路径和公开隐私模式；它不检查外部 URL 可达性，也不替代真机验证。
 
@@ -35,6 +35,8 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 - `Geometry.safeDockFrame` 固定底座宽度，按障碍链式下移，执行水平 clamp；垂直越界返回 nil。避让隐藏与宠物可见性、数据暂停语义分离。
 - `BubbleVisibilityProbe` 使用 ScreenCaptureKit 公开 API、最多 2Hz、single-flight 和 generation 失效保护；捕获失败时保守按 visible 避让。
 - 数据层通过 codex app-server stdio JSON-RPC 和本机日志数值聚合提供 WEEK LEFT / WEEK TOKENS，不复制 `auth.json` 或凭证。
+- 日志、诊断与 token cache 只写入 Application Support/PetDock 私有目录（0700/0600）；默认诊断脱敏，不落盘标题、owner、WID/PID 或精确坐标。helper 环境为严格白名单，resolver 拒绝不可信可执行文件。
+- Trellis context 路径执行 canonical containment，runtime 只保存 opaque context key 和最小元数据；原始 session/conversation/transcript 值不落盘。
 - 文档、测试与源码注释中的示例不得包含真实窗口 ID、坐标、构建指纹、提交标识、认证内容或用户路径。
 
 ## 基础手工场景（真机未验证）

@@ -832,6 +832,7 @@ check("L1 enabled=false→文件不创建(no-op)", !FileManager.default.fileExis
 // L2: enabled=true → 后台异步写入文件（主线程不阻塞）
 let onLogger = PetLogger(enabled: true, logURL: logTmp)
 onLogger.log("hello-petdock")
+onLogger.log("follow wid=123 pid=456")
 let l2Deadline = Date().addingTimeInterval(2)
 var l2Content = ""
 while Date() < l2Deadline && !l2Content.contains("hello-petdock") {
@@ -840,6 +841,7 @@ while Date() < l2Deadline && !l2Content.contains("hello-petdock") {
 }
 // 以期望日志内容作为完成条件，不能只等文件出现（文件可能已创建但异步写入尚未完成）。
 check("L2 enabled=true→后台异步写入文件", l2Content.contains("hello-petdock"), "content=\(l2Content)")
+check("L2b 日志不含真实 WID/PID", !l2Content.contains("wid=123") && !l2Content.contains("pid=456"), "content=\(l2Content)")
 
 // L3: enabled=true → log() 异步派发（调用返回时尚未同步写盘，证明主线程无同步文件 IO）
 let asyncTmp = FileManager.default.temporaryDirectory
@@ -968,10 +970,25 @@ check("L9 二次轮转→.1被替换为前一段(含line-100..299之一,不含li
       l9Roll.contains("line-") && !l9Roll.contains("line-500") && !l9Main.contains("line-100"),
       "rollTail=\(l9Roll.suffix(30))")
 
+// L10: 外部 symlink 不得把日志重定向到目标文件。
+let symlinkLog = uniqueLogURL("symlink")
+let symlinkTarget = uniqueLogURL("symlink-target")
+try? FileManager.default.removeItem(at: symlinkLog)
+try? FileManager.default.removeItem(at: symlinkTarget)
+FileManager.default.createFile(atPath: symlinkTarget.path, contents: Data("UNCHANGED\n".utf8))
+try? FileManager.default.createSymbolicLink(at: symlinkLog, withDestinationURL: symlinkTarget)
+let symlinkLogger = PetLogger(enabled: true, logURL: symlinkLog)
+symlinkLogger.log("should-not-follow")
+symlinkLogger.flush()
+let symlinkContent = (try? String(contentsOf: symlinkTarget, encoding: .utf8)) ?? ""
+check("L10 日志 symlink 不重定向写入", symlinkContent == "UNCHANGED\n", "content=\(symlinkContent)")
+
 try? FileManager.default.removeItem(at: rotTmp)
 try? FileManager.default.removeItem(at: rotOld)
 try? FileManager.default.removeItem(at: syncTmp)
 try? FileManager.default.removeItem(at: noopTmp)
+try? FileManager.default.removeItem(at: symlinkLog)
+try? FileManager.default.removeItem(at: symlinkTarget)
 
 print("\n[PetLogger] \(pass - lgPass) passed, \(fail - lgBase) failed")
 
