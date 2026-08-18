@@ -51,8 +51,8 @@ codex app-server generate-json-schema --out <dir>
 | 文件 | 责任 |
 | --- | --- |
 | `CodexExecutableResolver.swift` | 解析 codex 绝对路径：环境变量覆盖（展开 `~` 且必须绝对）→ 绝对目录 `PATH` → `~/.local/bin`、nvm 语义版本降序、`~/.volta/bin` 与可注入的系统候选；校验 canonical target、owner、普通可执行文件和 group/world writable 状态，同时保留安全 nvm/npm symlink 启动 URL。 |
-| `RateLimitClient.swift` | 通过 `Process.executableURL` 启动 codex，完成 stdio JSON-RPC；`parse(_:)` 与 `childEnvironment(_:)` 为纯函数，子进程 PATH 会以前置 codex 父目录并保留原 PATH 条目（不做绝对路径过滤）。 |
-| `TokenUsageLogReader.swift` | 按日期桶扫描日志，只取数值并维护增量缓存；`parseLine` / `parseISO` 为纯函数。落盘 key 为 `v2:` + sessionsRoot 相对路径 SHA-256，旧格式安全失效，cache 位于私有目录。 |
+| `RateLimitClient.swift` | 通过 `Process.executableURL` 启动 codex，完成 stdio JSON-RPC；`parse(_:)` 与 `childEnvironment(_:)` 为纯函数，子进程只接收 HOME/TMPDIR/LANG/LC_ALL/LC_CTYPE、非秘密 CODEX_HOME 与 `codex` 所在目录加 `/usr/bin:/bin:/usr/sbin:/sbin` 的受控 PATH，不继承未知变量、认证、cookie 或代理凭证。 |
+| `TokenUsageLogReader.swift` | 按日期桶扫描日志，只取数值并维护增量缓存；`parseLine` / `parseISO` 为纯函数。落盘 key 为 `v2:` + sessionsRoot 相对路径 SHA-256，旧格式安全失效；加载前拒绝 symlink、非 regular、非当前用户/root、非私有权限或过大 cache，cache 位于私有目录。 |
 
 ### 私有存储与 helper 边界
 
@@ -62,7 +62,7 @@ PetDock 的日志、诊断和 token cache 位于 `~/Library/Application Support/
 
 ### 增量缓存
 
-`TokenUsageLogReader` 按「文件路径 → `{size, points}`」维护进程内缓存：文件大小不变时复用，变化时重读该文件；当前扫描范围之外或已删除的条目会被淘汰。若提供 `cacheURL`，同一结构以 JSON 原子写入供跨进程复用；每个 point 只含 timestamp 与四个 token 数值。未提供 `cacheURL` 时仅使用进程内缓存。
+`TokenUsageLogReader` 按「`v2:` + sessionsRoot 相对路径 SHA-256 → `{size, points}`」维护进程内缓存：文件大小不变时复用，变化时重读该文件；当前扫描范围之外或已删除的条目会被淘汰。若提供 `cacheURL`，同一结构以 JSON 原子写入供跨进程复用；加载前拒绝 symlink、非 regular、owner 不为当前用户/root、权限超过 0600 或超过大小上限的 cache；每个 point 只含 timestamp 与四个 token 数值。未提供 `cacheURL` 时仅使用进程内缓存。
 
 ### 退避与暂停
 
@@ -84,6 +84,6 @@ make build
 make test-data
 ```
 
-`make test-data` 使用 `tests/DataTests.swift` 与脱敏 fixture，不联网且不需要屏幕录制权限。当前公开口径为 **test-data 123 项**，覆盖周窗口聚合、四项 token 数值与脱敏、增量缓存与淘汰、`parseLine` 鲁棒性、WeekLeft 窗口与重置时间、退避、暂停、服务组合、LiveDockProvider 映射、并发安全、codex 路径解析、子进程 PATH、LineReader、日期 fixture 以及 rpc stdio fixture。细分编号以测试入口源码为准，避免文档数字随新增用例漂移。
+`make test-data` 使用 `tests/DataTests.swift` 与脱敏 fixture，不联网且不需要屏幕录制权限。当前公开口径为 **test-data 129 项**，覆盖周窗口聚合、四项 token 数值与脱敏、增量缓存与淘汰、cache 私有加载、`parseLine` 鲁棒性、WeekLeft 窗口与重置时间、退避、暂停、服务组合、LiveDockProvider 映射、并发安全、codex 路径解析、子进程 PATH、LineReader、日期 fixture 以及 rpc stdio fixture。细分编号以测试入口源码为准，避免文档数字随新增用例漂移。
 
 集成入口为 `PetDockDataService(rateLimit:tokenLog:now:)` 的 `fetchWeekLeft()`、`fetchWeekTokens()`、`weekLeftNextDelay`、`weekTokensNextDelay`、`pause()` 和 `resume()`。

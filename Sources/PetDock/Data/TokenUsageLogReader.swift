@@ -1,5 +1,8 @@
 import Foundation
 import CryptoKit
+#if canImport(Darwin)
+import Darwin
+#endif
 
 // MARK: - 本机 Token 日志解析（WEEK TOKENS）
 
@@ -19,6 +22,8 @@ protocol TokenLogReading {
 /// 增量缓存：按「版本化路径摘要 → {size, points}」缓存整文件解析结果。size 不变则复用，变化则重读全文件
 /// （rollout 文件均较小，<5MB）。缓存落盘以跨进程复用，绝不持久化原始路径。
 struct TokenUsageLogReader: TokenLogReading {
+    private static let maxCacheBytes: Int64 = 1_048_576
+
     let sessionsRoot: URL
     /// 增量缓存落盘位置（nil=仅进程内）。
     let cacheURL: URL?
@@ -39,7 +44,7 @@ struct TokenUsageLogReader: TokenLogReading {
         self.cacheURL = cacheURL
         var loaded: [String: CacheEntry] = [:]
         if let cacheURL,
-           let data = try? Data(contentsOf: cacheURL),
+           let data = Self.readCacheData(from: cacheURL),
            let obj = try? JSONDecoder().decode([String: CacheEntry].self, from: data) {
             // v1 keys embedded the absolute rollout path.  They are not
             // migrated: dropping them is the safe, deterministic rebuild.
@@ -96,12 +101,69 @@ struct TokenUsageLogReader: TokenLogReading {
         let tempRoot = FileManager.default.temporaryDirectory.standardizedFileURL.path
         let parent = url.deletingLastPathComponent().standardizedFileURL
         if parent.path == tempRoot || parent.path == "/tmp" || parent.path == "/private/tmp" {
-            try? data.write(to: url, options: .atomic)
-            try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: 0o600)],
-                                                    ofItemAtPath: url.path)
+            writeSharedTemporaryCache(data, to: url)
         } else {
             try? PrivateStorage.atomicWrite(data, to: url)
         }
+    }
+
+    /// Read an on-disk cache only after checking the link, type, owner, mode
+    /// and size.  Data(contentsOf:) follows symlinks, so this gate must happen
+    /// before Foundation is allowed to open the path.
+    private static func readCacheData(from url: URL) -> Data? {
+        let fm = FileManager.default
+        guard !isSymlink(url),
+              let attrs = try? fm.attributesOfItem(atPath: url.path),
+              (attrs[.type] as? FileAttributeType) == .typeRegular,
+              let size = (attrs[.size] as? NSNumber)?.int64Value,
+              size >= 0, size <= maxCacheBytes,
+              let permissions = (attrs[.posixPermissions] as? NSNumber)?.uint16Value,
+              permissions & 0o177 == 0,
+              let owner = (attrs[.ownerAccountID] as? NSNumber)?.intValue,
+              let currentOwner = currentUserID(fm),
+              owner == 0 || owner == currentOwner else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    /// Atomic replacement for fixture/test cache paths under shared /tmp.
+    /// It avoids chmod'ing the shared directory and replaces a symlink itself,
+    /// never opening its target.
+    private func writeSharedTemporaryCache(_ data: Data, to url: URL) {
+        let fm = FileManager.default
+        let parent = url.deletingLastPathComponent()
+        let temp = parent.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+        fm.createFile(atPath: temp.path, contents: nil,
+                      attributes: [.posixPermissions: NSNumber(value: 0o600)])
+        do {
+            let handle = try FileHandle(forWritingTo: temp)
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            try handle.close()
+            try fm.setAttributes([.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: temp.path)
+            if Self.isSymlink(url) {
+                try fm.removeItem(at: url)
+            }
+            if fm.fileExists(atPath: url.path) {
+                _ = try fm.replaceItemAt(url, withItemAt: temp)
+            } else {
+                try fm.moveItem(at: temp, to: url)
+            }
+            try fm.setAttributes([.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: url.path)
+        } catch {
+            try? fm.removeItem(at: temp)
+        }
+    }
+
+    private static func isSymlink(_ url: URL) -> Bool {
+        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
+    }
+
+    private static func currentUserID(_ fileManager: FileManager) -> Int? {
+        #if canImport(Darwin)
+        return Int(getuid())
+        #else
+        return (try? fileManager.attributesOfItem(atPath: fileManager.homeDirectoryForCurrentUser.path)[.ownerAccountID] as? NSNumber)?.intValue
+        #endif
     }
 
     /// Stable, non-reversible cache identity derived from the sessions-root

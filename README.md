@@ -168,9 +168,10 @@ All tests are pure-function / fixture tests, compiled with `swiftc` against the 
 make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance (bubble + control button) + clamp + logger rotation + FollowTickPlanner
 make test-data    # data layer: weekly aggregation / incremental cache / backoff / pause / desensitization / codex path resolve / rpc stdio e2e
 make test-shell   # theme safe-parsing / settings persistence / hot-reload / autostart state mapping / StatusBar TCC hint
+make test-privacy # runtime path containment / private storage / helper environment / cache privacy fixtures
 make docs-check   # offline public-Markdown links / catalog / legacy-path / privacy gate
 make test-docs    # documentation checker unit tests
-make test         # full suite (Swift tests + docs gate; docs tests are additional)
+make test         # full suite (docs gates + privacy + Swift UI/data/shell fixtures)
 ```
 
 The current Swift test counts and verification evidence are maintained in [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md).

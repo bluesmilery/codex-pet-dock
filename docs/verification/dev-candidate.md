@@ -21,7 +21,7 @@ make test-docs
 make test
 ```
 
-通过条件是 release 构建退出码 0 且 0 warning，docs gate 通过，`make test` 的 test-ui、test-data、test-shell 三个独立入口全部通过。Swift 断言细分以各入口测试源码和实际输出为准，避免在 README/spec 复制易漂移计数。文档测试是额外门禁，不计入 Swift 断言。
+通过条件是 release 构建退出码 0 且 0 warning，docs gate 通过，`make test` 的 test-privacy、test-ui、test-data、test-shell 四个独立入口全部通过。Swift 断言细分以各入口测试源码和实际输出为准，避免在 README/spec 复制易漂移计数。文档测试是额外门禁，不计入 Swift 断言。
 
 文档变更还需在任务和 Review 中记录 `Docs Impact: none | update | new`。`make docs-check` 离线检查本地链接、`docs/README.md` 目录完整性、旧顶层 docs 路径和公开隐私模式；它不检查外部 URL 可达性，也不替代真机验证。
 

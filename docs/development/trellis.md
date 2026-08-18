@@ -52,7 +52,7 @@ make docs-check
 make test-docs
 ```
 
-`make test` 会先执行这两个 docs gate，再执行 test-ui、test-data、test-shell；当前测试数字和证据以 [`docs/verification/dev-candidate.md`](../verification/dev-candidate.md) 为准，文档测试另计。检查器只读仓库内公开 Markdown，不联网，也不读取认证文件、会话正文或浏览器 Profile。
+`make test` 会先执行这两个 docs gate，再执行 test-privacy、test-ui、test-data、test-shell；当前测试数字和证据以 [`docs/verification/dev-candidate.md`](../verification/dev-candidate.md) 为准，文档测试另计。检查器只读仓库内公开 Markdown，不联网，也不读取认证文件、会话正文或浏览器 Profile。
 
 ## 日常检查
 

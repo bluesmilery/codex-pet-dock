@@ -167,9 +167,10 @@ make clean-logs   # 清理 Application Support/PetDock 私有运行 / 诊断日�
 make test-ui      # 宠物识别 + 坐标转换 + 跟随状态机 + 气泡可见性 + 障碍避让（气泡 + 控制按钮）+ 边缘 clamp + 日志轮转 + FollowTickPlanner
 make test-data    # 数据层：周窗口聚合 / 增量缓存 / 退避 / 暂停 / 脱敏 / codex 路径解析 / rpc stdio 端到端
 make test-shell   # 主题安全解析 / 设置持久化 / 热加载 / 自启状态映射 / StatusBar TCC 提示
+make test-privacy # 运行时路径 containment / 私有存储 / helper 环境 / cache 隐私 fixture
 make docs-check   # 离线检查公开 Markdown 链接 / 目录 / 旧路径 / 隐私门禁
 make test-docs    # 文档检查器单元测试
-make test         # 全量（Swift 测试 + docs gate；文档测试另计）
+make test         # 全量（docs gate + privacy + Swift UI/data/shell fixture）
 ```
 
 当前 Swift 测试数量与验证证据统一维护在 [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md)。

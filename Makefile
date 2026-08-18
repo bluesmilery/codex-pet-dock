@@ -63,6 +63,6 @@ test-docs:
 test-privacy:
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m pytest -q tests/test_runtime_privacy.py
 
-# 全量测试：文档门禁 + UI + 数据(含 LiveDockProvider 映射) + Shell。
+# 全量测试：文档门禁 + privacy + UI + 数据(含 LiveDockProvider 映射) + Shell。
 test: docs-check test-docs test-privacy test-ui test-data test-shell
 	@echo "全部测试通过（Swift 断言 + privacy/docs gate）"

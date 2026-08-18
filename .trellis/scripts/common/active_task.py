@@ -350,11 +350,9 @@ def _remove_file(path: Path) -> bool:
 def _task_refs_match(left: str | None, right: str | None, repo_root: Path) -> bool:
     if not left or not right:
         return False
-    left_path = resolve_task_ref(left, repo_root)
-    right_path = resolve_task_ref(right, repo_root)
-    if left_path is not None and right_path is not None:
-        return left_path == right_path
-    return normalize_task_ref(left) == normalize_task_ref(right)
+    left_ref = _canonical_task_ref(left, repo_root, require_existing=False)
+    right_ref = _canonical_task_ref(right, repo_root, require_existing=False)
+    return left_ref is not None and left_ref == right_ref
 
 
 def _pending_ticket_matches_args(ticket: dict[str, Any], repo_root: Path) -> bool:
@@ -558,7 +556,12 @@ def _write_json(path: Path, data: dict[str, Any]) -> bool:
         return False
 
 
-def _canonical_task_ref(task_path: str, repo_root: Path) -> str | None:
+def _canonical_task_ref(
+    task_path: str,
+    repo_root: Path,
+    *,
+    require_existing: bool = True,
+) -> str | None:
     normalized = normalize_task_ref(task_path)
     if not normalized:
         return None
@@ -566,11 +569,11 @@ def _canonical_task_ref(task_path: str, repo_root: Path) -> str | None:
     if path_obj.is_absolute() or any(part == ".." for part in path_obj.parts):
         return None
     full_path = resolve_task_ref(normalized, repo_root)
-    if full_path is None or not full_path.is_dir():
+    if full_path is None or (require_existing and not full_path.is_dir()):
         return None
     try:
         resolved_root = repo_root.resolve(strict=True)
-        resolved_path = full_path.resolve(strict=True)
+        resolved_path = full_path.resolve(strict=require_existing)
         return resolved_path.relative_to(resolved_root).as_posix()
     except (OSError, RuntimeError, ValueError):
         return None
@@ -584,9 +587,16 @@ def _active_from_ref(
 ) -> ActiveTask | None:
     if not task_ref:
         return None
-    resolved = resolve_task_ref(task_ref, repo_root)
+    # Runtime JSON may be legacy or tampered.  Canonicalize before exposing a
+    # task path so absolute refs, ``..`` and symlink escapes cannot reach the
+    # hook or task CLI.  Missing-but-contained tasks remain stale; rejected
+    # refs become an empty stale result rather than exposing the raw value.
+    canonical = _canonical_task_ref(task_ref, repo_root, require_existing=False)
+    if canonical is None:
+        return ActiveTask(None, source_type, context_key, stale=True)
+    resolved = resolve_task_ref(canonical, repo_root)
     stale = resolved is None or not resolved.is_dir()
-    return ActiveTask(task_ref, source_type, context_key, stale)
+    return ActiveTask(canonical, source_type, context_key, stale)
 
 
 def _context_path(repo_root: Path, context_key: str) -> Path:
@@ -736,7 +746,7 @@ def clear_active_task(
 
 def clear_task_from_sessions(task_path: str, repo_root: Path) -> int:
     """Delete all session runtime files that point at a task."""
-    target = _canonical_task_ref(task_path, repo_root) or normalize_task_ref(task_path)
+    target = _canonical_task_ref(task_path, repo_root, require_existing=False)
     if not target:
         return 0
 
@@ -750,7 +760,7 @@ def clear_task_from_sessions(task_path: str, repo_root: Path) -> int:
         current = _string_value(context.get("current_task"))
         if not current:
             continue
-        current_ref = _canonical_task_ref(current, repo_root) or normalize_task_ref(current)
+        current_ref = _canonical_task_ref(current, repo_root, require_existing=False)
         if current_ref != target:
             continue
         if session_path.is_file() and _remove_file(session_path):

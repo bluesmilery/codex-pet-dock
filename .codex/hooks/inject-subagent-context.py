@@ -403,8 +403,8 @@ def read_jsonl_entries(base_path: str, jsonl_path: str) -> list[dict]:
     Returns:
         [{"file": path, "type": "file" | "directory", "reason": reason}, ...]
     """
-    full_path = os.path.join(base_path, jsonl_path)
-    if not os.path.exists(full_path):
+    full_path_obj = _safe_context_path(base_path, jsonl_path)
+    if full_path_obj is None or not full_path_obj.is_file():
         print(
             f"[inject-subagent-context] WARN: {jsonl_path} not found — "
             f"sub-agent will receive only task artifacts",
@@ -415,7 +415,7 @@ def read_jsonl_entries(base_path: str, jsonl_path: str) -> list[dict]:
     entries: list[dict] = []
     saw_real_entry = False
     try:
-        with open(full_path, "r", encoding="utf-8") as f:
+        with full_path_obj.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -929,8 +929,8 @@ def _handle_codex_subagent_start(input_data: dict) -> None:
         return
 
     if subagent_type in AGENTS_REQUIRE_TASK:
-        task_dir_full = Path(repo_root) / task_dir
-        if not task_dir_full.is_dir():
+        task_dir_full = _safe_context_path(repo_root, task_dir)
+        if task_dir_full is None or not task_dir_full.is_dir():
             return
 
     if subagent_type == AGENT_IMPLEMENT:
@@ -1109,8 +1109,8 @@ def main():
         if not task_dir:
             sys.exit(0)
         # Check if task directory exists
-        task_dir_full = os.path.join(repo_root, task_dir)
-        if not os.path.exists(task_dir_full):
+        task_dir_full = _safe_context_path(repo_root, task_dir)
+        if task_dir_full is None or not task_dir_full.is_dir():
             sys.exit(0)
 
     # Check for [finish] marker in prompt (check agent with finish context)

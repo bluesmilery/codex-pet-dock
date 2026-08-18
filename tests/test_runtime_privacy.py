@@ -53,6 +53,36 @@ def test_context_paths_are_canonically_contained(tmp_path: Path) -> None:
     assert task_context._resolve_context_entry_path("escape.md", repo, None) is None
 
 
+def test_active_task_rejects_tampered_runtime_task_refs(tmp_path: Path) -> None:
+    """A legacy session JSON must not turn current_task into an escape path."""
+    active = _load_common("active_task", SCRIPTS / "common" / "active_task.py")
+    repo = tmp_path / "repo"
+    tasks = repo / ".trellis" / "tasks"
+    safe = tasks / "safe"
+    safe.mkdir(parents=True)
+    outside = tmp_path / "outside-task"
+    outside.mkdir()
+    (tasks / "link").symlink_to(outside, target_is_directory=True)
+
+    key = active._context_key("codex", "session", "fixture-session")
+    context_path = active._context_path(repo, key)
+    context_path.parent.mkdir(parents=True)
+    for current_task in (str(outside), "../outside-task", ".trellis/tasks/link"):
+        context_path.write_text(
+            json.dumps({"platform": "codex", "current_task": current_task}),
+            encoding="utf-8",
+        )
+        resolved = active.resolve_active_task(
+            repo,
+            {"session_id": "fixture-session"},
+            platform="codex",
+            allow_single_session_fallback=False,
+            allow_environment_context=False,
+        )
+        assert resolved.task_path is None
+        assert resolved.stale
+
+
 def test_hook_reader_does_not_read_escape(tmp_path: Path) -> None:
     hook = _load("inject_subagent_context", ROOT / ".codex" / "hooks" / "inject-subagent-context.py")
     repo = tmp_path / "repo"
@@ -66,6 +96,24 @@ def test_hook_reader_does_not_read_escape(tmp_path: Path) -> None:
     assert hook._read_file_bytes(str(repo), str(outside)) is None
     assert hook._read_file_bytes(str(repo), "../outside.md") is None
     assert hook._read_file_bytes(str(repo), "escape.md") is None
+
+
+def test_hook_rejects_external_manifest_and_task_dir(tmp_path: Path) -> None:
+    """Manifest JSONL itself, not only its child entries, is untrusted."""
+    hook = _load("inject_subagent_context_manifest", ROOT / ".codex" / "hooks" / "inject-subagent-context.py")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "outside.md").write_text("PRIVATE-OUTSIDE", encoding="utf-8")
+    (outside / "implement.jsonl").write_text(
+        json.dumps({"file": str(outside / "outside.md"), "reason": "fixture"}) + "\n",
+        encoding="utf-8",
+    )
+    (repo / "task-link").symlink_to(outside, target_is_directory=True)
+
+    for manifest in (str(outside / "implement.jsonl"), "../outside/implement.jsonl", "task-link/implement.jsonl"):
+        assert hook.read_jsonl_entries(str(repo), manifest) == []
 
 
 def test_runtime_metadata_is_minimal_and_private(tmp_path: Path) -> None:

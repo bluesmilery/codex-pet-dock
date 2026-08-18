@@ -45,6 +45,17 @@ enum PrivateStorage {
     @discardableResult
     static func ensurePrivateDirectory(_ url: URL) throws -> URL {
         let fm = FileManager.default
+        // A child may be requested directly (for example, the first log
+        // append after an upgrade).  Tighten the PetDock root before creating
+        // or tightening Logs/Diagnostics so an existing 0755 root cannot
+        // remain as the parent of a 0700 child.
+        if url.lastPathComponent == logsDirectoryName || url.lastPathComponent == diagnosticsDirectoryName,
+           url.deletingLastPathComponent().lastPathComponent == applicationName {
+            let root = url.deletingLastPathComponent()
+            if root.path != url.path {
+                _ = try ensurePrivateDirectory(root)
+            }
+        }
         var isDirectory: ObjCBool = false
         if fm.fileExists(atPath: url.path, isDirectory: &isDirectory) {
             guard isDirectory.boolValue, !isSymlink(url) else {

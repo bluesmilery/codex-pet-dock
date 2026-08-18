@@ -91,7 +91,8 @@ struct CodexExecutableResolver {
         var isDir: ObjCBool = false
         guard fileManager.fileExists(atPath: target.path, isDirectory: &isDir), !isDir.boolValue,
               fileManager.isExecutableFile(atPath: target.path),
-              isTrustedPath(target) else { return false }
+              isTrustedPath(target),
+              isTrustedLaunchPath(url) else { return false }
         return true
     }
 
@@ -114,6 +115,29 @@ struct CodexExecutableResolver {
                   mode & 0o022 == 0,
                   let dirOwner = (dirAttrs[.ownerAccountID] as? NSNumber)?.intValue,
                   dirOwner == 0 || dirOwner == Int(getuid()) else { return false }
+            if current.path == "/" { break }
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path { break }
+            current = parent
+        }
+        return true
+    }
+
+    /// Validate the path that will be prepended to the child PATH.  A symlink
+    /// executable may safely resolve into a private nvm/npm target, but its
+    /// launch directory chain must not be writable by group/world (otherwise a
+    /// replacement `node` next to the launch URL could hijack its shebang).
+    private func isTrustedLaunchPath(_ launchURL: URL) -> Bool {
+        let fm = fileManager
+        var current = launchURL.deletingLastPathComponent().standardizedFileURL
+        while true {
+            // attributesOfItem follows safe system aliases such as /var;
+            // ownership/mode of the resolved directory is what matters here.
+            guard let attrs = try? fm.attributesOfItem(atPath: current.path),
+                  let permissions = (attrs[.posixPermissions] as? NSNumber)?.uint16Value,
+                  permissions & 0o022 == 0,
+                  let owner = (attrs[.ownerAccountID] as? NSNumber)?.intValue,
+                  owner == 0 || owner == Int(getuid()) else { return false }
             if current.path == "/" { break }
             let parent = current.deletingLastPathComponent()
             if parent.path == current.path { break }

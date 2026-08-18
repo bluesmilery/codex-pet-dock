@@ -253,6 +253,44 @@ struct DataTestRunner {
         check("T3c 缓存往返聚合一致", pts2.reduce(Int64(0)) { $0 + $1.tokens } == 710, "")
         section("增量缓存")
 
+        // ---- T-cache-privacy: cache URL symlink must not be read ----
+        do {
+            let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-cache-privacy-(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: cacheRoot)
+            try! FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+            let sourceCache = cacheRoot.appendingPathComponent("source.json")
+            var seed = TokenUsageLogReader(sessionsRoot: fixtureRoot, cacheURL: sourceCache)
+            _ = try! seed.readPoints(from: winFrom, to: winTo)
+            let external = cacheRoot.appendingPathComponent("external.json")
+            try! FileManager.default.copyItem(at: sourceCache, to: external)
+            let cacheLink = cacheRoot.appendingPathComponent("cache-link.json")
+            try! FileManager.default.createSymbolicLink(at: cacheLink, withDestinationURL: external)
+            var guarded = TokenUsageLogReader(sessionsRoot: fixtureRoot, cacheURL: cacheLink)
+            _ = try! guarded.readPoints(from: winFrom, to: winTo)
+            check("T-cache-privacy symlink cache 不读取外部缓存", guarded.debugFilesParsed == 2,
+                  "parsed=\(guarded.debugFilesParsed)")
+            try? FileManager.default.removeItem(at: cacheRoot)
+        }
+        section("cache 私有加载")
+
+        // ---- T-storage-privacy: tightening a child also tightens PetDock root ----
+        do {
+            let storageRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-storage-privacy-\(ProcessInfo.processInfo.processIdentifier)/PetDock", isDirectory: true)
+            try? FileManager.default.removeItem(at: storageRoot)
+            try! FileManager.default.createDirectory(at: storageRoot, withIntermediateDirectories: true)
+            try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: storageRoot.path)
+            let child = storageRoot.appendingPathComponent("Logs", isDirectory: true)
+            _ = try! PrivateStorage.ensurePrivateDirectory(child)
+            let rootMode = (try! FileManager.default.attributesOfItem(atPath: storageRoot.path)[.posixPermissions] as! NSNumber).uint16Value & 0o777
+            let childMode = (try! FileManager.default.attributesOfItem(atPath: child.path)[.posixPermissions] as! NSNumber).uint16Value & 0o777
+            check("T-storage-privacy PetDock root 与 child 均 0700", rootMode == 0o700 && childMode == 0o700,
+                  "root=\(String(rootMode, radix: 8)) child=\(String(childMode, radix: 8))")
+            try? FileManager.default.removeItem(at: storageRoot)
+        }
+        section("PrivateStorage 权限")
+
         // ---- T-evict: 缓存淘汰（范围外 / 已删除 / 过期）----
         // 窗口全部由 FixtureCalendar 派生：[dayB, winTo] 含 a+b；[anchorDay, winTo] 仅含 a。
         do {
@@ -584,6 +622,19 @@ struct DataTestRunner {
             check("T-r12 group 可写目标→拒绝", !CodexExecutableResolver(
                 environment: [CodexExecutableResolver.envOverride: writable.path],
                 homeDirectory: linkHome, systemCandidates: []).isExecutableFile(writable), "")
+
+            // T-r13: a writable launch directory cannot hide a trusted target
+            // behind a symlink.  The resolver may preserve safe nvm/npm launch
+            // URLs, but every directory used for the launch PATH must be private.
+            let writableLaunchDir = linkHome.appendingPathComponent("writable-launch")
+            try! FileManager.default.createDirectory(at: writableLaunchDir, withIntermediateDirectories: true)
+            let writableLaunch = writableLaunchDir.appendingPathComponent("codex")
+            try! FileManager.default.createSymbolicLink(at: writableLaunch, withDestinationURL: realExec)
+            try! FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: writableLaunchDir.path)
+            let r13 = CodexExecutableResolver(
+                environment: [CodexExecutableResolver.envOverride: writableLaunch.path],
+                homeDirectory: linkHome, systemCandidates: [])
+            check("T-r13 可写 launch dir→trusted target symlink 拒绝", !r13.isExecutableFile(writableLaunch), "")
 
             try? FileManager.default.removeItem(at: tmp)
         }
