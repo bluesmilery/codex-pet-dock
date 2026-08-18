@@ -124,7 +124,7 @@ final class BubbleVisibilityProbe: Sendable {
             s.knownWids = Set(candidates.map { $0.wid })
             guard !candidates.isEmpty else {
                 // 完全空闲（无候选 + 无缓存 + 无在途）→ 无意义锁写，直接 return。
-                // 宠物可见但下方无会话气泡时，moving 态 20Hz 每 tick 调 probe([])，
+                // 宠物可见但下方无会话气泡时，moving 态会高频调用 probe([])，
                 // 此早退避免每帧递增 generation + 清空字典的无意义锁写。
                 if s.cached.isEmpty && !s.inFlight { return (0, [:], false) }
                 // 仍有缓存或在途：与 reset() 一致递增 generation + 清 cached，使旧结果失效。

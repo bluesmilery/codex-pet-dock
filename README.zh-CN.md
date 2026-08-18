@@ -173,7 +173,7 @@ make test-docs    # 文档检查器单元测试
 make test         # 全量（docs gate + privacy + Swift UI/data/shell fixture）
 ```
 
-本次改动的最新本地运行通过 419 条 Swift 断言（UI 189 + Data 131 + Shell 99）、20 条隐私测试和 10 条文档检查器单元测试；`docs-check` 扫描 14 个公开 Markdown 文件、0 findings。候选验收证据统一维护在 [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md)。
+当前套件数量与候选验收证据统一维护在 [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md)；气泡可见性覆盖范围见 [`docs/architecture/dock-obstacle-avoidance.md`](docs/architecture/dock-obstacle-avoidance.md)，具体用例以 `tests/main.swift` 为准。
 
 隐私边界由 fixture 测试固化：数据层结果不包含会话正文诱饵、不包含凭证。详见 `docs/architecture/data-layer.md` 与 `tests/`。
 

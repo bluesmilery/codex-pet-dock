@@ -17,7 +17,7 @@ enum DebugLog {
     }
 }
 
-/// 后台异步文件日志：所有 IO 派发到串行后台队列，不阻塞主线程（tick 在 moving 态 20Hz 调用）。
+/// 后台异步文件日志：所有 IO 派发到串行后台队列，不阻塞主线程（moving 态 tick 高频调用）。
 /// 关闭时（release 默认）`log()` 为 no-op，不创建/写任何文件。
 ///
 /// 句柄复用：文件句柄 lazy 打开后常驻于串行队列，不再每次写入都 open/close（accepted-deferred）。

@@ -97,7 +97,7 @@ enum PetTracker {
     /// 时钟源（PID 缓存 TTL 判断用）。测试可注入固定时钟。
     static var nowProvider: () -> Date = { Date() }
 
-    // MARK: - PID 缓存（1s TTL，moving 态 20Hz 下避免每 tick 查 NSRunningApplication）
+    // MARK: - PID 缓存（1s TTL，moving 态高频轮询时避免每 tick 查 NSRunningApplication）
 
     static let pidCacheTTL: TimeInterval = 1.0
     private static let pidLock = NSLock()
@@ -106,7 +106,7 @@ enum PetTracker {
     private static var hasPIDCache = false
 
     /// R1：通过 bundle id 拿 codex 主进程 PID 集合（结果在 `pidCacheTTL` 内缓存）。
-    /// PID 极少变化，1s TTL 足够；moving 态 20Hz 下从 20 次/秒降为 ~1 次/秒。
+    /// PID 极少变化，1s TTL 足够；moving 态高频轮询时降为约 1 次/秒。
     static func codexPIDs() -> [Int32] {
         pidLock.lock()
         if hasPIDCache, nowProvider().timeIntervalSince(cachedPIDsAt) < pidCacheTTL {
@@ -220,7 +220,7 @@ enum PetTracker {
     /// 运行模式使用的候选集：PID 通道 ∪ ownerName 关键词通道（按 wid 去重）。
     /// Electron 应用的窗口可能挂在 helper/renderer PID 上（非主 PID），故同时用 ownerName 兜底。
     /// **单次 `CGWindowListCopyWindowInfo` 枚举**：两通道共享 `infosProvider()` 结果，
-    /// moving 态 20Hz 下从 40 次/秒降为 20 次/秒。
+    /// moving 态高频轮询时从每 tick 两次枚举降为一次。
     static func unionCandidates() -> [WinCandidate] {
         guard let infos = infosProvider() else { return [] }
         let byPID = enumerate(pids: codexPIDs(), from: infos)

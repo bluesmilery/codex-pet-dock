@@ -174,7 +174,7 @@ make test-docs    # documentation checker unit tests
 make test         # full suite (docs gates + privacy + Swift UI/data/shell fixtures)
 ```
 
-The latest local run for this change passed 419 Swift assertions (189 UI + 131 data + 99 shell), 20 privacy tests, and 10 documentation-checker unit tests; `docs-check` scanned 14 public Markdown files with 0 findings. Candidate verification evidence is maintained in [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md).
+Current suite counts and candidate verification evidence are maintained in [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md); detailed bubble-visibility coverage is described in [`docs/architecture/dock-obstacle-avoidance.md`](docs/architecture/dock-obstacle-avoidance.md) and defined by `tests/main.swift`.
 
 Privacy boundaries are pinned by fixture tests: data-layer results contain no conversation-content decoys and no credentials. See `docs/architecture/data-layer.md` and `tests/`.
 

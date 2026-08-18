@@ -31,7 +31,7 @@
 
 ## BubbleVisibility 可见性
 
-窗口的 onscreen、alpha 与 bounds 元数据无法区分展开气泡和收起空背景。`BubbleVisibilityProbe` 使用 ScreenCaptureKit 公开 API 捕获候选窗口像素，仅在内存中计算 `alpha > 0.04` 的非透明占比与 bbox 占比，再由纯函数滞回分类：
+窗口的 onscreen、alpha 与 bounds 元数据无法区分展开气泡和收起空背景。`BubbleVisibilityProbe` 在 `CGPreflightScreenCaptureAccess()` 已通过时使用 ScreenCaptureKit 公开 API 捕获候选窗口像素，仅在内存中计算 `alpha > 0.04` 的非透明占比与 bbox 占比，再由纯函数滞回分类：
 
 - open：`nonTransparentRatio >= 0.6%` 或 `bboxRatio >= 1.0%`；
 - close：`nonTransparentRatio <= 0.3%` 且 `bboxRatio <= 0.5%`；
@@ -39,7 +39,11 @@
 
 像素只在内存中统计，不 OCR、不保存图像、不记录颜色、文字或窗口内容。
 
-调度为 macOS 14+ 异步捕获，最多 2Hz（0.5 秒间隔）且 single-flight；主线程只读缓存，结果异步生效。每次 `probe` 都同步刷新 `knownWids`，候选消失立即按当前帧失效。只有仍有缓存或在途任务时才递增 generation、清理缓存并使旧结果失效；完全空闲（无候选、无缓存、无在途）直接早退，不递增 generation。`reset()` 在候选 / 宠物消失时始终递增 generation。旧任务完成后不能写回过期缓存。
+应用启动时，`ScreenCapturePermissionRequestGate` 保证每个进程最多主动调用一次权限请求。每次 `probe` 都先同步刷新 `knownWids`；preflight 尚未通过时不进入 capturer 或 ScreenCaptureKit，并清除旧 hidden 缓存，使当前候选继续按 visible 保守避让。权限在重启后的进程中生效时，后续 probe 自动恢复捕获，不持久化权限副本。
+
+macOS 14+ 捕获最多 2Hz（0.5 秒间隔）且 strict single-flight。异步任务只有在 generation 仍有效时才能写入缓存；候选消失立即按当前帧失效，`reset()` 或仍有缓存 / 在途任务的空候选会递增 generation，使旧任务不能写回缓存或发出通知。完全空闲（无候选、无缓存、无在途）直接早退，不递增 generation。
+
+成功结果写入缓存后，只有当前 `knownWids` 中候选的可见性实际变化才发出一次 `onVisibilityChange`；结果不变、空候选、reset 与旧 generation 均不通知。运行时回调切到主线程并立即重排现有 follow tick，由同一条窗口枚举与 `safeDockFrame` 路径重新计算布局。因此即使宠物 rect 未变化，气泡从 visible 变为 hidden 后，底座也会在下一次布局执行中回到宠物正下方。
 
 ## 控制按钮与边界
 
@@ -54,4 +58,4 @@
 make test-ui
 ```
 
-`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、固定宽度、水平 clamp、屏幕边界、候选消失复位和调度并发。当前公开口径为 **BubbleVisibility 49 项**（`test-ui` 套件的一部分）；细分用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、多屏硬件与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
+`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、固定宽度、水平 clamp、屏幕边界、权限门控、可见性变化通知、候选消失复位和调度并发。当前公开口径为 **BubbleVisibility 62 项**（`test-ui` 套件的一部分）；细分用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、多屏硬件与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
