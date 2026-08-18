@@ -175,6 +175,19 @@ def _resolve_active_task(trellis_dir: Path, hook_input: dict):
     return resolve_active_task(trellis_dir.parent, hook_input, platform="codex")
 
 
+def _load_task_data(trellis_dir: Path, task_dir: Path) -> dict:
+    """Load task metadata through the shared symlink-safe task boundary."""
+    scripts_dir = trellis_dir / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    try:
+        from common.tasks import load_task  # type: ignore[import-not-found]
+    except Exception:
+        return {}
+    task_info = load_task(task_dir)
+    return task_info.raw if task_info is not None else {}
+
+
 def run_script(script_path: Path, context_key: str | None = None) -> str:
     try:
         env = os.environ.copy()
@@ -243,13 +256,7 @@ def _get_task_status(trellis_dir: Path, hook_input: dict) -> str:
             "Next: Task directory not found. Run: python3 ./.trellis/scripts/task.py finish"
         )
 
-    task_json_path = task_dir / "task.json"
-    task_data: dict = {}
-    if task_json_path.is_file():
-        try:
-            task_data = json.loads(task_json_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, PermissionError):
-            pass  # Optional task metadata; fall back to generic status.
+    task_data = _load_task_data(trellis_dir, task_dir)
 
     task_title = task_data.get("title", task_ref)
     task_status = task_data.get("status", "unknown")
@@ -385,14 +392,9 @@ def _build_compact_current_state(
     if active.task_path:
         task_dir = _resolve_task_dir(trellis_dir, active.task_path)
         status = "unknown"
-        task_json = task_dir / "task.json"
-        if task_json.is_file():
-            try:
-                data = json.loads(task_json.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    status = str(data.get("status") or "unknown")
-            except (json.JSONDecodeError, OSError):
-                pass  # Optional task metadata; fall back to generic status.
+        data = _load_task_data(trellis_dir, task_dir)
+        if data:
+            status = str(data.get("status") or "unknown")
         lines.append(f"Current task: {_repo_relative(repo_root, task_dir)}; status={status}.")
     else:
         lines.append("Current task: none.")

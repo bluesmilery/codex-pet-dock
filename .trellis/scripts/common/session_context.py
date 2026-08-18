@@ -14,14 +14,17 @@ Provides:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-from .active_task import resolve_context_key
+from .active_task import _safe_runtime_dir, resolve_context_key
 from .config import get_git_packages
 from .git import run_git
 from .packages_context import get_packages_section
@@ -418,7 +421,22 @@ def _compare_versions(left: str, right: str) -> int | None:
     return _compare_prerelease(left_prerelease, right_prerelease)
 
 
-def _update_marker_path(repo_root: Path, context_key: str | None = None) -> Path:
+def _marker_runtime_dir(repo_root: Path) -> Path | None:
+    return _safe_runtime_dir(repo_root, DIR_WORKFLOW, ".runtime")
+
+
+def _marker_identity(context_key: str | None) -> str:
+    identity = context_key.strip() if isinstance(context_key, str) else ""
+    if not identity:
+        identity = resolve_context_key() or ""
+    if not identity:
+        identity = os.environ.get("TERM_SESSION_ID", "").strip()
+    if not identity:
+        identity = f"ppid-{os.getppid()}"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+
+
+def _update_marker_path(repo_root: Path, context_key: str | None = None) -> Path | None:
     """Path of the once-per-session marker that throttles the update check.
 
     `context_key` lets a caller that already resolved session identity pass it
@@ -426,20 +444,63 @@ def _update_marker_path(repo_root: Path, context_key: str | None = None) -> Path
     more reliable than this function's environment-only fallback chain. Shell
     entry points leave it None and keep the previous behavior.
     """
-    if not context_key:
-        context_key = resolve_context_key()
-    if not context_key:
-        terminal_key = os.environ.get("TERM_SESSION_ID", "").strip()
-        context_key = terminal_key or f"ppid-{os.getppid()}"
-    safe_key = re.sub(r"[^A-Za-z0-9._-]+", "_", context_key).strip("._-")
-    if not safe_key:
-        safe_key = "session"
-    return (
-        repo_root
-        / DIR_WORKFLOW
-        / ".runtime"
-        / f"update-check-{safe_key[:160]}.marker"
-    )
+    runtime_dir = _marker_runtime_dir(repo_root)
+    if runtime_dir is None:
+        return None
+    try:
+        marker_path = runtime_dir / f"update-check-v2-{_marker_identity(context_key)}.marker"
+        marker_path.relative_to(runtime_dir)
+        runtime_dir.resolve(strict=False).relative_to(repo_root.resolve(strict=True))
+        return marker_path
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _marker_exists(repo_root: Path, marker_path: Path) -> bool:
+    runtime_dir = _marker_runtime_dir(repo_root)
+    if runtime_dir is None:
+        return False
+    try:
+        marker_path.relative_to(runtime_dir)
+        runtime_metadata = runtime_dir.stat()
+        if not stat.S_ISDIR(runtime_metadata.st_mode) or stat.S_IMODE(runtime_metadata.st_mode) != 0o700:
+            return False
+        metadata = marker_path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+            return False
+        marker_path.resolve(strict=True).relative_to(repo_root.resolve(strict=True))
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _write_marker(repo_root: Path, marker_path: Path) -> None:
+    runtime_dir = _marker_runtime_dir(repo_root)
+    if runtime_dir is None:
+        return
+    temp_path: Path | None = None
+    try:
+        runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        runtime_dir.chmod(0o700)
+        if _marker_runtime_dir(repo_root) is None:
+            return
+        fd, name = tempfile.mkstemp(
+            prefix=".update-check-", suffix=".tmp", dir=str(runtime_dir)
+        )
+        temp_path = Path(name)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("checked\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, marker_path)
+        temp_path = None
+    except (OSError, TypeError, ValueError):
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
 
 
 def _mark_update_check_attempted(
@@ -447,13 +508,11 @@ def _mark_update_check_attempted(
     context_key: str | None = None,
 ) -> bool:
     marker_path = _update_marker_path(repo_root, context_key)
-    if marker_path.exists():
+    if marker_path is None:
+        return True
+    if _marker_exists(repo_root, marker_path):
         return False
-    try:
-        marker_path.parent.mkdir(parents=True, exist_ok=True)
-        marker_path.write_text("checked\n", encoding="utf-8")
-    except OSError:
-        pass
+    _write_marker(repo_root, marker_path)
     return True
 
 
@@ -465,7 +524,9 @@ def get_update_hint(repo_root: Path, context_key: str | None = None) -> str | No
     Claude Code included — never saw the reminder at all.
     """
     marker_path = _update_marker_path(repo_root, context_key)
-    if marker_path.exists():
+    if marker_path is None:
+        return None
+    if _marker_exists(repo_root, marker_path):
         return None
 
     current_version = _read_project_version(repo_root)

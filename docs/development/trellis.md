@@ -66,4 +66,4 @@ git status --short
 
 ## Runtime 隐私边界
 
-`.trellis/.runtime/sessions/` 只写入由 session/conversation/transcript 派生的 opaque context key 与最小工作流元数据；原始身份值和 transcript 路径不会持久化。runtime 与 session 目录使用 0700，JSON 以 0600 临时文件 fsync 后 atomic replace。JSONL context 引用必须是仓库内相对路径，读取前 canonical containment 检查会拒绝绝对路径、`..` 和逃逸 symlink。
+`.trellis/.runtime/sessions/` 只写入由 session/conversation/transcript 派生的 opaque context key 与最小工作流元数据；原始身份值和 transcript 路径不会持久化。runtime 与 session 目录使用 0700，JSON 以 0600 临时文件 fsync 后 atomic replace。JSONL context 引用必须是仓库内相对路径，读取前 canonical containment 检查会拒绝绝对路径、`..` 和逃逸 symlink。update marker 只使用身份 hash，并以 0600 原子写入；runtime/marker symlink 均拒绝。

@@ -442,7 +442,7 @@ def _ticket_cwd_matches_repo(ticket: dict[str, Any], repo_root: Path) -> bool:
         return True
     try:
         Path(cwd).resolve().relative_to(repo_root)
-    except ValueError:
+    except (OSError, RuntimeError, ValueError):
         return False
     return True
 

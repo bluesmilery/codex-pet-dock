@@ -38,3 +38,4 @@
 - `.trellis/.gitignore` 已排除 `.developer` / `.current-task` / `.runtime/` 等本地状态。
 - `config.yaml` 设 `session_auto_commit: false`，journal 不自动提交。
 - `.trellis/.runtime/sessions/` 只保存 opaque context key 与最小工作流元数据；原始 session/conversation/transcript 值不得持久化。写入使用 0600 临时文件 + atomic replace，读取拒绝 symlink。
+- `.trellis/.runtime/` 的 update marker 只使用身份 hash；runtime 与 marker 分别固定 0700/0600，canonical containment 和 no-follow 检查拒绝 symlink 外写。

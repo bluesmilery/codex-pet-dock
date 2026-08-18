@@ -167,16 +167,20 @@ def get_active_task(root: Path, input_data: dict) -> Optional[tuple[str, str, st
     if active.stale:
         return task_dir.name, f"stale_{active.source_type}", active.source
 
-    task_json = task_dir / "task.json"
-    if not task_json.is_file():
-        return None
+    scripts_dir = root / ".trellis" / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
     try:
-        data = json.loads(task_json.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        from common.tasks import load_task  # type: ignore[import-not-found]
+    except Exception:
         return None
+    task_info = load_task(task_dir)
+    if task_info is None:
+        return None
+    data = task_info.raw
 
     task_id = data.get("id") or task_dir.name
-    status = data.get("status", "")
+    status = task_info.status
     if not isinstance(status, str) or not status:
         return None
     return task_id, status, active.source

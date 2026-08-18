@@ -13,6 +13,7 @@ import os
 import stat
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -267,6 +268,82 @@ def test_single_session_fallback_requires_opaque_regular_context(tmp_path: Path)
     ), opaque_results
     assert symlink_result is None
     assert directory_result is None
+
+
+def test_task_json_symlink_is_rejected_by_loader_and_hooks(tmp_path: Path) -> None:
+    """A canonical task directory must not make an external task.json trusted."""
+    tasks = _load_common("tasks", SCRIPTS / "common" / "tasks.py")
+    inject = _load("inject_workflow_state_task_json", ROOT / ".codex" / "hooks" / "inject-workflow-state.py")
+    session_start = _load("session_start_task_json", ROOT / ".codex" / "hooks" / "session-start.py")
+    repo = tmp_path / "repo"
+    task_dir = repo / ".trellis" / "tasks" / "safe"
+    task_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-task.json"
+    outside.write_text(
+        json.dumps({"id": "PRIVATE-ID", "title": "PRIVATE-TITLE", "status": "completed"}),
+        encoding="utf-8",
+    )
+    (task_dir / "task.json").symlink_to(outside)
+
+    active = SimpleNamespace(task_path=".trellis/tasks/safe", stale=False, source="fixture")
+    inject._resolve_active_task = lambda _root, _input: active
+    session_start._resolve_active_task = lambda _trellis_dir, _input: active
+
+    loaded = tasks.load_task(task_dir)
+    injected = inject.get_active_task(repo, {})
+    status = session_start._get_task_status(repo / ".trellis", {})
+    compact = session_start._build_compact_current_state(repo / ".trellis", {}, [])
+
+    assert loaded is None
+    assert injected is None
+    assert "PRIVATE-ID" not in status and "PRIVATE-TITLE" not in status
+    assert "PRIVATE-ID" not in compact and "PRIVATE-TITLE" not in compact
+
+
+def test_update_marker_is_opaque_private_and_symlink_safe(tmp_path: Path) -> None:
+    """Marker identity and all runtime I/O stay private and contained."""
+    session_context = _load_common("session_context", SCRIPTS / "common" / "session_context.py")
+    repo = tmp_path / "repo"
+    (repo / ".trellis").mkdir(parents=True)
+    raw_identity = "raw/TERM_SESSION_ID-private"
+
+    marker = session_context._update_marker_path(repo, raw_identity)
+    assert marker is not None
+    assert raw_identity not in str(marker)
+    assert session_context._mark_update_check_attempted(repo, raw_identity)
+    assert not session_context._mark_update_check_attempted(repo, raw_identity)
+    runtime = repo / ".trellis" / ".runtime"
+    assert stat.S_IMODE(runtime.stat().st_mode) == 0o700
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+    assert session_context._marker_exists(repo, marker)
+
+    outside = tmp_path / "outside-marker"
+    outside.write_text("UNCHANGED", encoding="utf-8")
+    marker.unlink()
+    marker.symlink_to(outside)
+    assert not session_context._marker_exists(repo, marker)
+    assert session_context._mark_update_check_attempted(repo, raw_identity)
+    assert outside.read_text(encoding="utf-8") == "UNCHANGED"
+    assert not marker.is_symlink()
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+
+    marker.unlink()
+    runtime.rmdir()
+    runtime_target = tmp_path / "runtime-outside"
+    runtime_target.mkdir()
+    runtime.symlink_to(runtime_target, target_is_directory=True)
+    assert session_context._update_marker_path(repo, "other-identity") is None
+    assert session_context._mark_update_check_attempted(repo, "other-identity")
+    assert list(runtime_target.iterdir()) == []
+
+
+def test_ticket_cwd_symlink_loop_fails_closed(tmp_path: Path) -> None:
+    active = _load_common("active_task", SCRIPTS / "common" / "active_task.py")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    loop = repo / "cwd-loop"
+    loop.symlink_to(loop)
+    assert active._ticket_cwd_matches_repo({"cwd": str(loop)}, repo) is False
 
 
 def test_runtime_metadata_is_minimal_and_private(tmp_path: Path) -> None:

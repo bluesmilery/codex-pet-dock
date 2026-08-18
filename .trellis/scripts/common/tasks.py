@@ -12,12 +12,33 @@ Provides:
 
 from __future__ import annotations
 
+import stat
 from collections.abc import Iterator
 from pathlib import Path
 
 from .io import read_json
 from .paths import FILE_TASK_JSON
 from .types import TaskInfo
+
+
+def _safe_task_json_path(task_dir: Path) -> Path | None:
+    """Return task.json only when it is a contained regular file.
+
+    Task directories are resolved by the active-task boundary, but their
+    metadata can still be replaced with a symlink.  lstat plus canonical
+    containment keeps every caller of this shared loader from following an
+    external or non-regular task.json.
+    """
+    try:
+        task_root = task_dir.resolve(strict=True)
+        task_json = task_dir / FILE_TASK_JSON
+        metadata = task_json.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            return None
+        task_json.resolve(strict=True).relative_to(task_root)
+        return task_json
+    except (OSError, RuntimeError, ValueError):
+        return None
 
 
 def load_task(task_dir: Path) -> TaskInfo | None:
@@ -29,8 +50,8 @@ def load_task(task_dir: Path) -> TaskInfo | None:
     Returns:
         TaskInfo if task.json exists and is valid, None otherwise.
     """
-    task_json = task_dir / FILE_TASK_JSON
-    if not task_json.is_file():
+    task_json = _safe_task_json_path(task_dir)
+    if task_json is None:
         return None
 
     data = read_json(task_json)
