@@ -1,5 +1,15 @@
 import Foundation
 
+/// 把 BubbleVisibility 的后台变化通知桥接到主线程现有跟随调度器。
+enum FollowTickWake {
+    static func visibilityChangeCallback(
+        scheduler: @escaping (TimeInterval) -> Void
+    ) -> @Sendable () -> Void {
+        let wake = DispatchWorkItem { scheduler(0) }
+        return { DispatchQueue.main.async(execute: wake) }
+    }
+}
+
 /// 一次跟随 tick 的纯决策层：把「该执行什么编排动作」从AppDelegate.tick 的副作用中剥离，
 /// 使核心编排（数据 pause/resume、UI show/hide、候选为空、dockVisible）可纯函数测试。
 /// 输入为只读快照，输出为互斥的动作信号；不触碰 UI / 数据 / timer。

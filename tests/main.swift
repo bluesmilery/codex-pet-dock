@@ -23,6 +23,14 @@ func check(_ desc: String, _ cond: Bool, _ extra: String = "") {
     if cond { pass += 1 } else { fail += 1 }
 }
 
+func waitPumpingMain(_ predicate: () -> Bool, timeout: TimeInterval = 5) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !predicate() && Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.005))
+    }
+    return predicate()
+}
+
 // ---- selectPet 识别规则 ----
 let r1 = PetTracker.selectPet(candidates: [mk(1, layer: 0, w: 800, h: 600), mk(2, layer: 3, w: 120, h: 120)], lastWID: nil)
 check("T1 主窗口+高layer宠物→选宠物 wid2", r1.selected?.wid == 2, r1.selected?.detailed() ?? "nil")
@@ -519,7 +527,7 @@ var fakeTime = Date(timeIntervalSince1970: 2000)
 let fakeCollapsed: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080)
 }
-let asyncProbe = BubbleVisibilityProbe(now: { fakeTime }, capturer: fakeCollapsed)
+let asyncProbe = BubbleVisibilityProbe(now: { fakeTime }, canCapture: { true }, capturer: fakeCollapsed)
 let c1 = mkw(100, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 asyncProbe.probe(candidates: [c1])
 check("T-bv13 probe后inFlight=true", asyncProbe.lock.withLock { $0.inFlight }, "")
@@ -536,7 +544,7 @@ let slowCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     return BubbleAlphaStats(nonTransparentRatio: 0.001, bboxRatio: 0.001)
 }
 fakeTime = Date(timeIntervalSince1970: 3000)
-let concProbe = BubbleVisibilityProbe(now: { fakeTime }, capturer: slowCap)
+let concProbe = BubbleVisibilityProbe(now: { fakeTime }, canCapture: { true }, capturer: slowCap)
 concProbe.probe(candidates: [c1])
 check("T-bv15 首次probe→inFlight=true", concProbe.lock.withLock { $0.inFlight }, "")
 concProbe.probe(candidates: [c1])
@@ -567,7 +575,7 @@ check("T-bv23 旧wid从候选消失→hidden(当前帧失效,非污染)", concPr
 
 // strict single-flight：在途 Task 中 probe(empty) → 候选重新出现 probe 仍被拒（inFlight 不清）
 fakeTime = Date(timeIntervalSince1970: 4000)
-let concProbe2 = BubbleVisibilityProbe(now: { fakeTime }, capturer: slowCap)  // 300ms capturer
+let concProbe2 = BubbleVisibilityProbe(now: { fakeTime }, canCapture: { true }, capturer: slowCap)  // 300ms capturer
 concProbe2.probe(candidates: [c1])
 check("T-bv24 首次probe→inFlight=true", concProbe2.lock.withLock { $0.inFlight }, "")
 // 在途时 probe(empty) → 与 reset 一致：不清 inFlight
@@ -618,7 +626,9 @@ check("T-bv32 cached非空时probe([])→递增generation+清cached",
 let vanishCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // expanded → visible
 }
-let vanishProbe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 7000) }, capturer: vanishCap)
+let vanishProbe = BubbleVisibilityProbe(
+    now: { Date(timeIntervalSince1970: 7000) }, canCapture: { true }, capturer: vanishCap
+)
 vanishProbe.probe(candidates: [mkw(300, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))])
 let vanishPump0 = Date().addingTimeInterval(5)
 while vanishProbe.lock.withLock({ $0.inFlight }) && Date() < vanishPump0 {
@@ -639,7 +649,7 @@ check("T-bv33b 候选消失→旧wid状态立即失效(非visible)",
 var vanishTime = Date(timeIntervalSince1970: 8000)
 var vanishStats: BubbleAlphaStats? = BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
 let nilCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in vanishStats }
-let nilProbe = BubbleVisibilityProbe(now: { vanishTime }, capturer: nilCap)
+let nilProbe = BubbleVisibilityProbe(now: { vanishTime }, canCapture: { true }, capturer: nilCap)
 let nilCand = mkw(310, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 nilProbe.probe(candidates: [nilCand])
 let nilPump0 = Date().addingTimeInterval(5)
@@ -703,7 +713,7 @@ let p1capTime = Date(timeIntervalSince1970: 9000)
 let p1Expanded: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // expanded → visible
 }
-let p1Probe = BubbleVisibilityProbe(now: { p1capTime }, capturer: p1Expanded)
+let p1Probe = BubbleVisibilityProbe(now: { p1capTime }, canCapture: { true }, capturer: p1Expanded)
 let p1Cand = mkw(400, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 p1Probe.probe(candidates: [p1Cand])
 let p1Pump0 = Date().addingTimeInterval(5)
@@ -730,7 +740,7 @@ let p1SlowCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     try? await Task.sleep(nanoseconds: 200_000_000)
     return BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // visible
 }
-let p1Probe2 = BubbleVisibilityProbe(now: { p1Time2 }, capturer: p1SlowCap)
+let p1Probe2 = BubbleVisibilityProbe(now: { p1Time2 }, canCapture: { true }, capturer: p1SlowCap)
 let p1Cand2 = mkw(401, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 p1Probe2.probe(candidates: [p1Cand2])   // 启动 in-flight
 check("T-bv37a in-flight启动", p1Probe2.lock.withLock { $0.inFlight }, "")
@@ -772,17 +782,46 @@ check("T-bv38b preflight=false无inFlight", !blockedProbe.lock.withLock { $0.inF
 check("T-bv38c preflight=false候选保守visible",
       blockedProbe.visibility(for: CGWindowID(500)) == .visible, "")
 
+// T-bv38d: production wake bridge 可从后台调用，但 scheduler 必须在主线程以零延迟执行。
+let bridgeCount = OSAllocatedUnfairLock(initialState: 0)
+let bridgeDelay = OSAllocatedUnfairLock<TimeInterval?>(initialState: nil)
+let bridgeOnMain = OSAllocatedUnfairLock(initialState: false)
+let bridgeCalledOffMain = OSAllocatedUnfairLock(initialState: false)
+let bridgeCallback = FollowTickWake.visibilityChangeCallback { delay in
+    bridgeCount.withLock { $0 += 1 }
+    bridgeDelay.withLock { $0 = delay }
+    bridgeOnMain.withLock { $0 = Thread.isMainThread }
+}
+DispatchQueue.global().async {
+    bridgeCalledOffMain.withLock { $0 = !Thread.isMainThread }
+    bridgeCallback()
+}
+let bridgeCompleted = waitPumpingMain { bridgeCount.withLock { $0 } == 1 }
+check("T-bv38d wake bridge后台→主线程zero-delay scheduler一次",
+      bridgeCompleted
+        && bridgeCalledOffMain.withLock { $0 }
+        && bridgeCount.withLock { $0 } == 1
+        && bridgeDelay.withLock { $0 } == 0
+        && bridgeOnMain.withLock { $0 }, "")
+
 // T-bv39: 同一候选 expanded→collapsed 的成功结果只通知一次；通知后即使 pet rect 不变，
 // 复用现有 safeDockFrame 布局路径也会从避让 frame 回到基础 frame。
 var transitionTime = Date(timeIntervalSince1970: 11_000)
 let transitionStats = OSAllocatedUnfairLock<BubbleAlphaStats?>(initialState: expandedS)
-let transitionNotifications = OSAllocatedUnfairLock(initialState: 0)
+let transitionSchedules = OSAllocatedUnfairLock(initialState: 0)
+let transitionDelay = OSAllocatedUnfairLock<TimeInterval?>(initialState: nil)
+let transitionOnMain = OSAllocatedUnfairLock(initialState: false)
 let transitionCap: BubbleCapturer = { _ in transitionStats.withLock { $0 } }
+let transitionWake = FollowTickWake.visibilityChangeCallback { delay in
+    transitionSchedules.withLock { $0 += 1 }
+    transitionDelay.withLock { $0 = delay }
+    transitionOnMain.withLock { $0 = Thread.isMainThread }
+}
 let transitionProbe = BubbleVisibilityProbe(
     now: { transitionTime },
     canCapture: { true },
     capturer: transitionCap,
-    onVisibilityChange: { transitionNotifications.withLock { $0 += 1 } }
+    onVisibilityChange: transitionWake
 )
 let transitionCandidate = mkw(501, layer: 3, bubbleForCollapse)
 transitionProbe.probe(candidates: [transitionCandidate])
@@ -790,7 +829,7 @@ let transitionPump0 = Date().addingTimeInterval(5)
 while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump0 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
-check("T-bv39a 初始visible结果不通知", transitionNotifications.withLock { $0 } == 0, "")
+check("T-bv39a 初始visible结果不调度", transitionSchedules.withLock { $0 } == 0, "")
 let transitionVisibleObstacles = transitionProbe.visibility(for: CGWindowID(501)) == .visible
     ? [bubbleForCollapse] : []
 let transitionExpandedY = Geometry.safeDockFrame(
@@ -804,10 +843,13 @@ transitionTime = Date(timeIntervalSince1970: 11_001)
 transitionProbe.probe(candidates: [transitionCandidate])
 let transitionPump1 = Date().addingTimeInterval(5)
 while (transitionProbe.lock.withLock({ $0.inFlight })
-       || transitionNotifications.withLock({ $0 }) < 1) && Date() < transitionPump1 {
+       || transitionSchedules.withLock({ $0 }) < 1) && Date() < transitionPump1 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
-check("T-bv39c visible→hidden成功结果通知一次", transitionNotifications.withLock { $0 } == 1, "")
+check("T-bv39c visible→hidden经production bridge主线程zero-delay调度一次",
+      transitionSchedules.withLock { $0 } == 1
+        && transitionDelay.withLock { $0 } == 0
+        && transitionOnMain.withLock { $0 }, "")
 let transitionHiddenObstacles = transitionProbe.visibility(for: CGWindowID(501)) == .visible
     ? [bubbleForCollapse] : []
 let transitionCollapsedY = Geometry.safeDockFrame(
@@ -823,7 +865,7 @@ let transitionPump2 = Date().addingTimeInterval(5)
 while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump2 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
-check("T-bv39e hidden不变不重复通知", transitionNotifications.withLock { $0 } == 1, "")
+check("T-bv39e hidden不变不重复调度", transitionSchedules.withLock { $0 } == 1, "")
 
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)

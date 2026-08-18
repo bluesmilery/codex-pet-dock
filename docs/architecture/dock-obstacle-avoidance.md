@@ -43,7 +43,7 @@
 
 macOS 14+ 捕获最多 2Hz（0.5 秒间隔）且 strict single-flight。异步任务只有在 generation 仍有效时才能写入缓存；候选消失立即按当前帧失效，`reset()` 或仍有缓存 / 在途任务的空候选会递增 generation，使旧任务不能写回缓存或发出通知。完全空闲（无候选、无缓存、无在途）直接早退，不递增 generation。
 
-成功结果写入缓存后，只有当前 `knownWids` 中候选的可见性实际变化才发出一次 `onVisibilityChange`；结果不变、空候选、reset 与旧 generation 均不通知。运行时回调切到主线程并立即重排现有 follow tick，由同一条窗口枚举与 `safeDockFrame` 路径重新计算布局。因此即使宠物 rect 未变化，气泡从 visible 变为 hidden 后，底座也会在下一次布局执行中回到宠物正下方。
+成功结果写入缓存后，只有当前 `knownWids` 中候选的可见性实际变化才发出一次 `onVisibilityChange`；结果不变、空候选、reset 与旧 generation 均不通知。运行时通过 `FollowTickWake.visibilityChangeCallback` 切到主线程，并以零延迟立即重排现有 follow tick，由同一条窗口枚举与 `safeDockFrame` 路径重新计算布局。因此即使宠物 rect 未变化，气泡从 visible 变为 hidden 后，底座也会在下一次布局执行中回到宠物正下方。
 
 ## 控制按钮与边界
 
@@ -58,4 +58,4 @@ macOS 14+ 捕获最多 2Hz（0.5 秒间隔）且 strict single-flight。异步�
 make test-ui
 ```
 
-`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、固定宽度、水平 clamp、屏幕边界、权限门控、可见性变化通知、候选消失复位和调度并发。当前公开口径为 **BubbleVisibility 62 项**（`test-ui` 套件的一部分）；细分用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、多屏硬件与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
+`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、固定宽度、水平 clamp、屏幕边界、权限门控、可见性变化通知、候选消失复位和调度并发。当前公开口径为 **BubbleVisibility 63 项**（`test-ui` 套件的一部分）；细分用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、多屏硬件与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。

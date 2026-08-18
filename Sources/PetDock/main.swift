@@ -45,12 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let dock = DockPanel()
     private let detail = DetailPanel()
     private let provider: LiveDockProvider
-    private lazy var bubbleProbe: BubbleVisibilityProbe = {
-        let wakeFollowTick = DispatchWorkItem { [weak self] in self?.schedule(after: 0) }
-        return BubbleVisibilityProbe(onVisibilityChange: {
-            DispatchQueue.main.async(execute: wakeFollowTick)
-        })
-    }()
+    private lazy var bubbleProbe = BubbleVisibilityProbe(
+        onVisibilityChange: FollowTickWake.visibilityChangeCallback { [weak self] interval in
+            self?.schedule(after: interval)
+        }
+    )
     private let settings = Settings()
     private var themeStore: ThemeStore?
     private var externalThemes: [ThemeSpec] = []
