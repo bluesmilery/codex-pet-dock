@@ -205,8 +205,32 @@ def resolve_task_ref(task_ref: str, repo_root: Path) -> Path | None:
     return repo_root / DIR_WORKFLOW / DIR_TASKS / path_obj
 
 
-def _runtime_sessions_dir(repo_root: Path) -> Path:
-    return repo_root / DIR_WORKFLOW / DIR_RUNTIME / DIR_SESSIONS
+def _safe_runtime_dir(repo_root: Path, *parts: str) -> Path | None:
+    """Return a runtime directory only when its canonical path stays in-repo.
+
+    Runtime state is local but still tamperable.  Reject every existing
+    symlink in the path chain (including the directory itself) before callers
+    read, create, or enumerate files below it.
+    """
+    try:
+        root = repo_root.resolve(strict=True)
+        candidate = root.joinpath(*parts)
+        candidate.resolve(strict=False).relative_to(root)
+        current = candidate
+        while current != root:
+            if current.is_symlink():
+                return None
+            parent = current.parent
+            if parent == current:
+                return None
+            current = parent
+        return candidate
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _runtime_sessions_dir(repo_root: Path) -> Path | None:
+    return _safe_runtime_dir(repo_root, DIR_WORKFLOW, DIR_RUNTIME, DIR_SESSIONS)
 
 
 def _sanitize_key(raw: str) -> str:
@@ -266,6 +290,16 @@ def _context_key(platform_name: str, kind: str, value: str) -> str:
     # session/conversation id in the runtime filename, which made otherwise
     # private metadata recoverable from ``.trellis/.runtime/sessions``.
     return f"{platform_name}_{kind}_{_hash_value(value)}"
+
+
+_OPAQUE_CONTEXT_KEY_RE = re.compile(
+    r"(?:[A-Za-z0-9][A-Za-z0-9._-]*_(?:session|conversation|transcript)_[0-9a-f]{24}"
+    r"|override_[0-9a-f]{24})"
+)
+
+
+def _is_opaque_context_key(value: str | None) -> bool:
+    return isinstance(value, str) and _OPAQUE_CONTEXT_KEY_RE.fullmatch(value) is not None
 
 
 def _iter_env_keys(
@@ -332,11 +366,12 @@ def _find_repo_root_from_cwd() -> Path | None:
 
 
 def _shell_ticket_dirs(repo_root: Path) -> tuple[Path, ...]:
-    runtime_dir = repo_root / DIR_WORKFLOW / DIR_RUNTIME
-    return (
-        runtime_dir / DIR_SHELL_TICKETS,
-        runtime_dir / DIR_LEGACY_CURSOR_SHELL_TICKETS,
-    )
+    dirs: list[Path] = []
+    for name in (DIR_SHELL_TICKETS, DIR_LEGACY_CURSOR_SHELL_TICKETS):
+        directory = _safe_runtime_dir(repo_root, DIR_WORKFLOW, DIR_RUNTIME, name)
+        if directory is not None:
+            dirs.append(directory)
+    return tuple(dirs)
 
 
 def _remove_file(path: Path) -> bool:
@@ -429,7 +464,8 @@ def _matching_ticket_context_key(
         return None
     if not _pending_ticket_matches_args(ticket, repo_root):
         return None
-    return _string_value(ticket.get("context_key"))
+    context_key = _string_value(ticket.get("context_key"))
+    return context_key if _is_opaque_context_key(context_key) else None
 
 
 def _lookup_shell_ticket_context_key() -> str | None:
@@ -480,7 +516,7 @@ def resolve_context_key(
             # Hooks pass the already-derived opaque form through this
             # variable.  Any other value (including a raw host id) is hashed
             # before it can become a runtime filename.
-            if re.fullmatch(r"[A-Za-z0-9._-]+_(?:session|conversation|transcript)_[0-9a-f]{24}", safe):
+            if _is_opaque_context_key(safe):
                 return safe
             return f"override_{_hash_value(override)}"
 
@@ -599,8 +635,18 @@ def _active_from_ref(
     return ActiveTask(canonical, source_type, context_key, stale)
 
 
-def _context_path(repo_root: Path, context_key: str) -> Path:
-    return _runtime_sessions_dir(repo_root) / f"{context_key}.json"
+def _context_path(repo_root: Path, context_key: str) -> Path | None:
+    if not _is_opaque_context_key(context_key):
+        return None
+    sessions_dir = _runtime_sessions_dir(repo_root)
+    if sessions_dir is None:
+        return None
+    try:
+        candidate = sessions_dir / f"{context_key}.json"
+        candidate.resolve(strict=False).relative_to(repo_root.resolve(strict=True))
+        return candidate
+    except (OSError, RuntimeError, ValueError):
+        return None
 
 
 def resolve_active_task(
@@ -626,7 +672,9 @@ def resolve_active_task(
         allow_environment_context=allow_environment_context,
     )
     if context_key:
-        context = _read_json(_context_path(repo_root, context_key)) or {}
+        context_path = _context_path(repo_root, context_key)
+        context = _read_json(context_path) if context_path is not None else None
+        context = context or {}
         task_ref = _string_value(context.get("current_task"))
         active = _active_from_ref(task_ref, repo_root, "session", context_key)
         if active:
@@ -648,7 +696,7 @@ def _resolve_single_session_fallback(repo_root: Path) -> ActiveTask | None:
     to pick across windows so 04-21's multi-session isolation contract holds.
     """
     sessions_dir = _runtime_sessions_dir(repo_root)
-    if not sessions_dir.is_dir():
+    if sessions_dir is None or not sessions_dir.is_dir():
         return None
 
     session_files = sorted(sessions_dir.glob("*.json"))
@@ -715,6 +763,8 @@ def set_active_task(
         return None
 
     context_path = _context_path(repo_root, context_key)
+    if context_path is None:
+        return None
     context = _minimal_runtime_metadata(_read_json(context_path) or {})
     context.update(_context_metadata(platform_input, platform, context_key))
     context["current_task"] = canonical
@@ -739,7 +789,7 @@ def clear_active_task(
         return previous
 
     context_path = _context_path(repo_root, previous.context_key)
-    if context_path.is_file():
+    if context_path is not None and context_path.is_file():
         _remove_file(context_path)
     return previous
 
@@ -752,7 +802,7 @@ def clear_task_from_sessions(task_path: str, repo_root: Path) -> int:
 
     cleared = 0
     sessions_dir = _runtime_sessions_dir(repo_root)
-    if not sessions_dir.is_dir():
+    if sessions_dir is None or not sessions_dir.is_dir():
         return cleared
 
     for session_path in sessions_dir.glob("*.json"):

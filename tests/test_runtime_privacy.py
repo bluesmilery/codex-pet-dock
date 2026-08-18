@@ -116,6 +116,96 @@ def test_hook_rejects_external_manifest_and_task_dir(tmp_path: Path) -> None:
         assert hook.read_jsonl_entries(str(repo), manifest) == []
 
 
+def test_runtime_ticket_context_key_cannot_escape_read_write_delete(tmp_path: Path) -> None:
+    """Ticket keys and runtime directories are untrusted sink inputs."""
+    active = _load_common("active_task", SCRIPTS / "common" / "active_task.py")
+    repo = tmp_path / "repo"
+    task = repo / ".trellis" / "tasks" / "safe"
+    task.mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps({"platform": "codex", "current_task": ".trellis/tasks/safe"}), encoding="utf-8")
+
+    # A shell ticket is the only route that can supply a raw context_key to the
+    # resolver.  Make its current command and cwd valid so only key validation
+    # distinguishes this from a real ticket.
+    runtime = repo / ".trellis" / ".runtime"
+    tickets = runtime / "shell-tickets"
+    tickets.mkdir(parents=True)
+    ticket = tickets / "fixture.json"
+    ticket.write_text(
+        json.dumps({
+            "context_key": "../../../../outside",
+            "cwd": str(repo),
+            "created_at_epoch": 2_000_000_000,
+            "subcommands": [{"name": "current"}],
+        }),
+        encoding="utf-8",
+    )
+
+    old_argv = active.sys.argv
+    old_cwd = Path.cwd()
+    active.sys.argv = ["task.py", "current"]
+    try:
+        os.chdir(repo)
+        resolved = active.resolve_active_task(
+            repo, {}, platform="unknown", allow_single_session_fallback=False,
+        )
+        read_ok = resolved.task_path is None
+
+        before = outside.read_bytes()
+        write_result = active.set_active_task(".trellis/tasks/safe", repo, {}, platform="unknown")
+        write_ok = write_result is None and outside.read_bytes() == before
+
+        outside.write_bytes(before)
+        clear_result = active.clear_active_task(repo, {}, platform="unknown")
+        delete_ok = clear_result.task_path is None and outside.exists()
+    finally:
+        active.sys.argv = old_argv
+        os.chdir(old_cwd)
+
+    # Valid opaque keys remain compatible and stay below the canonical session
+    # directory; separators, absolute forms and traversal are rejected.
+    valid = active._context_key("codex", "session", "fixture-session")
+    valid_path = active._context_path(repo, valid)
+    assert valid_path is not None
+    assert valid_path.resolve().is_relative_to(repo.resolve())
+    bad_keys_ok = all(
+        active._context_path(repo, bad) is None
+        for bad in ("/tmp/absolute", "../../outside", "codex/session/hash", "codex_session_../../outside")
+    )
+
+    # A symlinked sessions or shell-ticket directory must fail closed rather
+    # than redirecting reads/deletes to an external fixture directory.
+    ticket.unlink()
+    tickets.rmdir()
+    sessions = runtime / "sessions"
+    if sessions.exists():
+        sessions.rmdir()
+    sessions_target = tmp_path / "sessions-outside"
+    sessions_target.mkdir()
+    sessions.symlink_to(sessions_target, target_is_directory=True)
+    symlink_dir_ok = active._runtime_sessions_dir(repo) is None
+    symlink_read_ok = active.resolve_active_task(
+        repo, {"session_id": "fixture-session"}, platform="codex",
+        allow_single_session_fallback=False, allow_environment_context=False,
+    ).task_path is None
+    shell_target = tmp_path / "shell-tickets-outside"
+    shell_target.mkdir()
+    shell_link = runtime / "shell-tickets"
+    shell_link.symlink_to(shell_target, target_is_directory=True)
+    shell_dirs = active._shell_ticket_dirs(repo)
+    shell_symlink_ok = shell_link not in shell_dirs
+    assert read_ok and write_ok and delete_ok and bad_keys_ok and symlink_dir_ok and symlink_read_ok and shell_symlink_ok, {
+        "read": read_ok,
+        "write": write_ok,
+        "delete": delete_ok,
+        "bad_keys": bad_keys_ok,
+        "sessions_symlink": symlink_dir_ok,
+        "sessions_read": symlink_read_ok,
+        "shell_tickets_symlink": shell_symlink_ok,
+    }
+
+
 def test_runtime_metadata_is_minimal_and_private(tmp_path: Path) -> None:
     active = _load_common("active_task", SCRIPTS / "common" / "active_task.py")
     raw = {
