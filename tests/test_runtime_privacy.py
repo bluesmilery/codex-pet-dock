@@ -206,6 +206,69 @@ def test_runtime_ticket_context_key_cannot_escape_read_write_delete(tmp_path: Pa
     }
 
 
+def test_single_session_fallback_requires_opaque_regular_context(tmp_path: Path) -> None:
+    """Fallback must not expose an untrusted filename stem as context identity."""
+    active = _load_common("active_task", SCRIPTS / "common" / "active_task.py")
+    repo = tmp_path / "repo"
+    task = repo / ".trellis" / "tasks" / "safe"
+    task.mkdir(parents=True)
+    sessions = repo / ".trellis" / ".runtime" / "sessions"
+    sessions.mkdir(parents=True)
+
+    def write_session(stem: str) -> Path:
+        path = sessions / f"{stem}.json"
+        path.write_text(json.dumps({"current_task": ".trellis/tasks/safe"}), encoding="utf-8")
+        return path
+
+    def fallback_for(stem: str):
+        path = write_session(stem)
+        try:
+            return active._resolve_single_session_fallback(repo)
+        finally:
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+
+    # Legacy/raw session, conversation and transcript-style stems are not
+    # opaque even though the filename itself is safely contained.
+    raw_stems = (
+        "fixture-session-id",
+        "codex_session_legacy-id",
+        "codex_conversation_legacy-id",
+        "legacy-transcript-id",
+    )
+    raw_results = {stem: fallback_for(stem) for stem in raw_stems}
+
+    # Explicit opaque fixture keys remain compatible with fallback.
+    opaque_stems = ("ctx-" + "a" * 24, "anon-" + "b" * 24)
+    opaque_results = {stem: fallback_for(stem) for stem in opaque_stems}
+
+    # A symlink or non-regular JSON file must not be opened or exposed as the
+    # fallback context, even when its stem is otherwise opaque.
+    symlink_stem = "ctx-" + "c" * 24
+    symlink_path = sessions / f"{symlink_stem}.json"
+    outside = tmp_path / "outside-session.json"
+    outside.write_text(json.dumps({"current_task": ".trellis/tasks/safe"}), encoding="utf-8")
+    symlink_path.symlink_to(outside)
+    symlink_result = active._resolve_single_session_fallback(repo)
+    symlink_path.unlink()
+
+    directory_stem = "anon-" + "d" * 24
+    directory_path = sessions / f"{directory_stem}.json"
+    directory_path.mkdir()
+    directory_result = active._resolve_single_session_fallback(repo)
+
+    assert all(result is None for result in raw_results.values()), raw_results
+    assert all(
+        result is not None
+        and result.source_type == "session-fallback"
+        and result.context_key == stem
+        and result.task_path == ".trellis/tasks/safe"
+        for stem, result in opaque_results.items()
+    ), opaque_results
+    assert symlink_result is None
+    assert directory_result is None
+
+
 def test_runtime_metadata_is_minimal_and_private(tmp_path: Path) -> None:
     active = _load_common("active_task", SCRIPTS / "common" / "active_task.py")
     raw = {

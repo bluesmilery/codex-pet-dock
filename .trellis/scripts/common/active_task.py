@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import time
@@ -294,7 +295,8 @@ def _context_key(platform_name: str, kind: str, value: str) -> str:
 
 _OPAQUE_CONTEXT_KEY_RE = re.compile(
     r"(?:[A-Za-z0-9][A-Za-z0-9._-]*_(?:session|conversation|transcript)_[0-9a-f]{24}"
-    r"|override_[0-9a-f]{24})"
+    r"|override_[0-9a-f]{24}"
+    r"|(?:ctx|anon)-[0-9a-f]{24})"
 )
 
 
@@ -704,12 +706,21 @@ def _resolve_single_session_fallback(repo_root: Path) -> ActiveTask | None:
         return None
 
     session_file = session_files[0]
+    try:
+        session_stat = session_file.lstat()
+        if not stat.S_ISREG(session_stat.st_mode):
+            return None
+        session_file.resolve(strict=True).relative_to(repo_root.resolve(strict=True))
+    except (OSError, RuntimeError, ValueError):
+        return None
     context = _read_json(session_file) or {}
     task_ref = _string_value(context.get("current_task"))
     if not task_ref:
         return None
 
     fallback_key = session_file.stem
+    if not _is_opaque_context_key(fallback_key):
+        return None
     return _active_from_ref(task_ref, repo_root, "session-fallback", fallback_key)
 
 
