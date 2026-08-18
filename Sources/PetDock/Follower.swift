@@ -23,8 +23,8 @@ struct FollowDecision: Equatable {
 /// - 隐藏：底座 + 详情隐藏，低频检测重现
 /// - 重现：重捕，回到 moving
 enum Follower {
-    static let movingInterval: TimeInterval = 0.05   // 移动升频
-    static let stableInterval: TimeInterval = 0.5    // 静止降频
+    static let movingInterval: TimeInterval = 1.0 / 60.0   // 移动约 60Hz
+    static let stableInterval: TimeInterval = 0.1          // 静止降频且 0.1s 内探测移动
     static let hiddenInterval: TimeInterval = 1.0    // 隐藏检测重现
     static let stableThreshold: Int = 4              // 连续 N 次位置不变 → stable
 

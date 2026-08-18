@@ -55,6 +55,17 @@ enum BubbleVisibilityClassifier {
 /// 像素捕获器接口（@Sendable 闭包，后台 Task 安全传递）。
 typealias BubbleCapturer = @Sendable (WinCandidate) async -> BubbleAlphaStats?
 
+/// 单进程启动期权限请求 gate：已授权不请求，未授权也至多请求一次。
+struct ScreenCapturePermissionRequestGate {
+    private var didRequest = false
+
+    mutating func shouldRequest(preflightGranted: Bool) -> Bool {
+        guard !preflightGranted, !didRequest else { return false }
+        didRequest = true
+        return true
+    }
+}
+
 /// 异步探测 obstaclesNear 候选的可见性。`Sendable`（状态由 `OSAllocatedUnfairLock` 保护）。
 /// max 2Hz、single-flight（generation 严格）、保守降级（失败/macOS13/缺失 → visible）。
 /// 像素捕获在 `Task.detached` 后台执行（不跑主线程），完成后经 lock + generation 校验更新。
@@ -76,12 +87,19 @@ final class BubbleVisibilityProbe: Sendable {
 
     internal let lock: OSAllocatedUnfairLock<ProbeState>
     private let now: @Sendable () -> Date
+    private let canCapture: @Sendable () -> Bool
     private let capturer: BubbleCapturer
+    private let onVisibilityChange: @Sendable () -> Void
 
-    init(now: @escaping @Sendable () -> Date = { Date() }, capturer: BubbleCapturer? = nil) {
+    init(now: @escaping @Sendable () -> Date = { Date() },
+         canCapture: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
+         capturer: BubbleCapturer? = nil,
+         onVisibilityChange: @escaping @Sendable () -> Void = {}) {
         self.lock = OSAllocatedUnfairLock(initialState: ProbeState())
         self.now = now
+        self.canCapture = canCapture
         self.capturer = capturer ?? Self.defaultCapturer
+        self.onVisibilityChange = onVisibilityChange
     }
 
     // MARK: - 主线程接口（tick 同步调用）
@@ -100,6 +118,7 @@ final class BubbleVisibilityProbe: Sendable {
         let gen: Int
         let prev: [CGWindowID: BubbleVisibility]
         let shouldStart: Bool
+        let captureAllowed = !candidates.isEmpty && canCapture()
         (gen, prev, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Bool) in
             // 同步刷新 knownWids：当前帧实际存在的候选 wid（每帧事实，立即生效）。
             s.knownWids = Set(candidates.map { $0.wid })
@@ -113,6 +132,15 @@ final class BubbleVisibilityProbe: Sendable {
                 s.generation += 1; s.cached.removeAll()
                 return (0, [:], false)
             }
+            guard captureAllowed else {
+                // 权限尚未对本进程生效：不进入 ScreenCaptureKit，并清除旧 hidden 缓存，
+                // 使当前仍存在的候选按默认 `.visible` 保守避让。旧在途结果通过 generation 失效。
+                if !s.cached.isEmpty || s.inFlight {
+                    s.generation += 1
+                    s.cached.removeAll()
+                }
+                return (0, [:], false)
+            }
             let time = now()
             guard !s.inFlight && time.timeIntervalSince(s.lastCapture) >= Self.minInterval else {
                 return (0, [:], false)
@@ -123,6 +151,7 @@ final class BubbleVisibilityProbe: Sendable {
         }
         guard shouldStart else { return }
         let cap = capturer
+        let notify = onVisibilityChange
         // Task.detached：不捕获 self（仅捕获 Sendable 值 lock/cap/gen/prev/candidates）→ 0 #SendableClosureCaptures warning。
         // 像素计算（cap → captureStats → computeAlphaStats）在后台线程执行。
         Task.detached { [lock] in
@@ -133,11 +162,17 @@ final class BubbleVisibilityProbe: Sendable {
             }
             let results = r   // var→let：lock 闭包只捕获不可变 Sendable 值
             // generation 校验：旧 Task 回调（reset/候选切换后）仅清自己的 inFlight token，绝不写 cached。
-            lock.withLock { s in
+            let didChange = lock.withLock { s -> Bool in
                 s.inFlight = false   // 始终清 inFlight（旧 Task 的责任，保证新 probe 能在下一 tick 启动）
-                guard s.generation == gen else { return }   // generation 过期 → 不写 cached
+                guard s.generation == gen else { return false }   // generation 过期 → 不写 cached/通知
+                let changed = results.contains { entry in
+                    s.knownWids.contains(entry.key)
+                        && (s.cached[entry.key] ?? .visible) != entry.value
+                }
                 s.cached = results
+                return changed
             }
+            if didChange { notify() }
         }
     }
 

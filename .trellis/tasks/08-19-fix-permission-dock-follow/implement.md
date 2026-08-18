@@ -22,4 +22,3 @@ codesign --verify --deep --strict build/PetDock.app
 ```
 
 `make app` 仅由最终 QA 执行。真机 TCC、实际 ScreenCaptureKit 像素分类、拖动手感、多屏与 Instruments 若未实际运行，必须列为未验证。
-

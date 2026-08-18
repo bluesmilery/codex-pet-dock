@@ -25,4 +25,3 @@
 - Capture failure remains visible conservatively.
 - Reset/generation prevents stale async writes; strict single-flight remains bounded.
 - All AppKit frame changes stay on the main thread.
-

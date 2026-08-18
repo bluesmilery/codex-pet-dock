@@ -23,8 +23,8 @@ This repository is an independent **macOS** implementation. It targets a differe
 
 - **Transparent dock HUD**: sits right below the pet without overlapping, showing `WEEK LEFT` (including the current period's reset time) and `WEEK TOKENS`; missing data falls back to a `—` placeholder.
 - **Detail card**: click the dock to expand/collapse, listing plan, reset time, cache ratio, input, output, session count, last-updated time, and a local-estimate note.
-- **Adaptive following**: high-frequency tracking and positioning while the pet moves, automatically stepping down when idle (no redundant repositioning); hides with the pet when it is hidden or Codex quits, and recaptures on reappearance.
-- **Session-bubble avoidance**: when a Codex conversation bubble appears beneath the pet, the dock steps down to avoid overlap. Uses `ScreenCaptureKit` (macOS 14+) to detect whether the bubble is actually drawn (alpha-only pixel statistics — no OCR, no image saving, no color/text recording); on macOS 13 or capture failure, it conservatively avoids. When the pet is near a screen edge, the dock is clamped horizontally to stay fully on-screen (like a message bar hugging the edge).
+- **Adaptive following**: tracks and positions at about 60 Hz while the pet moves, checks for movement within 0.1 seconds while idle, and automatically steps down afterward (no redundant repositioning); hides with the pet when it is hidden or Codex quits, and recaptures on reappearance.
+- **Session-bubble avoidance**: when a Codex conversation bubble appears beneath the pet, the dock steps down to avoid overlap. Uses `ScreenCaptureKit` (macOS 14+) to detect whether the bubble is actually drawn (alpha-only pixel statistics — no OCR, no image saving, no color/text recording); a successful collapse result immediately wakes layout so the dock returns beneath an unmoved pet. On macOS 13, before screen-recording access takes effect, or on capture failure, it conservatively avoids; background capture is skipped while preflight access is unavailable. When the pet is near a screen edge, the dock is clamped horizontally to stay fully on-screen (like a message bar hugging the edge).
 - **Real data, strict privacy**:
   - `WEEK LEFT`: read from the official weekly quota (`primary` weekly window) via `codex app-server` JSON-RPC.
   - `WEEK TOKENS`: aggregated from token deltas in the local `~/.codex/sessions` logs.
@@ -71,7 +71,7 @@ This project follows strict privacy boundaries (pinned by fixture tests):
 - **Uses no private APIs**: window enumeration relies solely on the public `CGWindowListCopyWindowInfo`; no private CGS calls.
 - Authentication for `WEEK LEFT` is performed by the `codex` process inside its own trusted environment; this process only exchanges JSON-RPC text over stdio and parses `usedPercent` / `resetsAt` / `windowDurationMins` / `planType` — it never touches credentials.
 
-**Screen-recording permission (TCC)**: `CGWindowListCopyWindowInfo` is the only public API for cross-app window enumeration; macOS filters it to an empty list when ungranted. The first run of `PetDock.app` triggers the system prompt — grant **PetDock** under "System Settings › Privacy & Security › Screen Recording", then quit and relaunch the app for it to take effect.
+**Screen-recording permission (TCC)**: `CGWindowListCopyWindowInfo` is the only public API for cross-app window enumeration; macOS filters it to an empty list when ungranted. `PetDock.app` requests access at most once per process and does not enter background `ScreenCaptureKit` capture while preflight access is unavailable, preventing repeated prompts while preserving conservative bubble avoidance and the status-bar warning. Grant **PetDock** under "System Settings › Privacy & Security › Screen Recording", then quit and relaunch the app for access to take effect.
 
 > ⚠️ ad-hoc signing has no team ID, and TCC authenticates by the ad-hoc signature's code-directory hash; every re-signing (e.g. re-running `make app`) changes that hash and invalidates the grant, requiring re-authorization. For production, prefer a stable developer signature or a notarized build.
 
@@ -174,7 +174,7 @@ make test-docs    # documentation checker unit tests
 make test         # full suite (docs gates + privacy + Swift UI/data/shell fixtures)
 ```
 
-The current Swift test counts and verification evidence are maintained in [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md).
+The latest local run for this change passed 419 Swift assertions (189 UI + 131 data + 99 shell), 20 privacy tests, and 10 documentation-checker unit tests; `docs-check` scanned 14 public Markdown files with 0 findings. Candidate verification evidence is maintained in [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md).
 
 Privacy boundaries are pinned by fixture tests: data-layer results contain no conversation-content decoys and no credentials. See `docs/architecture/data-layer.md` and `tests/`.
 

@@ -45,7 +45,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let dock = DockPanel()
     private let detail = DetailPanel()
     private let provider: LiveDockProvider
-    private let bubbleProbe = BubbleVisibilityProbe()
+    private lazy var bubbleProbe: BubbleVisibilityProbe = {
+        let wakeFollowTick = DispatchWorkItem { [weak self] in self?.schedule(after: 0) }
+        return BubbleVisibilityProbe(onVisibilityChange: {
+            DispatchQueue.main.async(execute: wakeFollowTick)
+        })
+    }()
     private let settings = Settings()
     private var themeStore: ThemeStore?
     private var externalThemes: [ThemeSpec] = []
@@ -58,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dataTimer: Timer?           // 数据刷新（低频：退避间隔）
     private var wasPetVisible = false       // 数据 pause/resume 的边沿触发（跟随宠物可见性）
     private var consecutiveEmptyTicks = 0   // 连续无候选 tick 计数（TCC 缺失降级提示用）
+    private var screenCapturePermissionGate = ScreenCapturePermissionRequestGate()
     private let logger = PetLogger()
 
     override init() {
@@ -74,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         DebugLog.applyOverrides(arguments: CommandLine.arguments)
-        if !CGPreflightScreenCaptureAccess() {
+        if screenCapturePermissionGate.shouldRequest(preflightGranted: CGPreflightScreenCaptureAccess()) {
             _ = CGRequestScreenCaptureAccess()
         }
         dock.onTap = { [weak self] in self?.toggleDetail() }

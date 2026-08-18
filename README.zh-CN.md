@@ -22,8 +22,8 @@
 
 - **透明底座 HUD**：紧贴宠物下方、不重叠，显示 `WEEK LEFT`（含本周期到期时间）与 `WEEK TOKENS`；数据缺失时以 `—` 占位。
 - **详情卡**：点击底座展开 / 关闭，列出套餐、重置时间、缓存比例、输入、输出、会话数、更新时间，以及本机估算说明。
-- **自适应跟随**：宠物移动时高频跟随并定位，静止后自动降频且不重复刷新位置；宠物隐藏或 Codex 退出时底座与详情同步隐藏，重现后重新捕获。
-- **会话气泡避让**：当 Codex 会话气泡出现在宠物下方时，底座自动下移避开重叠。使用 `ScreenCaptureKit`（macOS 14+）检测气泡是否实际绘制内容（仅 alpha 像素统计——不 OCR、不保存图像、不记录颜色或文字）；macOS 13 或捕获失败时保守避让。宠物靠近屏幕边缘时，底座水平 clamp 到屏内（像消息条一样贴边展示）。
+- **自适应跟随**：宠物移动时以约 60 Hz 跟随并定位，静止时在 0.1 秒内探测到重新移动，随后自动降频且不重复刷新位置；宠物隐藏或 Codex 退出时底座与详情同步隐藏，重现后重新捕获。
+- **会话气泡避让**：当 Codex 会话气泡出现在宠物下方时，底座自动下移避开重叠。使用 `ScreenCaptureKit`（macOS 14+）检测气泡是否实际绘制内容（仅 alpha 像素统计——不 OCR、不保存图像、不记录颜色或文字）；成功识别收起态后会立即唤醒布局，即使宠物未移动也让底座回到正下方。macOS 13、屏幕录制 preflight 尚未生效或捕获失败时保守避让；preflight 不可用期间跳过后台捕获。宠物靠近屏幕边缘时，底座水平 clamp 到屏内（像消息条一样贴边展示）。
 - **真实数据，严格隐私**：
   - `WEEK LEFT`：经 `codex app-server` 的 JSON-RPC 读取官方周额度（`primary` 周窗口）。
   - `WEEK TOKENS`：聚合 `~/.codex/sessions` 本机会话日志的 token 增量。
@@ -70,7 +70,7 @@
 - **不使用私有 API**：窗口枚举仅用公开的 `CGWindowListCopyWindowInfo`，不调用私有 CGS 接口。
 - `WEEK LEFT` 的鉴权由 `codex` 进程在其自身可信环境内完成；本进程仅经 stdio 收发 JSON-RPC 文本，只解析 `usedPercent` / `resetsAt` / `windowDurationMins` / `planType`，不接触任何凭证。
 
-**屏幕录制权限（TCC）**：`CGWindowListCopyWindowInfo` 是唯一公开的跨应用窗口枚举 API；macOS 在未授权时会将其过滤为空列表。首次运行 `PetDock.app` 会触发系统授权请求，请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 **PetDock**，然后退出并重启 app 生效。
+**屏幕录制权限（TCC）**：`CGWindowListCopyWindowInfo` 是唯一公开的跨应用窗口枚举 API；macOS 在未授权时会将其过滤为空列表。`PetDock.app` 每个进程至多主动请求一次权限；preflight 不可用期间不进入后台 `ScreenCaptureKit` 捕获，避免反复提示，同时保留气泡保守避让与状态栏提醒。请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 **PetDock**，然后退出并重启 app 使权限生效。
 
 > ⚠️ ad-hoc 签名没有 team ID，TCC 按 ad-hoc 签名的代码目录哈希认证；每次重新签名（如重新执行 `make app`）都会改变该哈希值，使授权失效而需要重新授予。生产环境建议改用稳定开发者签名或 notarized 构建。
 
@@ -173,7 +173,7 @@ make test-docs    # 文档检查器单元测试
 make test         # 全量（docs gate + privacy + Swift UI/data/shell fixture）
 ```
 
-当前 Swift 测试数量与验证证据统一维护在 [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md)。
+本次改动的最新本地运行通过 419 条 Swift 断言（UI 189 + Data 131 + Shell 99）、20 条隐私测试和 10 条文档检查器单元测试；`docs-check` 扫描 14 个公开 Markdown 文件、0 findings。候选验收证据统一维护在 [`docs/verification/dev-candidate.md`](docs/verification/dev-candidate.md)。
 
 隐私边界由 fixture 测试固化：数据层结果不包含会话正文诱饵、不包含凭证。详见 `docs/architecture/data-layer.md` 与 `tests/`。
 

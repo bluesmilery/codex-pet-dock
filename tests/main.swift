@@ -1,4 +1,5 @@
 import Cocoa
+import os
 
 // 无需屏幕录制权限的纯函数测试：验证 selectPet 识别逻辑与 Geometry 坐标转换。
 // 用 swiftc 与真实源码一起编译：PetTracker.swift + Geometry.swift + selftest.swift
@@ -252,6 +253,11 @@ let d15 = Follower.decide(pet: petResize, lastPet: petA, state: .stable, stableC
 check("F15 尺寸变化→判变化(setFrame=true)",
       d15.state == .moving && d15.shouldSetFrame == true, "state=\(d15.state) setFrame=\(d15.shouldSetFrame)")
 
+check("F16 moving约60Hz", abs(Follower.movingInterval - 1.0 / 60.0) < 0.001,
+      "interval=\(Follower.movingInterval)")
+check("F17 stable探测延迟不超过0.1s", Follower.stableInterval <= 0.1,
+      "interval=\(Follower.stableInterval)")
+
 print("\n[Follower] \(pass - fPass) passed, \(fail - fBase) failed")
 
 // ---- Dock 几何 / reset 显示 / placeBelow 宽度（需 NSApplication 初始化 NSPanel/NSView）----
@@ -467,6 +473,13 @@ print("\n[会话气泡避让] \(pass - avPass) passed, \(fail - avBase) failed")
 
 // ---- T-bv: BubbleVisibility 分类（纯函数滞回）+ 调度（max2Hz/single-flight/reset）+ 异步集成（generation/strict single-flight）----
 let bvBase = fail, bvPass = pass
+// 进程内权限请求 gate：preflight=false 只请求一次；preflight=true 不请求。
+var requestGate = ScreenCapturePermissionRequestGate()
+check("T-bv0a preflight=false首次请求", requestGate.shouldRequest(preflightGranted: false), "")
+check("T-bv0b preflight=false重复检查不再请求", !requestGate.shouldRequest(preflightGranted: false), "")
+var grantedGate = ScreenCapturePermissionRequestGate()
+check("T-bv0c preflight=true不请求", !grantedGate.shouldRequest(preflightGranted: true), "")
+check("T-bv0d preflight后续false仍可首次请求", grantedGate.shouldRequest(preflightGranted: false), "")
 // 实测基线（同窗口 345×64 真实对照）
 let collapsedS = BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080)
 let expandedS = BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
@@ -739,6 +752,98 @@ check("T-bv37c in-flight完成→generation失配→cached不写入(旧结果被
 check("T-bv37d 已消失候选→visibility保持hidden(in-flight写入不能复活障碍)",
       p1Probe2.visibility(for: CGWindowID(401)) == .hidden,
       "实际=\(p1Probe2.visibility(for: CGWindowID(401)))")
+
+// T-bv38: preflight=false 时重复 probe 不进入 capturer，当前候选继续保守 visible。
+let blockedCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+let blockedCap: BubbleCapturer = { _ in
+    blockedCaptureCalls.withLock { $0 += 1 }
+    return collapsedS
+}
+let blockedProbe = BubbleVisibilityProbe(
+    now: { Date(timeIntervalSince1970: 10_000) },
+    canCapture: { false },
+    capturer: blockedCap
+)
+let blockedCandidate = mkw(500, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
+blockedProbe.probe(candidates: [blockedCandidate])
+blockedProbe.probe(candidates: [blockedCandidate])
+check("T-bv38a preflight=false不启动capture", blockedCaptureCalls.withLock { $0 } == 0, "")
+check("T-bv38b preflight=false无inFlight", !blockedProbe.lock.withLock { $0.inFlight }, "")
+check("T-bv38c preflight=false候选保守visible",
+      blockedProbe.visibility(for: CGWindowID(500)) == .visible, "")
+
+// T-bv39: 同一候选 expanded→collapsed 的成功结果只通知一次；通知后即使 pet rect 不变，
+// 复用现有 safeDockFrame 布局路径也会从避让 frame 回到基础 frame。
+var transitionTime = Date(timeIntervalSince1970: 11_000)
+let transitionStats = OSAllocatedUnfairLock<BubbleAlphaStats?>(initialState: expandedS)
+let transitionNotifications = OSAllocatedUnfairLock(initialState: 0)
+let transitionCap: BubbleCapturer = { _ in transitionStats.withLock { $0 } }
+let transitionProbe = BubbleVisibilityProbe(
+    now: { transitionTime },
+    canCapture: { true },
+    capturer: transitionCap,
+    onVisibilityChange: { transitionNotifications.withLock { $0 += 1 } }
+)
+let transitionCandidate = mkw(501, layer: 3, bubbleForCollapse)
+transitionProbe.probe(candidates: [transitionCandidate])
+let transitionPump0 = Date().addingTimeInterval(5)
+while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump0 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+}
+check("T-bv39a 初始visible结果不通知", transitionNotifications.withLock { $0 } == 0, "")
+let transitionVisibleObstacles = transitionProbe.visibility(for: CGWindowID(501)) == .visible
+    ? [bubbleForCollapse] : []
+let transitionExpandedY = Geometry.safeDockFrame(
+    pet: petForCollapse, avoiding: transitionVisibleObstacles,
+    dockSize: dockSizeBV, gap: gapBV, screen: nil
+).frame?.origin.y
+check("T-bv39b 初始visible仍避让", transitionExpandedY == avoidY, "y=\(transitionExpandedY ?? -1)")
+
+transitionStats.withLock { $0 = collapsedS }
+transitionTime = Date(timeIntervalSince1970: 11_001)
+transitionProbe.probe(candidates: [transitionCandidate])
+let transitionPump1 = Date().addingTimeInterval(5)
+while (transitionProbe.lock.withLock({ $0.inFlight })
+       || transitionNotifications.withLock({ $0 }) < 1) && Date() < transitionPump1 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+}
+check("T-bv39c visible→hidden成功结果通知一次", transitionNotifications.withLock { $0 } == 1, "")
+let transitionHiddenObstacles = transitionProbe.visibility(for: CGWindowID(501)) == .visible
+    ? [bubbleForCollapse] : []
+let transitionCollapsedY = Geometry.safeDockFrame(
+    pet: petForCollapse, avoiding: transitionHiddenObstacles,
+    dockSize: dockSizeBV, gap: gapBV, screen: nil
+).frame?.origin.y
+check("T-bv39d pet不变+通知后重排→回基础位置", transitionCollapsedY == baseY,
+      "y=\(transitionCollapsedY ?? -1)")
+
+transitionTime = Date(timeIntervalSince1970: 11_002)
+transitionProbe.probe(candidates: [transitionCandidate])
+let transitionPump2 = Date().addingTimeInterval(5)
+while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump2 {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+}
+check("T-bv39e hidden不变不重复通知", transitionNotifications.withLock { $0 } == 1, "")
+
+// T-bv40: reset 后旧 generation 的成功结果不得通知布局。
+let staleNotifications = OSAllocatedUnfairLock(initialState: 0)
+let staleCap: BubbleCapturer = { _ in
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    return collapsedS
+}
+let staleProbe = BubbleVisibilityProbe(
+    now: { Date(timeIntervalSince1970: 12_000) },
+    canCapture: { true },
+    capturer: staleCap,
+    onVisibilityChange: { staleNotifications.withLock { $0 += 1 } }
+)
+staleProbe.probe(candidates: [mkw(502, layer: 3, bubbleForCollapse)])
+staleProbe.reset()
+let stalePump = Date().addingTimeInterval(5)
+while staleProbe.lock.withLock({ $0.inFlight }) && Date() < stalePump {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+}
+check("T-bv40 旧generation结果不通知", staleNotifications.withLock { $0 } == 0, "")
 
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
 
