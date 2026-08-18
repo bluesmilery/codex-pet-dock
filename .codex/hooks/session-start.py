@@ -184,7 +184,7 @@ def _load_task_data(trellis_dir: Path, task_dir: Path) -> dict:
         from common.tasks import load_task  # type: ignore[import-not-found]
     except Exception:
         return {}
-    task_info = load_task(task_dir)
+    task_info = load_task(task_dir, repo_root=trellis_dir.parent)
     return task_info.raw if task_info is not None else {}
 
 

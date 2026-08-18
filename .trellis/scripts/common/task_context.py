@@ -26,7 +26,7 @@ from .git import branch_exists_locally
 from .io import read_json
 from .log import Colors, colored
 from .paths import DIR_ARCHIVE, DIR_TASKS, DIR_WORKFLOW, FILE_TASK_JSON, get_repo_root
-from .task_utils import resolve_task_dir
+from .task_utils import canonical_task_dir, resolve_task_dir
 
 # Extensions that look like code rather than spec/research docs. Entries with
 # one of these extensions outside .trellis/spec/, docs/docs-site, or the
@@ -59,13 +59,13 @@ _CODE_FILE_EXTENSIONS = {
 def cmd_add_context(args: argparse.Namespace) -> int:
     """Add entry to JSONL context file."""
     repo_root = get_repo_root()
-    target_dir = resolve_task_dir(args.dir, repo_root)
+    target_dir = canonical_task_dir(resolve_task_dir(args.dir, repo_root), repo_root)
 
     jsonl_name = args.file
     path = args.path
     reason = args.reason or "Added manually"
 
-    if not target_dir.is_dir():
+    if target_dir is None:
         print(colored(f"Error: Directory not found: {target_dir}", Colors.RED))
         return 1
 
@@ -113,9 +113,9 @@ def cmd_add_context(args: argparse.Namespace) -> int:
 def cmd_validate(args: argparse.Namespace) -> int:
     """Validate JSONL context files."""
     repo_root = get_repo_root()
-    target_dir = resolve_task_dir(args.dir, repo_root)
+    target_dir = canonical_task_dir(resolve_task_dir(args.dir, repo_root), repo_root)
 
-    if not target_dir.is_dir():
+    if target_dir is None:
         print(colored("Error: task directory required", Colors.RED))
         return 1
 
@@ -343,9 +343,9 @@ def _validate_jsonl(jsonl_file: Path, repo_root: Path, task_dir: Path | None = N
 def cmd_list_context(args: argparse.Namespace) -> int:
     """List JSONL context entries."""
     repo_root = get_repo_root()
-    target_dir = resolve_task_dir(args.dir, repo_root)
+    target_dir = canonical_task_dir(resolve_task_dir(args.dir, repo_root), repo_root)
 
-    if not target_dir.is_dir():
+    if target_dir is None:
         print(colored("Error: task directory required", Colors.RED))
         return 1
 

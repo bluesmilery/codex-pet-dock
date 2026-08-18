@@ -93,6 +93,60 @@ def is_within_tasks_dir(task_dir_abs: Path, repo_root: Path | None = None) -> bo
     return resolved.name != "archive"
 
 
+def _path_chain_has_no_symlink(path: Path, stop: Path) -> bool:
+    """Reject symlink components between a lexical path and its trusted root."""
+    current = path.absolute()
+    stop_abs = stop.absolute()
+    while True:
+        if current.is_symlink():
+            return False
+        if current == stop_abs:
+            return True
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+
+
+def canonical_tasks_dir(repo_root: Path) -> Path | None:
+    """Return the real active tasks directory only when its chain is trusted."""
+    try:
+        root = repo_root.resolve(strict=True)
+        lexical = repo_root / ".trellis" / "tasks"
+        if not _path_chain_has_no_symlink(lexical, repo_root):
+            return None
+        resolved = lexical.resolve(strict=True)
+        expected = root / ".trellis" / "tasks"
+        if resolved != expected or not resolved.is_dir():
+            return None
+        return resolved
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def canonical_task_dir(task_dir: Path, repo_root: Path | None = None) -> Path | None:
+    """Resolve an active task as an immediate, non-symlink tasks child."""
+    if repo_root is None:
+        repo_root = get_repo_root()
+    tasks_dir = canonical_tasks_dir(repo_root)
+    if tasks_dir is None:
+        return None
+    try:
+        root = repo_root.resolve(strict=True)
+        lexical = task_dir if task_dir.is_absolute() else root / task_dir
+        if not _path_chain_has_no_symlink(lexical, repo_root):
+            return None
+        relative = lexical.absolute().relative_to((repo_root / ".trellis" / "tasks").absolute())
+        if len(relative.parts) != 1 or relative.parts[0] in ("", ".", "..", "archive"):
+            return None
+        resolved = lexical.resolve(strict=True)
+        if resolved.parent != tasks_dir or not resolved.is_dir():
+            return None
+        return resolved
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
 # =============================================================================
 # Task Lookup
 # =============================================================================

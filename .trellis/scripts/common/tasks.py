@@ -18,10 +18,11 @@ from pathlib import Path
 
 from .io import read_json
 from .paths import FILE_TASK_JSON
+from .task_utils import canonical_task_dir, canonical_tasks_dir
 from .types import TaskInfo
 
 
-def _safe_task_json_path(task_dir: Path) -> Path | None:
+def _safe_task_json_path(task_dir: Path, repo_root: Path | None = None) -> Path | None:
     """Return task.json only when it is a contained regular file.
 
     Task directories are resolved by the active-task boundary, but their
@@ -30,8 +31,10 @@ def _safe_task_json_path(task_dir: Path) -> Path | None:
     external or non-regular task.json.
     """
     try:
-        task_root = task_dir.resolve(strict=True)
-        task_json = task_dir / FILE_TASK_JSON
+        task_root = canonical_task_dir(task_dir, repo_root)
+        if task_root is None:
+            return None
+        task_json = task_root / FILE_TASK_JSON
         metadata = task_json.lstat()
         if not stat.S_ISREG(metadata.st_mode):
             return None
@@ -41,7 +44,7 @@ def _safe_task_json_path(task_dir: Path) -> Path | None:
         return None
 
 
-def load_task(task_dir: Path) -> TaskInfo | None:
+def load_task(task_dir: Path, repo_root: Path | None = None) -> TaskInfo | None:
     """Load task from a directory containing task.json.
 
     Args:
@@ -50,7 +53,16 @@ def load_task(task_dir: Path) -> TaskInfo | None:
     Returns:
         TaskInfo if task.json exists and is valid, None otherwise.
     """
-    task_json = _safe_task_json_path(task_dir)
+    effective_root = repo_root
+    if effective_root is None:
+        try:
+            candidate = task_dir.absolute()
+            if candidate.parent.name == "tasks" and candidate.parent.parent.name == ".trellis":
+                effective_root = candidate.parent.parent.parent
+        except OSError:
+            return None
+    safe_task_dir = canonical_task_dir(task_dir, effective_root)
+    task_json = _safe_task_json_path(safe_task_dir, effective_root) if safe_task_dir else None
     if task_json is None:
         return None
 
@@ -60,7 +72,7 @@ def load_task(task_dir: Path) -> TaskInfo | None:
 
     return TaskInfo(
         dir_name=task_dir.name,
-        directory=task_dir,
+        directory=safe_task_dir,
         title=data.get("title") or data.get("name") or "unknown",
         status=data.get("status", "unknown"),
         assignee=data.get("assignee", ""),
@@ -83,13 +95,19 @@ def iter_active_tasks(tasks_dir: Path) -> Iterator[TaskInfo]:
     Yields:
         TaskInfo for each valid task.
     """
-    if not tasks_dir.is_dir():
+    try:
+        lexical_tasks_dir = tasks_dir.absolute()
+        repo_root = lexical_tasks_dir.parent.parent
+    except OSError:
+        return
+    safe_tasks_dir = canonical_tasks_dir(repo_root)
+    if safe_tasks_dir is None or lexical_tasks_dir != (repo_root / ".trellis" / "tasks").absolute():
         return
 
-    for d in sorted(tasks_dir.iterdir()):
-        if not d.is_dir() or d.name == "archive":
+    for d in sorted(safe_tasks_dir.iterdir()):
+        if d.is_symlink() or not d.is_dir() or d.name == "archive":
             continue
-        info = load_task(d)
+        info = load_task(d, repo_root)
         if info is not None:
             yield info
 

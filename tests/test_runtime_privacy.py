@@ -289,7 +289,7 @@ def test_task_json_symlink_is_rejected_by_loader_and_hooks(tmp_path: Path) -> No
     inject._resolve_active_task = lambda _root, _input: active
     session_start._resolve_active_task = lambda _trellis_dir, _input: active
 
-    loaded = tasks.load_task(task_dir)
+    loaded = tasks.load_task(task_dir, repo_root=repo)
     injected = inject.get_active_task(repo, {})
     status = session_start._get_task_status(repo / ".trellis", {})
     compact = session_start._build_compact_current_state(repo / ".trellis", {}, [])
@@ -298,6 +298,55 @@ def test_task_json_symlink_is_rejected_by_loader_and_hooks(tmp_path: Path) -> No
     assert injected is None
     assert "PRIVATE-ID" not in status and "PRIVATE-TITLE" not in status
     assert "PRIVATE-ID" not in compact and "PRIVATE-TITLE" not in compact
+
+
+def test_task_directory_symlink_is_rejected_across_loader_hooks_and_context(tmp_path: Path, capsys) -> None:
+    """A task entry itself must never redirect reads or JSONL writes outside the repo."""
+    tasks = _load_common("tasks", SCRIPTS / "common" / "tasks.py")
+    task_context = _load_common("task_context", SCRIPTS / "common" / "task_context.py")
+    inject = _load("inject_workflow_state_task_dir", ROOT / ".codex" / "hooks" / "inject-workflow-state.py")
+    session_start = _load("session_start_task_dir", ROOT / ".codex" / "hooks" / "session-start.py")
+    repo = tmp_path / "repo"
+    tasks_dir = repo / ".trellis" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    (repo / "safe.md").write_text("SAFE", encoding="utf-8")
+    outside = tmp_path / "outside-task-dir"
+    outside.mkdir()
+    (outside / "task.json").write_text(
+        json.dumps({"id": "PRIVATE-ID", "title": "PRIVATE-TITLE", "status": "completed"}),
+        encoding="utf-8",
+    )
+    (outside / "implement.jsonl").write_text(
+        json.dumps({"file": "safe.md", "reason": "PRIVATE-CONTEXT"}) + "\n",
+        encoding="utf-8",
+    )
+    evil = tasks_dir / "evil"
+    evil.symlink_to(outside, target_is_directory=True)
+
+    active = SimpleNamespace(task_path=".trellis/tasks/evil", stale=False, source="fixture")
+    inject._resolve_active_task = lambda _root, _input: active
+    session_start._resolve_active_task = lambda _trellis_dir, _input: active
+    task_context.get_repo_root = lambda: repo
+
+    loaded = tasks.load_task(evil, repo_root=repo)
+    iterated = list(tasks.iter_active_tasks(tasks_dir))
+    injected = inject.get_active_task(repo, {})
+    status = session_start._get_task_status(repo / ".trellis", {})
+    add_args = SimpleNamespace(dir="evil", file="implement", path="safe.md", reason="NEW")
+    list_args = SimpleNamespace(dir="evil")
+    validate_args = SimpleNamespace(dir="evil")
+    add_rc = task_context.cmd_add_context(add_args)
+    list_rc = task_context.cmd_list_context(list_args)
+    validate_rc = task_context.cmd_validate(validate_args)
+    output = capsys.readouterr().out
+
+    assert loaded is None
+    assert iterated == []
+    assert injected is None
+    assert "PRIVATE-ID" not in status and "PRIVATE-TITLE" not in status
+    assert add_rc != 0 and list_rc != 0 and validate_rc != 0
+    assert "PRIVATE-CONTEXT" not in output
+    assert (outside / "implement.jsonl").read_text(encoding="utf-8").count("NEW") == 0
 
 
 def test_update_marker_is_opaque_private_and_symlink_safe(tmp_path: Path) -> None:

@@ -174,7 +174,7 @@ def get_active_task(root: Path, input_data: dict) -> Optional[tuple[str, str, st
         from common.tasks import load_task  # type: ignore[import-not-found]
     except Exception:
         return None
-    task_info = load_task(task_dir)
+    task_info = load_task(task_dir, repo_root=root)
     if task_info is None:
         return None
     data = task_info.raw
