@@ -215,6 +215,74 @@ def canonical_task_json_path(task_json_path: Path, repo_root: Path | None = None
         return None
 
 
+def _canonical_contained_directory(path: Path, parent: Path) -> Path | None:
+    """Return a real directory immediately below a trusted parent."""
+    try:
+        lexical = path.absolute()
+        parent_resolved = parent.resolve(strict=True)
+        if lexical.is_symlink() or not lexical.exists():
+            return None
+        metadata = lexical.lstat()
+        if not stat.S_ISDIR(metadata.st_mode):
+            return None
+        if not _path_chain_has_no_symlink(lexical.parent, parent_resolved):
+            return None
+        resolved = lexical.resolve(strict=True)
+        if resolved.parent != parent_resolved:
+            return None
+        return resolved
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _ensure_contained_directory(path: Path, parent: Path) -> Path | None:
+    """Create one missing directory and then revalidate it without following links."""
+    try:
+        lexical = path.absolute()
+        parent_resolved = parent.resolve(strict=True)
+        if not _path_chain_has_no_symlink(lexical.parent, parent_resolved):
+            return None
+        if lexical.is_symlink() or lexical.exists():
+            return _canonical_contained_directory(lexical, parent_resolved)
+        lexical.mkdir()
+        return _canonical_contained_directory(lexical, parent_resolved)
+    except FileExistsError:
+        return _canonical_contained_directory(path, parent)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def canonical_archive_destination(
+    task_dir_abs: Path, repo_root: Path | None = None
+) -> Path | None:
+    """Return a new, contained archive destination for an active task."""
+    if repo_root is None:
+        repo_root = get_repo_root()
+    tasks_dir = canonical_tasks_dir(repo_root)
+    source = canonical_task_dir(task_dir_abs, repo_root)
+    if tasks_dir is None or source is None:
+        return None
+
+    archive_dir = _ensure_contained_directory(tasks_dir / "archive", tasks_dir)
+    if archive_dir is None:
+        return None
+    year_month = datetime.now().strftime("%Y-%m")
+    month_dir = _ensure_contained_directory(archive_dir / year_month, archive_dir)
+    if month_dir is None:
+        return None
+
+    try:
+        destination = month_dir / source.name
+        destination.relative_to(month_dir)
+        if destination.is_symlink() or destination.exists():
+            return None
+        if not _path_chain_has_no_symlink(destination.parent, month_dir):
+            return None
+        return destination
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
 # =============================================================================
 # Task Lookup
 # =============================================================================
@@ -259,26 +327,10 @@ def archive_task_dir(task_dir_abs: Path, repo_root: Path | None = None) -> Path 
     Returns:
         Path to archived directory, or None on error.
     """
-    if not task_dir_abs.is_dir():
-        print(f"Error: task directory not found: {task_dir_abs}", file=sys.stderr)
+    dest = canonical_archive_destination(task_dir_abs, repo_root)
+    if dest is None:
+        print(f"Error: unsafe archive destination for task: {task_dir_abs}", file=sys.stderr)
         return None
-
-    # Get tasks directory (parent of the task)
-    tasks_dir = task_dir_abs.parent
-    archive_dir = tasks_dir / "archive"
-    year_month = datetime.now().strftime("%Y-%m")
-    month_dir = archive_dir / year_month
-
-    # Create archive directory
-    try:
-        month_dir.mkdir(parents=True, exist_ok=True)
-    except (OSError, IOError) as e:
-        print(f"Error: Failed to create archive directory: {e}", file=sys.stderr)
-        return None
-
-    # Move task to archive
-    task_name = task_dir_abs.name
-    dest = month_dir / task_name
 
     try:
         shutil.move(str(task_dir_abs), str(dest))
@@ -286,6 +338,9 @@ def archive_task_dir(task_dir_abs: Path, repo_root: Path | None = None) -> Path 
         print(f"Error: Failed to move task to archive: {e}", file=sys.stderr)
         return None
 
+    if _canonical_contained_directory(dest, dest.parent) is None:
+        print(f"Error: archived task escaped trusted destination: {dest}", file=sys.stderr)
+        return None
     return dest
 
 

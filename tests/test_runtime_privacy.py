@@ -12,6 +12,7 @@ import json
 import os
 import stat
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -557,6 +558,66 @@ def test_create_initialization_rejects_unsafe_prd_and_jsonl_sinks(tmp_path: Path
     assert (normal / "prd.md").is_file()
     assert (normal / "implement.jsonl").is_file()
     assert (normal / "check.jsonl").is_file()
+
+
+def test_archive_destination_is_contained_and_non_symlink(tmp_path: Path) -> None:
+    """Archive moves must never redirect through archive or destination sinks."""
+    task_utils = _load_common("task_utils", SCRIPTS / "common" / "task_utils.py")
+    year_month = datetime.now().strftime("%Y-%m")
+
+    def setup(case: str) -> tuple[Path, Path, Path, Path]:
+        repo = tmp_path / case
+        tasks = repo / ".trellis" / "tasks"
+        task = tasks / "safe"
+        task.mkdir(parents=True)
+        (task / "task.json").write_text("{}\n", encoding="utf-8")
+        outside = repo / "outside"
+        outside.mkdir()
+        return repo, tasks, task, outside
+
+    repo, tasks, task, outside = setup("archive-existing-link")
+    (tasks / "archive").symlink_to(outside, target_is_directory=True)
+    assert task_utils.archive_task_dir(task, repo) is None
+    assert task.exists() and not any(outside.iterdir())
+
+    repo, tasks, task, outside = setup("archive-dangling-link")
+    (tasks / "archive").symlink_to(outside / "missing", target_is_directory=True)
+    assert task_utils.archive_task_dir(task, repo) is None
+    assert task.exists() and not (outside / "missing").exists()
+
+    repo, tasks, task, outside = setup("month-link")
+    archive = tasks / "archive"
+    archive.mkdir()
+    (archive / year_month).symlink_to(outside, target_is_directory=True)
+    assert task_utils.archive_task_dir(task, repo) is None
+    assert task.exists() and not any(outside.iterdir())
+
+    for case, kind in (("dest-link", "symlink"), ("dest-fifo", "fifo"), ("dest-dir", "directory")):
+        repo, tasks, task, outside = setup(case)
+        month = tasks / "archive" / year_month
+        month.mkdir(parents=True)
+        dest = month / task.name
+        external_target = None
+        if kind == "symlink":
+            external_target = outside / "target"
+            external_target.mkdir()
+            dest.symlink_to(external_target, target_is_directory=True)
+        elif kind == "fifo":
+            os.mkfifo(dest)
+        else:
+            dest.mkdir()
+        assert task_utils.archive_task_dir(task, repo) is None
+        assert task.exists()
+        if external_target is None:
+            assert not any(outside.iterdir())
+        else:
+            assert external_target.is_dir() and not (external_target / "safe").exists()
+
+    repo, tasks, task, outside = setup("normal-archive")
+    archived = task_utils.archive_task_dir(task, repo)
+    expected = tasks / "archive" / year_month / "safe"
+    assert archived == expected
+    assert expected.is_dir() and not task.exists() and not any(outside.iterdir())
 
 
 def test_context_jsonl_file_symlink_and_nonregular_are_rejected(tmp_path: Path, capsys) -> None:

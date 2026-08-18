@@ -84,6 +84,6 @@ make build
 make test-data
 ```
 
-`make test-data` 使用 `tests/DataTests.swift` 与脱敏 fixture，不联网且不需要屏幕录制权限。当前公开口径为 **test-data 129 项**，覆盖周窗口聚合、四项 token 数值与脱敏、增量缓存与淘汰、cache 私有加载、`parseLine` 鲁棒性、WeekLeft 窗口与重置时间、退避、暂停、服务组合、LiveDockProvider 映射、并发安全、codex 路径解析、子进程 PATH、LineReader、日期 fixture 以及 rpc stdio fixture。细分编号以测试入口源码为准，避免文档数字随新增用例漂移。
+`make test-data` 使用 `tests/DataTests.swift` 与脱敏 fixture，不联网且不需要屏幕录制权限。当前公开口径为 **test-data 131 项**，覆盖周窗口聚合、四项 token 数值与脱敏、增量缓存与淘汰、cache 私有加载、`parseLine` 鲁棒性、WeekLeft 窗口与重置时间、退避、暂停、服务组合、LiveDockProvider 映射、并发安全、codex 路径解析、子进程 PATH、LineReader、日期 fixture 以及 rpc stdio fixture。细分编号以测试入口源码为准，避免文档数字随新增用例漂移。
 
 集成入口为 `PetDockDataService(rateLimit:tokenLog:now:)` 的 `fetchWeekLeft()`、`fetchWeekTokens()`、`weekLeftNextDelay`、`weekTokensNextDelay`、`pause()` 和 `resume()`。
