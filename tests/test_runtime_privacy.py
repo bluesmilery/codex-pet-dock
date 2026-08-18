@@ -391,6 +391,195 @@ def test_task_cli_rejects_task_directory_symlink_before_status_or_hook_io(tmp_pa
     assert "PRIVATE-TITLE" not in start_output + current_output + finish_output
 
 
+def test_task_json_file_symlink_is_rejected_across_cli_store_and_create(tmp_path: Path, capsys) -> None:
+    """Every task.json sink must reject a file symlink, not follow its target."""
+    task = _load("task_cli_task_json_file", ROOT / ".trellis" / "scripts" / "task.py")
+    store = _load_common("task_store", SCRIPTS / "common" / "task_store.py")
+    repo = tmp_path / "repo"
+    tasks_dir = repo / ".trellis" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-task.json"
+    original = {
+        "id": "PRIVATE-ID",
+        "title": "PRIVATE-TITLE",
+        "status": "planning",
+        "branch": "fixture-branch",
+        "children": [],
+        "parent": None,
+        "meta": {},
+    }
+    outside.write_text(json.dumps(original), encoding="utf-8")
+    safe = tasks_dir / "safe"
+    parent = tasks_dir / "parent"
+    child = tasks_dir / "child"
+    for task_dir in (safe, parent, child):
+        task_dir.mkdir()
+        (task_dir / "task.json").symlink_to(outside)
+
+    def reset() -> None:
+        outside.write_text(json.dumps(original), encoding="utf-8")
+
+    task.get_repo_root = lambda: repo
+    task.resolve_context_key = lambda: None
+    hooks: list[Path] = []
+    task.run_task_hooks = lambda _event, path, _repo: hooks.append(path)
+    start_rc = task.cmd_start(SimpleNamespace(dir="safe"))
+    start_output = capsys.readouterr().out
+    reset()
+
+    task.resolve_active_task = lambda _repo: SimpleNamespace(
+        task_path=".trellis/tasks/safe", source="fixture", stale=False,
+    )
+    current_rc = task.cmd_current(SimpleNamespace(json=True, source=False))
+    current_output = capsys.readouterr().out
+    reset()
+
+    task.clear_active_task = lambda _repo: SimpleNamespace(
+        task_path=".trellis/tasks/safe", source="fixture", stale=False,
+    )
+    finish_rc = task.cmd_finish(SimpleNamespace())
+    finish_output = capsys.readouterr().out
+    reset()
+
+    store.get_repo_root = lambda: repo
+    set_results = [
+        store.cmd_set_branch(SimpleNamespace(dir="safe", branch="changed")),
+        store.cmd_set_base_branch(SimpleNamespace(dir="safe", base_branch="changed")),
+        store.cmd_set_scope(SimpleNamespace(dir="safe", scope="changed")),
+        store.cmd_set_meta(SimpleNamespace(dir="safe", key="fixture", value="changed")),
+    ]
+    capsys.readouterr()
+    reset()
+
+    add_rc = store.cmd_add_subtask(SimpleNamespace(parent_dir="parent", child_dir="child"))
+    capsys.readouterr()
+    reset()
+    remove_rc = store.cmd_remove_subtask(SimpleNamespace(parent_dir="parent", child_dir="child"))
+    capsys.readouterr()
+    reset()
+
+    store.archive_task_complete = lambda _task_dir, _repo: {}
+    store.run_task_hooks = lambda _event, path, _repo: hooks.append(path)
+    archive_rc = store.cmd_archive(SimpleNamespace(name="safe", no_commit=True))
+    capsys.readouterr()
+    reset()
+
+    # Parent linking is validated before create so a symlinked parent task.json
+    # cannot be modified as a side effect of creating a new task.
+    store.get_developer = lambda _repo=None: "fixture"
+    store.resolve_default_branch = lambda _repo: "main"
+    store.run_git = lambda _args, cwd=None: (0, "fixture", "")
+    store.generate_task_date_prefix = lambda: "01-01"
+    store._has_subagent_platform = lambda _repo: False
+    create_args = SimpleNamespace(
+        title="New fixture task", assignee="fixture", meta=None, package=None,
+        priority=None, slug="new-fixture-task", description="", base_branch=None,
+        parent="parent", no_start=True,
+    )
+    create_rc = store.cmd_create(create_args)
+    create_output = capsys.readouterr().out
+
+    output = start_output + current_output + finish_output + create_output
+    assert start_rc != 0 and current_rc == 0 and finish_rc != 0
+    assert all(rc != 0 for rc in set_results)
+    assert add_rc != 0 and remove_rc != 0 and archive_rc != 0 and create_rc != 0
+    assert not hooks
+    assert outside.read_text(encoding="utf-8") == json.dumps(original)
+    assert "PRIVATE-ID" not in output and "PRIVATE-TITLE" not in output
+
+
+def test_context_jsonl_file_symlink_and_nonregular_are_rejected(tmp_path: Path, capsys) -> None:
+    """JSONL add/list/validate must not follow symlink or accept FIFO files."""
+    task_context = _load_common("task_context", SCRIPTS / "common" / "task_context.py")
+    repo = tmp_path / "repo"
+    task_dir = repo / ".trellis" / "tasks" / "safe"
+    task_dir.mkdir(parents=True)
+    (repo / "safe.md").write_text("SAFE", encoding="utf-8")
+    outside = tmp_path / "outside-implement.jsonl"
+    outside.write_text(json.dumps({"file": "safe.md", "reason": "PRIVATE-CONTEXT"}) + "\n", encoding="utf-8")
+    jsonl_link = task_dir / "implement.jsonl"
+    jsonl_link.symlink_to(outside)
+    task_context.get_repo_root = lambda: repo
+
+    add_rc = task_context.cmd_add_context(
+        SimpleNamespace(dir="safe", file="implement", path="safe.md", reason="NEW")
+    )
+    add_output = capsys.readouterr().out
+    list_rc = task_context.cmd_list_context(SimpleNamespace(dir="safe"))
+    list_output = capsys.readouterr().out
+    validate_rc = task_context.cmd_validate(SimpleNamespace(dir="safe"))
+    validate_output = capsys.readouterr().out
+
+    jsonl_link.unlink()
+    fifo = task_dir / "check.jsonl"
+    os.mkfifo(fifo)
+    fifo_add_rc = task_context.cmd_add_context(
+        SimpleNamespace(dir="safe", file="check", path="safe.md", reason="FIFO")
+    )
+    capsys.readouterr()
+    fifo_validate_rc = task_context.cmd_validate(SimpleNamespace(dir="safe"))
+    fifo_validate_output = capsys.readouterr().out
+    fifo_list_rc = task_context.cmd_list_context(SimpleNamespace(dir="safe"))
+    fifo_list_output = capsys.readouterr().out
+
+    assert add_rc != 0 and list_rc != 0 and validate_rc != 0
+    assert fifo_add_rc != 0 and fifo_validate_rc != 0 and fifo_list_rc != 0
+    output = add_output + list_output + validate_output + fifo_validate_output + fifo_list_output
+    assert "PRIVATE-CONTEXT" not in output
+    assert outside.read_text(encoding="utf-8").count("NEW") == 0
+
+
+def test_task_json_hooks_and_linear_sync_reject_file_symlink(tmp_path: Path, capsys) -> None:
+    """Shared hook and Linear readers/writers must enforce the same file gate."""
+    task_utils = _load_common("task_utils", SCRIPTS / "common" / "task_utils.py")
+    config = _load_common("config", SCRIPTS / "common" / "config.py")
+    linear = _load("linear_sync_file_gate", ROOT / ".trellis" / "scripts" / "hooks" / "linear_sync.py")
+    repo = tmp_path / "repo"
+    task_dir = repo / ".trellis" / "tasks" / "safe"
+    task_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-task.json"
+    outside.write_text(json.dumps({"id": "PRIVATE-ID", "title": "PRIVATE-TITLE"}), encoding="utf-8")
+    task_json = task_dir / "task.json"
+    task_json.symlink_to(outside)
+    config.get_hooks = lambda _event, _repo: ["true"]
+
+    import subprocess
+
+    calls: list[Path] = []
+    original_run = subprocess.run
+    subprocess.run = lambda *args, **kwargs: calls.append(Path(kwargs["env"]["TASK_JSON_PATH"]))  # type: ignore[assignment]
+    try:
+        task_utils.run_task_hooks("after_start", task_json, repo)
+    finally:
+        subprocess.run = original_run
+
+    old_env = os.environ.get("TASK_JSON_PATH")
+    os.environ["TASK_JSON_PATH"] = str(task_json)
+    try:
+        try:
+            linear._read_task()
+            linear_read_rc = 0
+        except SystemExit as exc:
+            linear_read_rc = int(exc.code or 1)
+        try:
+            linear._write_task({"title": "CHANGED"}, str(task_json))
+            linear_write_rc = 0
+        except SystemExit as exc:
+            linear_write_rc = int(exc.code or 1)
+    finally:
+        if old_env is None:
+            os.environ.pop("TASK_JSON_PATH", None)
+        else:
+            os.environ["TASK_JSON_PATH"] = old_env
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+
+    assert calls == []
+    assert linear_read_rc != 0 and linear_write_rc != 0
+    assert outside.read_text(encoding="utf-8") == json.dumps({"id": "PRIVATE-ID", "title": "PRIVATE-TITLE"})
+    assert "PRIVATE-ID" not in output and "PRIVATE-TITLE" not in output
+
+
 def test_update_marker_is_opaque_private_and_symlink_safe(tmp_path: Path) -> None:
     """Marker identity and all runtime I/O stay private and contained."""
     session_context = _load_common("session_context", SCRIPTS / "common" / "session_context.py")

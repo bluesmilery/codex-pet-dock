@@ -52,6 +52,7 @@ from .safe_commit import (
 from .task_utils import (
     archive_task_complete,
     canonical_task_dir,
+    canonical_task_file,
     canonical_tasks_dir,
     find_task_by_name,
     is_within_tasks_dir,
@@ -318,11 +319,11 @@ def cmd_create(args: argparse.Namespace) -> int:
     if task_dir.is_symlink() or (task_dir.exists() and canonical_task_dir(task_dir, repo_root) is None):
         print(colored(f"Error: Task directory is outside the trusted repository: {dir_name}", Colors.RED), file=sys.stderr)
         return 1
-    task_json_path = task_dir / FILE_TASK_JSON
-
     if args.parent:
         parent_candidate = resolve_task_dir(args.parent, repo_root)
-        if (parent_candidate.is_symlink() or parent_candidate.is_dir()) and canonical_task_dir(parent_candidate, repo_root) is None:
+        parent_dir = canonical_task_dir(parent_candidate, repo_root)
+        parent_json = canonical_task_file(parent_dir, FILE_TASK_JSON, repo_root) if parent_dir else None
+        if (parent_candidate.is_symlink() or parent_candidate.is_dir()) and (parent_dir is None or parent_json is None):
             print(colored("Error: parent task is outside the trusted tasks directory", Colors.RED), file=sys.stderr)
             return 1
 
@@ -337,6 +338,11 @@ def cmd_create(args: argparse.Namespace) -> int:
         print(colored(f"Warning: Task directory already exists: {dir_name}", Colors.YELLOW), file=sys.stderr)
     else:
         task_dir.mkdir(parents=True)
+
+    task_json_path = canonical_task_file(task_dir, FILE_TASK_JSON, repo_root, allow_missing=True)
+    if task_json_path is None:
+        print(colored("Error: task.json is not a trusted regular file", Colors.RED), file=sys.stderr)
+        return 1
 
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -431,7 +437,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         if parent_dir is None:
             print(colored(f"Warning: Parent task not found: {args.parent}", Colors.YELLOW), file=sys.stderr)
             parent_dir = None
-        parent_json_path = parent_dir / FILE_TASK_JSON if parent_dir else None
+        parent_json_path = canonical_task_file(parent_dir, FILE_TASK_JSON, repo_root) if parent_dir else None
         if parent_json_path is None or not parent_json_path.is_file():
             print(colored(f"Warning: Parent task.json not found: {args.parent}", Colors.YELLOW), file=sys.stderr)
         else:
@@ -567,14 +573,18 @@ def cmd_archive(args: argparse.Namespace) -> int:
         return 1
 
     dir_name = task_dir.name
-    task_json_path = task_dir / FILE_TASK_JSON
+    task_json_path = canonical_task_file(task_dir, FILE_TASK_JSON, repo_root)
+    raw_task_json = task_dir / FILE_TASK_JSON
+    if task_json_path is None and (raw_task_json.exists() or raw_task_json.is_symlink()):
+        print(colored("Error: task.json is not a trusted regular file", Colors.RED), file=sys.stderr)
+        return 1
 
     # Update status before archiving
     today = datetime.now().strftime("%Y-%m-%d")
     # Names of child task dirs whose task.json gets modified below; passed
     # into safe_archive_paths_to_add so they're staged in this commit.
     modified_children: list[str] = []
-    if task_json_path.is_file():
+    if task_json_path is not None:
         data = read_json(task_json_path)
         if data:
             # Warn (don't block) when the recorded branch is stale — it was
@@ -606,8 +616,8 @@ def cmd_archive(args: argparse.Namespace) -> int:
                     child_candidate = find_task_by_name(child_name, tasks_dir)
                     child_dir_path = canonical_task_dir(child_candidate, repo_root) if child_candidate else None
                     if child_dir_path:
-                        child_json = child_dir_path / FILE_TASK_JSON
-                        if child_json.is_file():
+                        child_json = canonical_task_file(child_dir_path, FILE_TASK_JSON, repo_root)
+                        if child_json is not None:
                             child_data = read_json(child_json)
                             if child_data:
                                 child_data["parent"] = None
@@ -749,8 +759,12 @@ def cmd_add_subtask(args: argparse.Namespace) -> int:
         print(colored("Error: task path is outside the trusted tasks directory", Colors.RED), file=sys.stderr)
         return 1
 
-    parent_json_path = parent_dir / FILE_TASK_JSON
-    child_json_path = child_dir / FILE_TASK_JSON
+    parent_json_path = canonical_task_file(parent_dir, FILE_TASK_JSON, repo_root)
+    child_json_path = canonical_task_file(child_dir, FILE_TASK_JSON, repo_root)
+
+    if parent_json_path is None or child_json_path is None:
+        print(colored("Error: task.json is not a trusted regular file", Colors.RED), file=sys.stderr)
+        return 1
 
     if not parent_json_path.is_file():
         print(colored(f"Error: Parent task.json not found: {args.parent_dir}", Colors.RED), file=sys.stderr)
@@ -806,8 +820,12 @@ def cmd_remove_subtask(args: argparse.Namespace) -> int:
         print(colored("Error: task path is outside the trusted tasks directory", Colors.RED), file=sys.stderr)
         return 1
 
-    parent_json_path = parent_dir / FILE_TASK_JSON
-    child_json_path = child_dir / FILE_TASK_JSON
+    parent_json_path = canonical_task_file(parent_dir, FILE_TASK_JSON, repo_root)
+    child_json_path = canonical_task_file(child_dir, FILE_TASK_JSON, repo_root)
+
+    if parent_json_path is None or child_json_path is None:
+        print(colored("Error: task.json is not a trusted regular file", Colors.RED), file=sys.stderr)
+        return 1
 
     if not parent_json_path.is_file():
         print(colored(f"Error: Parent task.json not found: {args.parent_dir}", Colors.RED), file=sys.stderr)
@@ -860,7 +878,10 @@ def cmd_set_branch(args: argparse.Namespace) -> int:
     if target_dir is None:
         print(colored("Error: task path is outside the trusted tasks directory", Colors.RED))
         return 1
-    task_json = target_dir / FILE_TASK_JSON
+    task_json = canonical_task_file(target_dir, FILE_TASK_JSON, repo_root)
+    if task_json is None:
+        print(colored("Error: task.json is not a trusted regular file", Colors.RED))
+        return 1
     if not task_json.is_file():
         print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
         return 1
@@ -897,7 +918,10 @@ def cmd_set_base_branch(args: argparse.Namespace) -> int:
     if target_dir is None:
         print(colored("Error: task path is outside the trusted tasks directory", Colors.RED))
         return 1
-    task_json = target_dir / FILE_TASK_JSON
+    task_json = canonical_task_file(target_dir, FILE_TASK_JSON, repo_root)
+    if task_json is None:
+        print(colored("Error: task.json is not a trusted regular file", Colors.RED))
+        return 1
     if not task_json.is_file():
         print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
         return 1
@@ -932,7 +956,10 @@ def cmd_set_scope(args: argparse.Namespace) -> int:
     if target_dir is None:
         print(colored("Error: task path is outside the trusted tasks directory", Colors.RED))
         return 1
-    task_json = target_dir / FILE_TASK_JSON
+    task_json = canonical_task_file(target_dir, FILE_TASK_JSON, repo_root)
+    if task_json is None:
+        print(colored("Error: task.json is not a trusted regular file", Colors.RED))
+        return 1
     if not task_json.is_file():
         print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
         return 1
@@ -967,7 +994,10 @@ def cmd_set_meta(args: argparse.Namespace) -> int:
     if target_dir is None:
         print(colored("Error: task path is outside the trusted tasks directory", Colors.RED))
         return 1
-    task_json = target_dir / FILE_TASK_JSON
+    task_json = canonical_task_file(target_dir, FILE_TASK_JSON, repo_root)
+    if task_json is None:
+        print(colored("Error: task.json is not a trusted regular file", Colors.RED))
+        return 1
     if not task_json.is_file():
         print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
         return 1

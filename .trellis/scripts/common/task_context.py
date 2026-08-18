@@ -26,7 +26,7 @@ from .git import branch_exists_locally
 from .io import read_json
 from .log import Colors, colored
 from .paths import DIR_ARCHIVE, DIR_TASKS, DIR_WORKFLOW, FILE_TASK_JSON, get_repo_root
-from .task_utils import canonical_task_dir, resolve_task_dir
+from .task_utils import canonical_task_dir, canonical_task_file, resolve_task_dir, safe_regular_file
 
 # Extensions that look like code rather than spec/research docs. Entries with
 # one of these extensions outside .trellis/spec/, docs/docs-site, or the
@@ -73,7 +73,10 @@ def cmd_add_context(args: argparse.Namespace) -> int:
     if not jsonl_name.endswith(".jsonl"):
         jsonl_name = f"{jsonl_name}.jsonl"
 
-    jsonl_file = target_dir / jsonl_name
+    jsonl_file = canonical_task_file(target_dir, jsonl_name, repo_root, allow_missing=True)
+    if jsonl_file is None:
+        print(colored(f"Error: {jsonl_name} is not a trusted regular file", Colors.RED))
+        return 1
     full_path = repo_root / path
 
     entry_type = "file"
@@ -86,7 +89,7 @@ def cmd_add_context(args: argparse.Namespace) -> int:
         return 1
 
     # Check if already exists
-    if jsonl_file.is_file():
+    if jsonl_file.exists():
         content = jsonl_file.read_text(encoding="utf-8")
         if f'"{path}"' in content:
             print(colored(f"Warning: Entry already exists for {path}", Colors.YELLOW))
@@ -125,8 +128,12 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
     # Warn (don't fail validation) when the recorded branch is stale — it
     # was likely already merged and deleted (#399 item 2).
-    task_json_path = target_dir / FILE_TASK_JSON
-    if task_json_path.is_file():
+    task_json_path = canonical_task_file(target_dir, FILE_TASK_JSON, repo_root)
+    raw_task_json = target_dir / FILE_TASK_JSON
+    if raw_task_json.exists() or raw_task_json.is_symlink():
+        if task_json_path is None:
+            print(colored("Error: task.json is not a trusted regular file", Colors.RED))
+            return 1
         task_data = read_json(task_json_path)
         stored_branch = task_data.get("branch") if task_data else None
         if stored_branch and not branch_exists_locally(stored_branch, repo_root):
@@ -260,9 +267,14 @@ def _validate_jsonl(jsonl_file: Path, repo_root: Path, task_dir: Path | None = N
     file_name = jsonl_file.name
     errors = 0
 
-    if not jsonl_file.is_file():
-        print(f"  {colored(f'{file_name}: not found (skipped)', Colors.YELLOW)}")
-        return 0
+    safe_jsonl = safe_regular_file(jsonl_file, containing_dir=task_dir) if task_dir else safe_regular_file(jsonl_file)
+    if safe_jsonl is None:
+        if not jsonl_file.exists() and not jsonl_file.is_symlink():
+            print(f"  {colored(f'{file_name}: not found (skipped)', Colors.YELLOW)}")
+            return 0
+        print(f"  {colored(f'{file_name}: rejected (not a trusted regular file)', Colors.RED)}")
+        return 1
+    jsonl_file = safe_jsonl
 
     task_rel = ""
     if task_dir is not None:
@@ -354,8 +366,13 @@ def cmd_list_context(args: argparse.Namespace) -> int:
 
     for jsonl_name in ["implement.jsonl", "check.jsonl"]:
         jsonl_file = target_dir / jsonl_name
-        if not jsonl_file.is_file():
-            continue
+        safe_jsonl = canonical_task_file(target_dir, jsonl_name, repo_root)
+        if safe_jsonl is None:
+            if not jsonl_file.exists() and not jsonl_file.is_symlink():
+                continue
+            print(colored(f"Error: {jsonl_name} is not a trusted regular file", Colors.RED))
+            return 1
+        jsonl_file = safe_jsonl
 
         print(colored(f"[{jsonl_name}]", Colors.CYAN))
 

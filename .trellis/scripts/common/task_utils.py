@@ -13,11 +13,12 @@ Provides:
 from __future__ import annotations
 
 import shutil
+import stat
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from .paths import get_repo_root, get_tasks_dir
+from .paths import FILE_TASK_JSON, get_repo_root, get_tasks_dir
 
 
 # =============================================================================
@@ -143,6 +144,73 @@ def canonical_task_dir(task_dir: Path, repo_root: Path | None = None) -> Path | 
         if resolved.parent != tasks_dir or not resolved.is_dir():
             return None
         return resolved
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def safe_regular_file(
+    path: Path,
+    containing_dir: Path | None = None,
+    *,
+    allow_missing: bool = False,
+) -> Path | None:
+    """Return a regular, non-symlink file contained by an optional directory."""
+    try:
+        lexical = path.absolute()
+        if lexical.is_symlink():
+            return None
+        if lexical.exists():
+            metadata = lexical.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                return None
+            canonical = lexical.resolve(strict=True)
+        elif allow_missing:
+            canonical = lexical
+        else:
+            return None
+
+        if containing_dir is not None:
+            parent = containing_dir.resolve(strict=True)
+            if canonical.parent != parent:
+                return None
+            if not _path_chain_has_no_symlink(lexical.parent, parent):
+                return None
+        return canonical
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def canonical_task_file(
+    task_dir: Path,
+    filename: str = FILE_TASK_JSON,
+    repo_root: Path | None = None,
+    *,
+    allow_missing: bool = False,
+) -> Path | None:
+    """Return a task file only when its task dir and file are trusted."""
+    safe_dir = canonical_task_dir(task_dir, repo_root)
+    if safe_dir is None:
+        return None
+    return safe_regular_file(
+        safe_dir / filename,
+        containing_dir=safe_dir,
+        allow_missing=allow_missing,
+    )
+
+
+def canonical_task_json_path(task_json_path: Path, repo_root: Path | None = None) -> Path | None:
+    """Validate an active or archived task.json path supplied by a hook."""
+    if repo_root is None:
+        repo_root = get_repo_root()
+    if task_json_path.name != FILE_TASK_JSON:
+        return None
+    try:
+        lexical = task_json_path.absolute()
+        tasks_root = (repo_root / ".trellis" / "tasks").absolute()
+        if not _path_chain_has_no_symlink(lexical.parent, repo_root):
+            return None
+        lexical.relative_to(tasks_root)
+        return safe_regular_file(lexical, containing_dir=lexical.parent)
     except (OSError, RuntimeError, ValueError):
         return None
 
@@ -304,6 +372,10 @@ def run_task_hooks(event: str, task_json_path: Path, repo_root: Path) -> None:
     import os
     import subprocess
 
+    safe_task_json = canonical_task_json_path(task_json_path, repo_root)
+    if safe_task_json is None:
+        return
+
     from .config import get_hooks
     from .log import Colors, colored
 
@@ -311,7 +383,7 @@ def run_task_hooks(event: str, task_json_path: Path, repo_root: Path) -> None:
     if not commands:
         return
 
-    env = {**os.environ, "TASK_JSON_PATH": str(task_json_path)}
+    env = {**os.environ, "TASK_JSON_PATH": str(safe_task_json)}
 
     for cmd in commands:
         try:

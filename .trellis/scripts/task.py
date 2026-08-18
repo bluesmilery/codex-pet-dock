@@ -45,7 +45,7 @@ from common.active_task import (
     set_active_task,
 )
 from common.io import read_json, write_json
-from common.task_utils import canonical_task_dir, resolve_task_dir, run_task_hooks
+from common.task_utils import canonical_task_dir, canonical_task_file, resolve_task_dir, run_task_hooks
 from common.tasks import iter_active_tasks, children_progress
 
 # Import command handlers from split modules (also re-exports for plan.py compatibility)
@@ -96,7 +96,10 @@ def cmd_start(args: argparse.Namespace) -> int:
     except ValueError:
         task_dir = str(full_path)
 
-    task_json_path = full_path / FILE_TASK_JSON
+    task_json_path = canonical_task_file(full_path, FILE_TASK_JSON, repo_root)
+    if task_json_path is None:
+        print(colored("Error: task.json is not a trusted regular file", Colors.RED))
+        return 1
 
     if not resolve_context_key():
         # Degraded mode: no session identity available.
@@ -115,12 +118,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         ))
 
         # Still flip task.json status: planning → in_progress so downstream phases proceed.
-        if task_json_path.is_file():
-            data = read_json(task_json_path)
-            if data and data.get("status") == "planning":
-                data["status"] = "in_progress"
-                if write_json(task_json_path, data):
-                    print(colored("✓ Status: planning → in_progress (degraded)", Colors.GREEN))
+        data = read_json(task_json_path)
+        if data and data.get("status") == "planning":
+            data["status"] = "in_progress"
+            if write_json(task_json_path, data):
+                print(colored("✓ Status: planning → in_progress (degraded)", Colors.GREEN))
             run_task_hooks("after_start", task_json_path, repo_root)
         return 0
 
@@ -129,12 +131,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         print(colored(f"✓ Current task set to: {task_dir}", Colors.GREEN))
         print(f"Source: {active.source}")
 
-        if task_json_path.is_file():
-            data = read_json(task_json_path)
-            if data and data.get("status") == "planning":
-                data["status"] = "in_progress"
-                if write_json(task_json_path, data):
-                    print(colored("✓ Status: planning → in_progress", Colors.GREEN))
+        data = read_json(task_json_path)
+        if data and data.get("status") == "planning":
+            data["status"] = "in_progress"
+            if write_json(task_json_path, data):
+                print(colored("✓ Status: planning → in_progress", Colors.GREEN))
 
         print()
         print(colored("The hook will now inject context from this task's jsonl files.", Colors.BLUE))
@@ -161,13 +162,15 @@ def cmd_finish(args: argparse.Namespace) -> int:
     if task_dir is None:
         print(colored("Error: current task path is outside the trusted tasks directory", Colors.RED), file=sys.stderr)
         return 1
-    task_json_path = task_dir / FILE_TASK_JSON
+    task_json_path = canonical_task_file(task_dir, FILE_TASK_JSON, repo_root)
+    if task_json_path is None:
+        print(colored("Error: current task.json is not a trusted regular file", Colors.RED), file=sys.stderr)
+        return 1
 
     print(colored(f"✓ Cleared current task (was: {current})", Colors.GREEN))
     print(f"Source: {active.source}")
 
-    if task_json_path.is_file():
-        run_task_hooks("after_finish", task_json_path, repo_root)
+    run_task_hooks("after_finish", task_json_path, repo_root)
     return 0
 
 
@@ -180,7 +183,8 @@ def cmd_current(args: argparse.Namespace) -> int:
         task_obj = None
         if active.task_path:
             task_dir = canonical_task_dir(repo_root / active.task_path, repo_root)
-            data = read_json(task_dir / FILE_TASK_JSON) if task_dir else {}
+            task_json = canonical_task_file(task_dir, FILE_TASK_JSON, repo_root) if task_dir else None
+            data = read_json(task_json) if task_json else {}
             data = data or {}
             task_obj = {
                 "dir": active.task_path,

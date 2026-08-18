@@ -35,6 +35,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from common.io import write_json
+    from common.task_utils import canonical_task_json_path, safe_regular_file
+except ModuleNotFoundError:
+    scripts_dir = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(scripts_dir))
+    from common.io import write_json
+    from common.task_utils import canonical_task_json_path, safe_regular_file
+
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 # Trellis priority → Linear priority (1=Urgent, 2=High, 3=Medium, 4=Low)
@@ -72,19 +81,46 @@ ASSIGNEE_MAP = LINEAR_CFG.get("assignees", {})
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
+def _repo_root_for_task_json(path: Path) -> Path | None:
+    """Find the repository root from an active or archived task.json path."""
+    try:
+        absolute = path.absolute()
+        for ancestor in absolute.parents:
+            if ancestor.name == "tasks" and ancestor.parent.name == ".trellis":
+                return ancestor.parent.parent
+    except OSError:
+        pass
+    return None
+
+
 def _read_task() -> tuple[dict, str]:
     path = os.environ.get("TASK_JSON_PATH", "")
     if not path:
         print("TASK_JSON_PATH not set", file=sys.stderr)
         sys.exit(1)
-    with open(path, encoding="utf-8") as f:
-        return json.load(f), path
+    raw_path = Path(path)
+    repo_root = _repo_root_for_task_json(raw_path)
+    if repo_root is None:
+        print("TASK_JSON_PATH is not a trusted regular task.json", file=sys.stderr)
+        sys.exit(1)
+    safe_path = canonical_task_json_path(raw_path, repo_root)
+    if safe_path is None:
+        print("TASK_JSON_PATH is not a trusted regular task.json", file=sys.stderr)
+        sys.exit(1)
+    with open(safe_path, encoding="utf-8") as f:
+        return json.load(f), str(safe_path)
 
 
 def _write_task(data: dict, path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    raw_path = Path(path)
+    repo_root = _repo_root_for_task_json(raw_path)
+    if repo_root is None:
+        print("TASK_JSON_PATH is not a trusted regular task.json", file=sys.stderr)
+        sys.exit(1)
+    safe_path = canonical_task_json_path(raw_path, repo_root)
+    if safe_path is None or not write_json(safe_path, data):
+        print("TASK_JSON_PATH is not a trusted regular task.json", file=sys.stderr)
+        sys.exit(1)
 
 
 def _linearis(*args: str) -> dict | None:
@@ -187,8 +223,9 @@ def cmd_sync() -> None:
 
     # Find prd.md next to task.json
     task_json_path = os.environ.get("TASK_JSON_PATH", "")
-    prd_path = Path(task_json_path).parent / "prd.md"
-    if not prd_path.is_file():
+    task_dir = Path(task_json_path).parent
+    prd_path = safe_regular_file(task_dir / "prd.md", containing_dir=task_dir)
+    if prd_path is None:
         print(f"No prd.md found at {prd_path}", file=sys.stderr)
         sys.exit(1)
 
@@ -210,13 +247,21 @@ def _resolve_parent_linear_issue(task: dict) -> str | None:
     if not task_json_path:
         return None
 
-    current_task_dir = Path(task_json_path).parent
+    current_task_json = Path(task_json_path)
+    repo_root = _repo_root_for_task_json(current_task_json)
+    if repo_root is None:
+        return None
+    current_task_path = canonical_task_json_path(current_task_json, repo_root)
+    if current_task_path is None:
+        return None
+    current_task_dir = current_task_path.parent
     tasks_dir = current_task_dir.parent
     parent_json = tasks_dir / parent_name / "task.json"
 
-    if parent_json.exists():
+    parent_task_json = canonical_task_json_path(parent_json, repo_root)
+    if parent_task_json is not None:
         try:
-            with open(parent_json, encoding="utf-8") as f:
+            with open(parent_task_json, encoding="utf-8") as f:
                 parent_task = json.load(f)
             return _get_linear_issue(parent_task)
         except (json.JSONDecodeError, OSError):
