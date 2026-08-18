@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -58,6 +59,7 @@ from .task_utils import (
     is_within_tasks_dir,
     resolve_task_dir,
     run_task_hooks,
+    safe_regular_file,
 )
 
 
@@ -166,7 +168,21 @@ def _has_subagent_platform(repo_root: Path) -> bool:
     return False
 
 
-def _write_seed_jsonl(path: Path) -> None:
+def _write_new_text(path: Path, content: str) -> bool:
+    """Create a missing file without following a raced-in symlink."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o666)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        return True
+    except FileExistsError:
+        return safe_regular_file(path, containing_dir=path.parent) is not None
+    except OSError:
+        return False
+
+
+def _write_seed_jsonl(path: Path) -> bool:
     """Write a one-line seed JSONL file with a self-describing ``_example``.
 
     The seed row has no ``file`` field, so downstream consumers (hooks +
@@ -174,7 +190,7 @@ def _write_seed_jsonl(path: Path) -> None:
     it. The row exists purely as an in-file prompt for the AI curator.
     """
     seed = {"_example": _SEED_EXAMPLE}
-    path.write_text(json.dumps(seed, ensure_ascii=False) + "\n", encoding="utf-8")
+    return _write_new_text(path, json.dumps(seed, ensure_ascii=False) + "\n")
 
 
 def _parse_meta_pairs(pairs: list[str] | None) -> dict[str, str] | None:
@@ -343,6 +359,14 @@ def cmd_create(args: argparse.Namespace) -> int:
     if task_json_path is None:
         print(colored("Error: task.json is not a trusted regular file", Colors.RED), file=sys.stderr)
         return 1
+    prd_path = safe_regular_file(task_dir / "prd.md", containing_dir=task_dir, allow_missing=True)
+    jsonl_paths = {
+        name: safe_regular_file(task_dir / name, containing_dir=task_dir, allow_missing=True)
+        for name in ("implement.jsonl", "check.jsonl")
+    }
+    if prd_path is None or any(path is None for path in jsonl_paths.values()):
+        print(colored("Error: task initialization file is not a trusted regular file", Colors.RED), file=sys.stderr)
+        return 1
 
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -412,12 +436,12 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     write_json(task_json_path, task_data)
 
-    prd_path = task_dir / "prd.md"
-    if not prd_path.exists():
-        prd_path.write_text(
-            _default_prd_content(args.title, description),
-            encoding="utf-8",
-        )
+    if not prd_path.exists() and not _write_new_text(
+        prd_path,
+        _default_prd_content(args.title, description),
+    ):
+        print(colored("Error: failed to create trusted prd.md", Colors.RED), file=sys.stderr)
+        return 1
 
     # Seed implement.jsonl / check.jsonl for sub-agent-capable platforms.
     # Agent curates real entries during planning when the task needs them.
@@ -426,9 +450,10 @@ def cmd_create(args: argparse.Namespace) -> int:
     seeded_jsonl = False
     if _has_subagent_platform(repo_root):
         for jsonl_name in ("implement.jsonl", "check.jsonl"):
-            jsonl_path = task_dir / jsonl_name
-            if not jsonl_path.exists():
-                _write_seed_jsonl(jsonl_path)
+            jsonl_path = jsonl_paths[jsonl_name]
+            if jsonl_path is not None and not jsonl_path.exists() and not _write_seed_jsonl(jsonl_path):
+                print(colored(f"Error: failed to create trusted {jsonl_name}", Colors.RED), file=sys.stderr)
+                return 1
         seeded_jsonl = True
 
     # Handle --parent: establish bidirectional link

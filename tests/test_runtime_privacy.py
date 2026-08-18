@@ -488,6 +488,77 @@ def test_task_json_file_symlink_is_rejected_across_cli_store_and_create(tmp_path
     assert "PRIVATE-ID" not in output and "PRIVATE-TITLE" not in output
 
 
+def test_create_initialization_rejects_unsafe_prd_and_jsonl_sinks(tmp_path: Path) -> None:
+    """Task create must never follow or overwrite unsafe initialization files."""
+    store = _load_common("task_store", SCRIPTS / "common" / "task_store.py")
+    repo = tmp_path / "repo"
+    tasks_dir = repo / ".trellis" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    store.get_repo_root = lambda: repo
+    store.get_developer = lambda _repo=None: "fixture"
+    store.resolve_default_branch = lambda _repo: "main"
+    store.run_git = lambda _args, cwd=None: (0, "fixture", "")
+    store.generate_task_date_prefix = lambda: "01-01"
+    store._has_subagent_platform = lambda _repo: True
+    store.run_task_hooks = lambda *_args: None
+
+    def create_args(slug: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            title="Fixture task",
+            assignee="fixture",
+            meta=None,
+            package=None,
+            priority=None,
+            slug=slug,
+            description="",
+            base_branch=None,
+            parent=None,
+            no_start=True,
+        )
+
+    def seed_task_dir(slug: str) -> Path:
+        task_dir = tasks_dir / f"01-01-{slug}"
+        task_dir.mkdir()
+        (task_dir / "task.json").write_text("{}\n", encoding="utf-8")
+        return task_dir
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    for index, name in enumerate(("prd.md", "implement.jsonl", "check.jsonl")):
+        task_dir = seed_task_dir(f"dangling-{index}")
+        link = task_dir / name
+        link.symlink_to(outside / f"missing-{index}")
+        assert store.cmd_create(create_args(f"dangling-{index}")) != 0
+        assert not (outside / f"missing-{index}").exists()
+
+    for index, name in enumerate(("prd.md", "implement.jsonl", "check.jsonl")):
+        task_dir = seed_task_dir(f"target-{index}")
+        target = outside / f"target-{index}"
+        target.write_text("PRIVATE-SENTINEL\n", encoding="utf-8")
+        (task_dir / name).symlink_to(target)
+        assert store.cmd_create(create_args(f"target-{index}")) != 0
+        assert target.read_text(encoding="utf-8") == "PRIVATE-SENTINEL\n"
+
+    for index, name in enumerate(("prd.md", "implement.jsonl", "check.jsonl")):
+        task_dir = seed_task_dir(f"fifo-{index}")
+        os.mkfifo(task_dir / name)
+        assert store.cmd_create(create_args(f"fifo-{index}")) != 0
+
+    for index, name in enumerate(("prd.md", "implement.jsonl", "check.jsonl")):
+        task_dir = seed_task_dir(f"directory-{index}")
+        (task_dir / name).mkdir()
+        assert store.cmd_create(create_args(f"directory-{index}")) != 0
+
+    normal = tasks_dir / "01-01-normal"
+    normal.mkdir()
+    (normal / "task.json").write_text("{}\n", encoding="utf-8")
+    assert store.cmd_create(create_args("normal")) == 0
+    assert (normal / "prd.md").is_file()
+    assert (normal / "implement.jsonl").is_file()
+    assert (normal / "check.jsonl").is_file()
+
+
 def test_context_jsonl_file_symlink_and_nonregular_are_rejected(tmp_path: Path, capsys) -> None:
     """JSONL add/list/validate must not follow symlink or accept FIFO files."""
     task_context = _load_common("task_context", SCRIPTS / "common" / "task_context.py")
