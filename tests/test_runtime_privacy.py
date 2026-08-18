@@ -349,6 +349,48 @@ def test_task_directory_symlink_is_rejected_across_loader_hooks_and_context(tmp_
     assert (outside / "implement.jsonl").read_text(encoding="utf-8").count("NEW") == 0
 
 
+def test_task_cli_rejects_task_directory_symlink_before_status_or_hook_io(tmp_path: Path, capsys) -> None:
+    """Task CLI lifecycle commands must fail closed on a redirected task dir."""
+    task = _load("task_cli_task_dir", ROOT / ".trellis" / "scripts" / "task.py")
+    repo = tmp_path / "repo"
+    tasks_dir = repo / ".trellis" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-task-dir"
+    outside.mkdir()
+    task_json = outside / "task.json"
+    task_json.write_text(
+        json.dumps({"id": "PRIVATE-ID", "title": "PRIVATE-TITLE", "status": "planning"}),
+        encoding="utf-8",
+    )
+    evil = tasks_dir / "evil"
+    evil.symlink_to(outside, target_is_directory=True)
+
+    task.get_repo_root = lambda: repo
+    task.resolve_context_key = lambda: None
+    hooks: list[Path] = []
+    task.run_task_hooks = lambda _event, path, _repo: hooks.append(path)
+    start_rc = task.cmd_start(SimpleNamespace(dir="evil"))
+    start_output = capsys.readouterr().out
+    unchanged = json.loads(task_json.read_text(encoding="utf-8"))["status"] == "planning"
+
+    task.resolve_active_task = lambda _repo: SimpleNamespace(
+        task_path=".trellis/tasks/evil", source="fixture", stale=False,
+    )
+    current_rc = task.cmd_current(SimpleNamespace(json=True, source=False))
+    current_output = capsys.readouterr().out
+
+    task.clear_active_task = lambda _repo: SimpleNamespace(
+        task_path=".trellis/tasks/evil", source="fixture", stale=False,
+    )
+    finish_rc = task.cmd_finish(SimpleNamespace())
+    finish_output = capsys.readouterr().out
+
+    assert start_rc != 0 and current_rc == 0 and finish_rc != 0
+    assert unchanged and not hooks
+    assert "PRIVATE-ID" not in start_output + current_output + finish_output
+    assert "PRIVATE-TITLE" not in start_output + current_output + finish_output
+
+
 def test_update_marker_is_opaque_private_and_symlink_safe(tmp_path: Path) -> None:
     """Marker identity and all runtime I/O stay private and contained."""
     session_context = _load_common("session_context", SCRIPTS / "common" / "session_context.py")

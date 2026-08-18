@@ -75,7 +75,7 @@
     ".trellis/scripts/common/session_context.py": "6b3c79b569c281b34e1108e66ef9bf4597e5d8bea7e5950b7a0c174df8c3a930",
     ".trellis/scripts/common/task_context.py": "594318afc74014faf037b88d4ebdafb3e264e7710c6cccf84deb122a5d6e333b",
     ".trellis/scripts/common/task_queue.py": "0be61f713462b1fe4574927c82fc4704e678afe72dcb9813543aedf2f9e9e0c5",
-    ".trellis/scripts/common/task_store.py": "e3c2fbf8b79b591e39fc3c9f4e2f3ee0c840c8201c94a16709ec743fa45037f6",
+    ".trellis/scripts/common/task_store.py": "8a55b89ac6cc9785b15b3759691886ac161edd2f3892a1f4df96871128b36c2b",
     ".trellis/scripts/common/task_utils.py": "f21ec666d07345f9ed647e0aa1ffd10c497f4ec1574d1f3fb4457292a6b68bb0",
     ".trellis/scripts/common/tasks.py": "a41dd8c381ee084d67e6055500df4d0059ac79308b63ffc4c3908fd7bc98ddd9",
     ".trellis/scripts/common/trellis_config.py": "e282e897183e3ec2f4e6e56349431946e5f98c1c31d3eca4de7fc44e1383a7bf",
@@ -85,7 +85,7 @@
     ".trellis/scripts/get_developer.py": "84c27076323c3e0f2c9c8ed16e8aa865e225d902a187c37e20ee1a46e7142d8f",
     ".trellis/scripts/hooks/linear_sync.py": "e09cc4ce4699aada908808718698f33f705a3edf55c4dcf8f777ad892f80ca79",
     ".trellis/scripts/init_developer.py": "f9e6c0d882406e81c8cd6b1c5abb204b0befc0069ff89cf650cd536a80f8c60e",
-    ".trellis/scripts/task.py": "e0ffed9f14994069f0c992141e3ec168524be5af32e3681e6ea30ba0a5da4bc4",
+    ".trellis/scripts/task.py": "d5aaa83587f6c81f20bd29ce1de26220872ddaa0c22cb77d18b49c0c2f4c491d",
     ".trellis/workflow.md": "e2c5ab7004ff83a5a804b50df81746aa1d558dd4480463287622605f86a82a76"
   }
 }

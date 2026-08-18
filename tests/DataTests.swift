@@ -274,6 +274,41 @@ struct DataTestRunner {
         }
         section("cache 私有加载")
 
+        // ---- T-cache-key-format: only v2:<64 lowercase hex> keys survive load ----
+        do {
+            let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-cache-key-format-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: cacheRoot)
+            try! FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+            let cacheURL = cacheRoot.appendingPathComponent("cache.json")
+            var seed = TokenUsageLogReader(sessionsRoot: fixtureRoot, cacheURL: cacheURL)
+            _ = try! seed.readPoints(from: winFrom, to: winTo)
+
+            var obj = try! JSONSerialization.jsonObject(with: Data(contentsOf: cacheURL)) as! [String: Any]
+            let validKey = obj.keys.first { $0.hasPrefix("v2:") && $0.count == 67 }
+            if let validKey, let entry = obj[validKey] {
+                let pathKey = "v2:/Users/fixture/.codex/sessions/rollout-PRIVATE-UUID.jsonl"
+                let suffixKey = "v2:" + String(repeating: "a", count: 64) + "/rollout-PRIVATE-UUID.jsonl"
+                let uppercaseKey = "v2:" + String(repeating: "A", count: 64)
+                obj[pathKey] = entry
+                obj[suffixKey] = entry
+                obj[uppercaseKey] = entry
+                try! JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]).write(to: cacheURL, options: .atomic)
+
+                _ = TokenUsageLogReader(sessionsRoot: fixtureRoot, cacheURL: cacheURL)
+                let persisted = String(data: try! Data(contentsOf: cacheURL), encoding: .utf8) ?? ""
+                check("T-cache-key-format 非法 v2 path/后缀/大写 key 在 init 即丢弃",
+                      !persisted.contains("PRIVATE-UUID") && !persisted.contains(pathKey) &&
+                        !persisted.contains(suffixKey) && !persisted.contains(uppercaseKey),
+                      persisted)
+                check("T-cache-key-format 合法 v2:<64 lowercase hex> 保留", persisted.contains(validKey), persisted)
+            } else {
+                check("T-cache-key-format fixture 生成合法 v2 key", false, "missing valid key")
+            }
+            try? FileManager.default.removeItem(at: cacheRoot)
+        }
+        section("cache key 格式")
+
         // ---- T-storage-privacy: tightening a child also tightens PetDock root ----
         do {
             let storageRoot = FileManager.default.temporaryDirectory.appendingPathComponent(

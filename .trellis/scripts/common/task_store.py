@@ -51,6 +51,8 @@ from .safe_commit import (
 )
 from .task_utils import (
     archive_task_complete,
+    canonical_task_dir,
+    canonical_tasks_dir,
     find_task_by_name,
     is_within_tasks_dir,
     resolve_task_dir,
@@ -262,7 +264,15 @@ def cmd_create(args: argparse.Namespace) -> int:
             print(colored("Error: No developer set. Run init_developer.py first or use --assignee", Colors.RED), file=sys.stderr)
             return 1
 
+    tasks_dir = get_tasks_dir(repo_root)
+    if tasks_dir.is_symlink() or (tasks_dir.exists() and canonical_tasks_dir(repo_root) is None):
+        print(colored("Error: tasks directory is outside the trusted repository", Colors.RED), file=sys.stderr)
+        return 1
     ensure_tasks_dir(repo_root)
+    tasks_dir = canonical_tasks_dir(repo_root)
+    if tasks_dir is None:
+        print(colored("Error: tasks directory is unavailable", Colors.RED), file=sys.stderr)
+        return 1
 
     # Get current developer as creator
     creator = get_developer(repo_root) or assignee
@@ -274,7 +284,6 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     # Create task directory with MM-DD-slug format
-    tasks_dir = get_tasks_dir(repo_root)
     date_prefix = generate_task_date_prefix()
 
     # Guard against date-prefixed --slug (e.g. a full task dir name pasted in),
@@ -306,7 +315,16 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     dir_name = f"{date_prefix}-{slug}"
     task_dir = tasks_dir / dir_name
+    if task_dir.is_symlink() or (task_dir.exists() and canonical_task_dir(task_dir, repo_root) is None):
+        print(colored(f"Error: Task directory is outside the trusted repository: {dir_name}", Colors.RED), file=sys.stderr)
+        return 1
     task_json_path = task_dir / FILE_TASK_JSON
+
+    if args.parent:
+        parent_candidate = resolve_task_dir(args.parent, repo_root)
+        if (parent_candidate.is_symlink() or parent_candidate.is_dir()) and canonical_task_dir(parent_candidate, repo_root) is None:
+            print(colored("Error: parent task is outside the trusted tasks directory", Colors.RED), file=sys.stderr)
+            return 1
 
     archived_task_dir = _find_archived_task_by_dir_name(tasks_dir, dir_name)
     if archived_task_dir:
@@ -409,9 +427,12 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     # Handle --parent: establish bidirectional link
     if args.parent:
-        parent_dir = resolve_task_dir(args.parent, repo_root)
-        parent_json_path = parent_dir / FILE_TASK_JSON
-        if not parent_json_path.is_file():
+        parent_dir = canonical_task_dir(resolve_task_dir(args.parent, repo_root), repo_root)
+        if parent_dir is None:
+            print(colored(f"Warning: Parent task not found: {args.parent}", Colors.YELLOW), file=sys.stderr)
+            parent_dir = None
+        parent_json_path = parent_dir / FILE_TASK_JSON if parent_dir else None
+        if parent_json_path is None or not parent_json_path.is_file():
             print(colored(f"Warning: Parent task.json not found: {args.parent}", Colors.YELLOW), file=sys.stderr)
         else:
             parent_data = read_json(parent_json_path)
@@ -523,7 +544,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
     tasks_dir = get_tasks_dir(repo_root)
 
     # Resolve task directory (supports task name, relative path, or absolute path)
-    task_dir = resolve_task_dir(task_name, repo_root)
+    task_dir = canonical_task_dir(resolve_task_dir(task_name, repo_root), repo_root)
 
     if not task_dir or not task_dir.is_dir():
         print(colored(f"Error: Task not found: {task_name}", Colors.RED), file=sys.stderr)
@@ -582,7 +603,8 @@ def cmd_archive(args: argparse.Namespace) -> int:
             # If this is a parent, clear parent field in all children
             if task_children:
                 for child_name in task_children:
-                    child_dir_path = find_task_by_name(child_name, tasks_dir)
+                    child_candidate = find_task_by_name(child_name, tasks_dir)
+                    child_dir_path = canonical_task_dir(child_candidate, repo_root) if child_candidate else None
                     if child_dir_path:
                         child_json = child_dir_path / FILE_TASK_JSON
                         if child_json.is_file():
@@ -720,8 +742,12 @@ def cmd_add_subtask(args: argparse.Namespace) -> int:
     """Link a child task to a parent task."""
     repo_root = get_repo_root()
 
-    parent_dir = resolve_task_dir(args.parent_dir, repo_root)
-    child_dir = resolve_task_dir(args.child_dir, repo_root)
+    parent_dir = canonical_task_dir(resolve_task_dir(args.parent_dir, repo_root), repo_root)
+    child_dir = canonical_task_dir(resolve_task_dir(args.child_dir, repo_root), repo_root)
+
+    if parent_dir is None or child_dir is None:
+        print(colored("Error: task path is outside the trusted tasks directory", Colors.RED), file=sys.stderr)
+        return 1
 
     parent_json_path = parent_dir / FILE_TASK_JSON
     child_json_path = child_dir / FILE_TASK_JSON
@@ -773,8 +799,12 @@ def cmd_remove_subtask(args: argparse.Namespace) -> int:
     """Unlink a child task from a parent task."""
     repo_root = get_repo_root()
 
-    parent_dir = resolve_task_dir(args.parent_dir, repo_root)
-    child_dir = resolve_task_dir(args.child_dir, repo_root)
+    parent_dir = canonical_task_dir(resolve_task_dir(args.parent_dir, repo_root), repo_root)
+    child_dir = canonical_task_dir(resolve_task_dir(args.child_dir, repo_root), repo_root)
+
+    if parent_dir is None or child_dir is None:
+        print(colored("Error: task path is outside the trusted tasks directory", Colors.RED), file=sys.stderr)
+        return 1
 
     parent_json_path = parent_dir / FILE_TASK_JSON
     child_json_path = child_dir / FILE_TASK_JSON
@@ -819,7 +849,7 @@ def cmd_remove_subtask(args: argparse.Namespace) -> int:
 def cmd_set_branch(args: argparse.Namespace) -> int:
     """Set git branch for task."""
     repo_root = get_repo_root()
-    target_dir = resolve_task_dir(args.dir, repo_root)
+    target_dir = canonical_task_dir(resolve_task_dir(args.dir, repo_root), repo_root)
     branch = args.branch
 
     if not branch:
@@ -827,6 +857,9 @@ def cmd_set_branch(args: argparse.Namespace) -> int:
         print("Usage: python3 task.py set-branch <task-dir> <branch-name>")
         return 1
 
+    if target_dir is None:
+        print(colored("Error: task path is outside the trusted tasks directory", Colors.RED))
+        return 1
     task_json = target_dir / FILE_TASK_JSON
     if not task_json.is_file():
         print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
@@ -850,7 +883,7 @@ def cmd_set_branch(args: argparse.Namespace) -> int:
 def cmd_set_base_branch(args: argparse.Namespace) -> int:
     """Set the base branch (PR target) for task."""
     repo_root = get_repo_root()
-    target_dir = resolve_task_dir(args.dir, repo_root)
+    target_dir = canonical_task_dir(resolve_task_dir(args.dir, repo_root), repo_root)
     base_branch = args.base_branch
 
     if not base_branch:
@@ -861,6 +894,9 @@ def cmd_set_base_branch(args: argparse.Namespace) -> int:
         print("This sets the target branch for PR (the branch your feature will merge into).")
         return 1
 
+    if target_dir is None:
+        print(colored("Error: task path is outside the trusted tasks directory", Colors.RED))
+        return 1
     task_json = target_dir / FILE_TASK_JSON
     if not task_json.is_file():
         print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
@@ -885,7 +921,7 @@ def cmd_set_base_branch(args: argparse.Namespace) -> int:
 def cmd_set_scope(args: argparse.Namespace) -> int:
     """Set scope for PR title."""
     repo_root = get_repo_root()
-    target_dir = resolve_task_dir(args.dir, repo_root)
+    target_dir = canonical_task_dir(resolve_task_dir(args.dir, repo_root), repo_root)
     scope = args.scope
 
     if not scope:
@@ -893,6 +929,9 @@ def cmd_set_scope(args: argparse.Namespace) -> int:
         print("Usage: python3 task.py set-scope <task-dir> <scope>")
         return 1
 
+    if target_dir is None:
+        print(colored("Error: task path is outside the trusted tasks directory", Colors.RED))
+        return 1
     task_json = target_dir / FILE_TASK_JSON
     if not task_json.is_file():
         print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))
@@ -916,7 +955,7 @@ def cmd_set_scope(args: argparse.Namespace) -> int:
 def cmd_set_meta(args: argparse.Namespace) -> int:
     """Set/overwrite one metadata key on an existing task."""
     repo_root = get_repo_root()
-    target_dir = resolve_task_dir(args.dir, repo_root)
+    target_dir = canonical_task_dir(resolve_task_dir(args.dir, repo_root), repo_root)
     key = args.key
     value = args.value
 
@@ -925,6 +964,9 @@ def cmd_set_meta(args: argparse.Namespace) -> int:
         print("Usage: python3 task.py set-meta <task-dir> <key> <value>")
         return 1
 
+    if target_dir is None:
+        print(colored("Error: task path is outside the trusted tasks directory", Colors.RED))
+        return 1
     task_json = target_dir / FILE_TASK_JSON
     if not task_json.is_file():
         print(colored(f"Error: task.json not found at {target_dir}", Colors.RED))

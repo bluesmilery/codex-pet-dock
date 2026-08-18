@@ -45,7 +45,7 @@ from common.active_task import (
     set_active_task,
 )
 from common.io import read_json, write_json
-from common.task_utils import resolve_task_dir, run_task_hooks
+from common.task_utils import canonical_task_dir, resolve_task_dir, run_task_hooks
 from common.tasks import iter_active_tasks, children_progress
 
 # Import command handlers from split modules (also re-exports for plan.py compatibility)
@@ -81,11 +81,14 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     # Resolve task directory (supports task name, relative path, or absolute path)
     full_path = resolve_task_dir(task_input, repo_root)
+    safe_path = canonical_task_dir(full_path, repo_root)
 
-    if not full_path.is_dir():
+    if safe_path is None:
         print(colored(f"Error: Task not found: {task_input}", Colors.RED))
         print("Hint: Use task name (e.g., 'my-task') or full path (e.g., '.trellis/tasks/01-31-my-task')")
         return 1
+
+    full_path = safe_path
 
     # Convert to relative path for storage
     try:
@@ -154,7 +157,11 @@ def cmd_finish(args: argparse.Namespace) -> int:
         return 0
 
     # Resolve task.json path before clearing
-    task_json_path = repo_root / current / FILE_TASK_JSON
+    task_dir = canonical_task_dir(repo_root / current, repo_root)
+    if task_dir is None:
+        print(colored("Error: current task path is outside the trusted tasks directory", Colors.RED), file=sys.stderr)
+        return 1
+    task_json_path = task_dir / FILE_TASK_JSON
 
     print(colored(f"✓ Cleared current task (was: {current})", Colors.GREEN))
     print(f"Source: {active.source}")
@@ -172,7 +179,9 @@ def cmd_current(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         task_obj = None
         if active.task_path:
-            data = read_json(repo_root / active.task_path / FILE_TASK_JSON) or {}
+            task_dir = canonical_task_dir(repo_root / active.task_path, repo_root)
+            data = read_json(task_dir / FILE_TASK_JSON) if task_dir else {}
+            data = data or {}
             task_obj = {
                 "dir": active.task_path,
                 "id": data.get("id") or data.get("name"),

@@ -43,15 +43,19 @@ struct TokenUsageLogReader: TokenLogReading {
         self.sessionsRoot = sessionsRoot
         self.cacheURL = cacheURL
         var loaded: [String: CacheEntry] = [:]
+        var cacheNeedsRewrite = false
         if let cacheURL,
            let data = Self.readCacheData(from: cacheURL),
            let obj = try? JSONDecoder().decode([String: CacheEntry].self, from: data) {
             // v1 keys embedded the absolute rollout path.  They are not
             // migrated: dropping them is the safe, deterministic rebuild.
-            loaded = obj.filter { $0.key.hasPrefix("v2:") }
+            // v2 keys are retained only when they are exactly the opaque
+            // version prefix plus a lowercase SHA-256 digest.
+            loaded = obj.filter { Self.isValidCacheKey($0.key) }
+            cacheNeedsRewrite = loaded.count != obj.count
         }
         self.memCache = loaded
-        if loaded.isEmpty, let cacheURL,
+        if (loaded.isEmpty || cacheNeedsRewrite), let cacheURL,
            let data = try? JSONEncoder().encode(loaded) {
             writeCache(data, to: cacheURL)
         }
@@ -156,6 +160,17 @@ struct TokenUsageLogReader: TokenLogReading {
 
     private static func isSymlink(_ url: URL) -> Bool {
         (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
+    }
+
+    private static func isValidCacheKey(_ key: String) -> Bool {
+        let bytes = Array(key.utf8)
+        guard bytes.count == 67,
+              bytes[0] == 0x76, // v
+              bytes[1] == 0x32, // 2
+              bytes[2] == 0x3a else { return false } // :
+        return bytes.dropFirst(3).allSatisfy {
+            (0x30...0x39).contains($0) || (0x61...0x66).contains($0)
+        }
     }
 
     private static func currentUserID(_ fileManager: FileManager) -> Int? {
