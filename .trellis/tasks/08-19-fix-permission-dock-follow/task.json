@@ -1,0 +1,28 @@
+{
+  "id": "fix-permission-dock-follow",
+  "name": "fix-permission-dock-follow",
+  "title": "修复录屏权限与底座跟随",
+  "description": "修复屏幕录制提示循环、气泡收起后底座不回位，并提升拖动跟随帧率",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "Sources/PetDock,Tests,docs",
+  "package": null,
+  "priority": "P1",
+  "creator": "bluesmilery",
+  "assignee": "bluesmilery",
+  "createdAt": "2026-08-19",
+  "completedAt": null,
+  "branch": "codex/fix-permission-dock-follow",
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "docs_impact": "update"
+  }
+}

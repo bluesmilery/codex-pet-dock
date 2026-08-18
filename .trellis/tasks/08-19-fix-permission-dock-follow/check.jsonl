@@ -1,0 +1,5 @@
+{"file":".trellis/spec/macos/index.md","reason":"macOS quality-check entrypoint"}
+{"file":".trellis/spec/macos/appkit-conventions.md","reason":"verify main-thread and timer correctness"}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"independent review and QA gates"}
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"verify no new privacy or permission regression"}
+{"file":".trellis/tasks/08-19-fix-permission-dock-follow/research/root-cause.md","reason":"review against the identified failure mechanisms"}

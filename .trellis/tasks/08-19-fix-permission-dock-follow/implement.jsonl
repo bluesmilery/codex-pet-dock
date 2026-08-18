@@ -1,0 +1,5 @@
+{"file":".trellis/spec/macos/index.md","reason":"macOS package entrypoint and required pre-development checklist"}
+{"file":".trellis/spec/macos/appkit-conventions.md","reason":"main-thread UI, timer, coordinate, and concurrency constraints"}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"TDD, zero-warning build, full test, and real-device evidence gates"}
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"TCC and ScreenCaptureKit privacy boundaries"}
+{"file":".trellis/tasks/08-19-fix-permission-dock-follow/research/root-cause.md","reason":"scoped source evidence and preserved behavioral contracts"}
