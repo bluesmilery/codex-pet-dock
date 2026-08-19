@@ -60,29 +60,37 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 
 ## 开发候选产物归档
 
-`make app` 会重新组装、ad-hoc 签名并覆盖 `build/PetDock.app`。该路径是可变的 staging，不是交给用户测试的开发候选。只有针对一个**完整且精确的提交 SHA** 完成最终 QA 后，才从该次 QA 验证的 staging 归档一份新的本地候选：
+`make app` 会删除并重新组装、ad-hoc 签名 `build/PetDock.app`。该路径是可变的 staging，不是交给用户测试的开发候选。候选归档是最终 QA 的最后阶段：必须从同一 worktree 的精确清洁 Git 状态开始，先捕获完整与 7 位提交 SHA，再运行门禁和 `make app`，复核 SHA 与清洁状态未变后，才归档一份新的本地候选：
 
 ```text
 build/candidates/YYYY-MM-DD-<label>-<shortSHA>/PetDock.app
 ```
 
-- `label` 在 `dev` 构建中固定为 `dev`；其他开发构建可使用对应 feature 或 task 标签。
+- `label` 必须是匹配 `^[a-z0-9]+(-[a-z0-9]+)*$` 的单路径组件 slug。`dev` 构建固定为 `dev`；其他开发构建使用脱敏后的 feature 或 task 标签，例如 `app-icon-v2`。不得直接使用含 `/` 的分支名，也不得包含空白、大写字符、空值、首尾连字符或连续连字符。
 - `shortSHA` 必须是该次最终 QA 所绑定完整提交 SHA 的前 7 个字符。
 - 每次交付的候选目录都必须全新且不可变：不得覆盖或复用已有目录；重新构建、提交 SHA 变化或归档日期变化时创建新目录。
 - `build/` 是 gitignore 中的本地构建目录；候选产物不得加入 Git 或提交。
 
-以下 zsh 示例从刚完成 QA 的 staging 创建候选；变量值使用占位符，执行前替换为本次实际值：
+以下 zsh 示例给出完整顺序；变量值使用占位符，执行前替换为本次实际值：
 
 ```sh
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
+candidate_sha="$(git rev-parse --verify 'HEAD^{commit}')"
+candidate_short_sha="$(printf '%s' "$candidate_sha" | cut -c1-7)"
 candidate_date="<YYYY-MM-DD>"
 candidate_label="<dev-or-task-label>"
-candidate_sha="<full-40-character-SHA>"
-candidate_short_sha="$(printf '%s' "$candidate_sha" | cut -c1-7)"
+[[ "$candidate_label" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]
 candidate_dir="build/candidates/${candidate_date}-${candidate_label}-${candidate_short_sha}"
 candidate_app="${candidate_dir}/PetDock.app"
 
+swift build -c release
+PYTHONDONTWRITEBYTECODE=1 make docs-check
+PYTHONDONTWRITEBYTECODE=1 make test-docs
+PYTHONDONTWRITEBYTECODE=1 make test
+make app
+
 test "$(git rev-parse HEAD)" = "$candidate_sha"
-test -z "$(git status --porcelain)"
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
 test -d build/PetDock.app
 mkdir -p build/candidates
 test ! -e "$candidate_dir"
@@ -92,7 +100,9 @@ codesign --verify --deep --strict --verbose=2 "$candidate_app"
 diff -qr build/PetDock.app "$candidate_app"
 ```
 
-交付报告必须给出完整提交 SHA、归档后的 app 路径，以及针对该归档路径的 `codesign` 结果和 staging 内容一致性结果，以证明签名与精确来源；不能由这些静态检查推断 app 已启动、TCC 已授权或 UI / 真机交互已通过。可保留 `build/PetDock.app` 供后续 staging 使用，但面向用户的测试说明必须指向归档候选路径。归档过程不得启动或安装 app，也不得写入或覆盖 `/Applications`。
+即使归档前已经存在可通过签名检查的 staging，也不得跳过本流程中的 `make app`；该命令按 Makefile 删除并重建 staging，避免复用旧 bundle。前后两次 Git 检查证明门禁与构建期间 HEAD 未变化，且 tracked / 非忽略 untracked 状态保持清洁；`codesign` 只验证归档 app 的签名结构，`diff` 只验证它与刚生成的 staging 内容一致。精确来源由 QA 记录把捕获的完整 SHA、上述命令及其实际输出绑定在一起，不能仅凭签名结果推断。
+
+交付报告必须给出完整提交 SHA、归档后的 app 路径、各门禁与 `make app` 的实际结果，以及针对归档路径的 `codesign` 和 staging 内容一致性结果。不能由这些检查推断 app 已启动、TCC 已授权或 UI / 真机交互已通过。可保留 `build/PetDock.app` 供后续 staging 使用，但面向用户的测试说明必须指向归档候选路径。归档过程不得启动或安装 app，也不得写入或覆盖 `/Applications`。
 
 ## 风险与边界
 
