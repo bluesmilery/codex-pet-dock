@@ -81,21 +81,54 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
   candidate_temp_dir=""
   candidate_dir=""
   candidate_final_owned=false
+  cleanup_candidate_path() {
+    candidate_cleanup_path="$1"
+    candidate_cleanup_kind="$2"
+    [[ -n "$candidate_cleanup_path" && -n "$candidate_parent" && \
+      ( -e "$candidate_cleanup_path" || -L "$candidate_cleanup_path" ) ]] || return 0
+
+    candidate_cleanup_parent="${candidate_cleanup_path:h}"
+    candidate_cleanup_name="${candidate_cleanup_path:t}"
+    candidate_cleanup_resolved_parent="$(cd "$candidate_cleanup_parent" && pwd -P)"
+    candidate_cleanup_resolve_code=$?
+    if (( candidate_cleanup_resolve_code != 0 )) || \
+       [[ "$candidate_cleanup_parent" != "$candidate_parent" || \
+          "$candidate_cleanup_resolved_parent" != "$candidate_parent" ]]; then
+      print -u2 -- "清理 guard 拒绝路径，禁止报告交付：$candidate_cleanup_path"
+      return 1
+    fi
+
+    if [[ "$candidate_cleanup_kind" == temp ]]; then
+      if [[ "$candidate_cleanup_name" != .candidate-* ]]; then
+        print -u2 -- "清理 guard 拒绝非临时候选，禁止报告交付：$candidate_cleanup_path"
+        return 1
+      fi
+    elif [[ "$candidate_cleanup_kind" == final ]]; then
+      if [[ "$candidate_final_owned" != true || "$candidate_cleanup_path" != "$candidate_dir" ]]; then
+        print -u2 -- "清理 guard 拒绝非本轮最终目录，禁止报告交付：$candidate_cleanup_path"
+        return 1
+      fi
+    else
+      print -u2 -- "清理 guard 拒绝未知类型，禁止报告交付：$candidate_cleanup_path"
+      return 1
+    fi
+
+    /bin/rm -rf -- "$candidate_cleanup_path"
+    candidate_cleanup_code=$?
+    if (( candidate_cleanup_code != 0 )) || \
+       [[ -e "$candidate_cleanup_path" || -L "$candidate_cleanup_path" ]]; then
+      print -u2 -- "清理失败；请将此精确残留路径移到回收站，且禁止报告交付：$candidate_cleanup_path"
+      return 1
+    fi
+    return 0
+  }
   cleanup_candidate_artifacts() {
     candidate_exit_code=$?
     trap - EXIT
     set +e
-    if [[ -n "$candidate_temp_dir" && -n "$candidate_parent" && \
-          "${candidate_temp_dir:h}" == "$candidate_parent" && \
-          "${candidate_temp_dir:t}" == .candidate-* && -e "$candidate_temp_dir" ]]; then
-      /usr/bin/trash --stopOnError "$candidate_temp_dir" || \
-        print -u2 -- "临时候选清理失败，禁止报告交付：$candidate_temp_dir"
-    fi
-    if [[ "$candidate_final_owned" == true && -n "$candidate_dir" && \
-          -n "$candidate_parent" && "${candidate_dir:h}" == "$candidate_parent" && \
-          -e "$candidate_dir" ]]; then
-      /usr/bin/trash --stopOnError "$candidate_dir" || \
-        print -u2 -- "失败候选清理失败，禁止报告交付：$candidate_dir"
+    cleanup_candidate_path "$candidate_temp_dir" temp
+    if [[ "$candidate_final_owned" == true ]]; then
+      cleanup_candidate_path "$candidate_dir" final
     fi
     exit "$candidate_exit_code"
   }
@@ -149,7 +182,9 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
 )
 ```
 
-隔离 subshell 中的 `set -euo pipefail` 确保任一前置检查、门禁、复制、签名、内容比较或发布步骤失败时立即以非零状态终止。app 先复制到 `build/candidates/` 下唯一的隐藏临时目录并完成全部验证；验证通过后，以 `mkdir` 原子占有尚不存在的最终目录，再移动 app 并复核正式路径。并发创建或同秒冲突会让 `mkdir` 失败，不覆盖已有目录；`mv -n` 后还必须确认临时 app 已消失。EXIT trap 仅在临时路径非空、属于候选父目录且名称为隐藏候选时清理临时产物；最终路径还必须属于该父目录并由本轮成功占有。清理使用 macOS `/usr/bin/trash`，始终保留原命令退出码；清理自身失败会明确报告路径，此时禁止报告候选已交付。
+隔离 subshell 中的 `set -euo pipefail` 确保任一前置检查、门禁、复制、签名、内容比较或发布步骤失败时立即以非零状态终止。app 先复制到 `build/candidates/` 下唯一的隐藏临时目录并完成全部验证；验证通过后，以 `mkdir` 原子占有尚不存在的最终目录，再移动 app 并复核正式路径。并发创建或同秒冲突会让 `mkdir` 失败，不覆盖已有目录；`mv -n` 后还必须确认临时 app 已消失。
+
+EXIT trap 使用 macOS 13+ 自带的 BSD `/bin/rm` 清理，并始终保留原命令退出码。执行前同时验证非空路径、词法直属父目录与 `pwd -P` 解析父目录；临时路径还必须使用 `.candidate-` 隐藏名称，最终路径还必须是本轮原子占有的精确目录。因此 cleanup 不接受宽泛路径，也不会清理竞争者目录。若 `/bin/rm` 被安全钩子拦截、返回失败或清理后路径仍存在，必须把错误中报告的**唯一精确残留路径**移到回收站，并禁止报告候选已交付；不依赖 Finder 自动化或 TCC。
 
 即使归档前已经存在可通过签名检查的 staging，也不得跳过本流程中的 `make app`；该命令按 Makefile 删除并重建 staging，避免复用旧 bundle。前后两次 Git 检查证明门禁与构建期间 HEAD 未变化，且 tracked / 非忽略 untracked 状态保持清洁；`codesign` 只验证 app 的签名结构，`diff` 与 `cmp` 只验证它与刚生成的 staging 内容一致。精确来源由 QA 记录把捕获的完整 SHA、上述命令及其实际输出绑定在一起，不能仅凭签名结果推断。
 
