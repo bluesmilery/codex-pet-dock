@@ -77,6 +77,30 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
 (
   set -euo pipefail
 
+  candidate_parent=""
+  candidate_temp_dir=""
+  candidate_dir=""
+  candidate_final_owned=false
+  cleanup_candidate_artifacts() {
+    candidate_exit_code=$?
+    trap - EXIT
+    set +e
+    if [[ -n "$candidate_temp_dir" && -n "$candidate_parent" && \
+          "${candidate_temp_dir:h}" == "$candidate_parent" && \
+          "${candidate_temp_dir:t}" == .candidate-* && -e "$candidate_temp_dir" ]]; then
+      /usr/bin/trash --stopOnError "$candidate_temp_dir" || \
+        print -u2 -- "临时候选清理失败，禁止报告交付：$candidate_temp_dir"
+    fi
+    if [[ "$candidate_final_owned" == true && -n "$candidate_dir" && \
+          -n "$candidate_parent" && "${candidate_dir:h}" == "$candidate_parent" && \
+          -e "$candidate_dir" ]]; then
+      /usr/bin/trash --stopOnError "$candidate_dir" || \
+        print -u2 -- "失败候选清理失败，禁止报告交付：$candidate_dir"
+    fi
+    exit "$candidate_exit_code"
+  }
+  trap cleanup_candidate_artifacts EXIT
+
   candidate_status="$(git status --porcelain=v1 --untracked-files=all)"
   test -z "$candidate_status"
   candidate_sha="$(git rev-parse --verify 'HEAD^{commit}')"
@@ -95,20 +119,39 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
   candidate_status_after="$(git status --porcelain=v1 --untracked-files=all)"
   test -z "$candidate_status_after"
   test -d build/PetDock.app
+  candidate_repo_root="$(git rev-parse --show-toplevel)"
+  mkdir -p "$candidate_repo_root/build/candidates"
+  candidate_parent="$(cd "$candidate_repo_root/build/candidates" && pwd -P)"
+  candidate_temp_dir="$(mktemp -d "$candidate_parent/.candidate-${candidate_label}-${candidate_short_sha}.XXXXXX")"
+  candidate_temp_app="${candidate_temp_dir}/PetDock.app"
+
+  ditto build/PetDock.app "$candidate_temp_app"
+  codesign --verify --deep --strict --verbose=2 "$candidate_temp_app"
+  diff -qr build/PetDock.app "$candidate_temp_app"
+  cmp build/PetDock.app/Contents/MacOS/PetDock "$candidate_temp_app/Contents/MacOS/PetDock"
+
   candidate_stamp="$(date '+%Y-%m-%d-%H%M%S')"
-  candidate_dir="build/candidates/${candidate_stamp}-${candidate_label}-${candidate_short_sha}"
+  candidate_dir="${candidate_parent}/${candidate_stamp}-${candidate_label}-${candidate_short_sha}"
   candidate_app="${candidate_dir}/PetDock.app"
-  mkdir -p build/candidates
   test ! -e "$candidate_dir"
   mkdir "$candidate_dir"
-  ditto build/PetDock.app "$candidate_app"
+  candidate_final_owned=true
+  /bin/mv -n "$candidate_temp_app" "$candidate_app"
+  test ! -e "$candidate_temp_app"
+  rmdir "$candidate_temp_dir"
+  candidate_temp_dir=""
+
+  test -d "$candidate_app"
   codesign --verify --deep --strict --verbose=2 "$candidate_app"
   diff -qr build/PetDock.app "$candidate_app"
   cmp build/PetDock.app/Contents/MacOS/PetDock "$candidate_app/Contents/MacOS/PetDock"
+  candidate_final_owned=false
 )
 ```
 
-隔离 subshell 中的 `set -euo pipefail` 确保任一前置检查、门禁、目录创建、复制、签名或内容比较失败时立即以非零状态终止；已有候选目录不会被覆盖。即使归档前已经存在可通过签名检查的 staging，也不得跳过本流程中的 `make app`；该命令按 Makefile 删除并重建 staging，避免复用旧 bundle。前后两次 Git 检查证明门禁与构建期间 HEAD 未变化，且 tracked / 非忽略 untracked 状态保持清洁；`codesign` 只验证归档 app 的签名结构，`diff` 与 `cmp` 只验证它与刚生成的 staging 内容一致。精确来源由 QA 记录把捕获的完整 SHA、上述命令及其实际输出绑定在一起，不能仅凭签名结果推断。
+隔离 subshell 中的 `set -euo pipefail` 确保任一前置检查、门禁、复制、签名、内容比较或发布步骤失败时立即以非零状态终止。app 先复制到 `build/candidates/` 下唯一的隐藏临时目录并完成全部验证；验证通过后，以 `mkdir` 原子占有尚不存在的最终目录，再移动 app 并复核正式路径。并发创建或同秒冲突会让 `mkdir` 失败，不覆盖已有目录；`mv -n` 后还必须确认临时 app 已消失。EXIT trap 仅在临时路径非空、属于候选父目录且名称为隐藏候选时清理临时产物；最终路径还必须属于该父目录并由本轮成功占有。清理使用 macOS `/usr/bin/trash`，始终保留原命令退出码；清理自身失败会明确报告路径，此时禁止报告候选已交付。
+
+即使归档前已经存在可通过签名检查的 staging，也不得跳过本流程中的 `make app`；该命令按 Makefile 删除并重建 staging，避免复用旧 bundle。前后两次 Git 检查证明门禁与构建期间 HEAD 未变化，且 tracked / 非忽略 untracked 状态保持清洁；`codesign` 只验证 app 的签名结构，`diff` 与 `cmp` 只验证它与刚生成的 staging 内容一致。精确来源由 QA 记录把捕获的完整 SHA、上述命令及其实际输出绑定在一起，不能仅凭签名结果推断。
 
 交付报告必须给出完整提交 SHA、归档后的 app 路径、各门禁与 `make app` 的实际结果，以及针对归档路径的 `codesign` 和 staging 内容一致性结果。不能由这些检查推断 app 已启动、TCC 已授权或 UI / 真机交互已通过。可保留 `build/PetDock.app` 供后续 staging 使用，但面向用户的测试说明必须指向归档候选路径。归档过程不得启动或安装 app，也不得写入或覆盖 `/Applications`。
 
