@@ -9,6 +9,7 @@
 3. **Persist everything** — research, decisions, and lessons all go to files; conversations get compacted, files don't
 4. **Incremental development** — one task at a time
 5. **Capture learnings** — after each task, review and write new knowledge back to spec
+6. **Risk-proportional delivery** — use L0/L1 for non-development work; reserve the full implementation, Review, and QA loop for L2
 
 ---
 
@@ -135,8 +136,9 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed 
   Editing checklist:
     - When you change a [workflow-state:STATUS] block, also check the
       matching phase's `[required · once]` walkthrough steps for sync
-    - Run `trellis update` after editing to push the new bodies to
-      downstream user projects (block-level managed replacement)
+    - In this project, treat workflow.md as a local customization and follow
+      the safe Trellis update procedure in "Project-local update safety"
+      below; never force-overwrite it
     - Full runtime contract:
       .trellis/spec/cli/backend/workflow-state-contract.md
 -->
@@ -144,15 +146,17 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed 
 ## Phase Index
 
 ```
-Phase 1: Plan    → classify, get task-creation consent, then write planning artifacts
-Phase 2: Execute → implement only after task status is in_progress
-Phase 3: Finish  → verify, update spec, commit, and wrap up
+Phase 1: Plan    → classify L0/L1/L2, get task-creation consent when needed, then write planning artifacts
+Phase 2: Execute → follow the approved delivery path after task status is in_progress
+Phase 3: Finish  → verify, update spec when applicable, commit, and wrap up
 ```
 
 ### Request Triage
 
-- Simple conversation or small task: ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
-- Complex task: ask whether you may create a Trellis task and enter planning. If the user says no, do not do broad inline implementation; explain, clarify scope, or suggest a smaller split.
+- **L0 — conversation / read-only**: explanations, discussions, status queries, and read-only inspection with no repository writes. Handle directly without a Trellis task or development loop unless the user explicitly asks to preserve a task record.
+- **L1 — governance / documentation**: changes limited to workflow rules, explanatory docs, task/spec material, AI-agent prompts, or non-executable configuration. L1 must not change application code, test logic, executable scripts/hooks, build/release behavior, runtime configuration, or privacy/security behavior. Ask for task-creation consent, then use the lightweight L1 path.
+- **L2 — development / high risk**: application code, test logic, executable scripts/hooks, build/signing/release behavior, runtime configuration, or privacy/TCC/ScreenCaptureKit behavior. Ask for task-creation consent, then use the full L2 path.
+- Mixed-scope requests use the highest applicable level. If the effect is unclear, fail closed to the higher level.
 - User approval to create a task is not approval to start implementation. Planning still happens first.
 
 ### Planning Artifacts
@@ -162,6 +166,7 @@ Phase 3: Finish  → verify, update spec, commit, and wrap up
 - `implement.md` — execution plan for complex tasks: ordered checklist, validation commands, review gates, and rollback points.
 - `implement.jsonl` / `check.jsonl` — spec and research manifests for sub-agent context. They do not replace `implement.md`.
 - Lightweight tasks may be PRD-only. Complex tasks must have `prd.md`, `design.md`, and `implement.md` before `task.py start`.
+- For L1/L2 tasks, record `Delivery Path: L1` or `Delivery Path: L2` in `prd.md` before `task.py start`. L0 normally has no task. A path change requires updating the planning artifacts and obtaining approval again.
 
 ### Parent / Child Task Trees
 
@@ -174,9 +179,9 @@ Create new children with `task.py create "<title>" --slug <name> --parent <paren
 <!-- Per-turn breadcrumb: shown when there is no active task (before Phase 1) -->
 
 [workflow-state:no_task]
-No active task. First classify the current turn and ask for task-creation consent before creating any Trellis task.
-Simple conversation / small task: ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
-Complex task: ask the user if you can create a Trellis task and enter the planning phase. If the user says no, explain, clarify scope, or suggest a smaller split.
+No active task. First classify the current turn as L0, L1, or L2.
+L0 conversation/read-only: handle directly without a Trellis task or development loop unless the user explicitly requests a task record.
+L1 governance/documentation or L2 development/high-risk: ask for task-creation consent before creating a task. Mixed or unclear scope uses the higher level.
 [/workflow-state:no_task]
 
 ### Phase 1: Plan
@@ -192,8 +197,9 @@ Complex task: ask the user if you can create a Trellis task and enter the planni
 [workflow-state:planning]
 Load `trellis-brainstorm`; stay in planning.
 Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
+Record `Delivery Path: L1` or `Delivery Path: L2` in `prd.md`. L1 is limited to non-executable governance/documentation; any application, test, hook/script, build/release, runtime, or privacy impact is L2. Unclear scope fails closed to L2.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
-Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research manifests before start.
+L2 sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research manifests before start. L1 may skip this implementation/check-agent context gate.
 [/workflow-state:planning]
 
 <!-- Per-turn breadcrumb: shown throughout Phase 1 when codex.dispatch_mode=inline.
@@ -205,13 +211,14 @@ Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research mani
 [workflow-state:planning-inline]
 Load `trellis-brainstorm`; stay in planning.
 Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
+Record `Delivery Path: L1` or `Delivery Path: L2` in `prd.md`. L1 is limited to non-executable governance/documentation; any application, test, hook/script, build/release, runtime, or privacy impact is L2. Unclear scope fails closed to L2.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-before-dev`.
 [/workflow-state:planning-inline]
 
 ### Phase 2: Execute
-- 2.1 Implement `[required · repeatable]`
-- 2.2 Quality check `[required · repeatable]`
+- 2.1 Execute approved delivery path `[required · repeatable]`
+- 2.2 Self-check, Review, and QA gate `[required · repeatable]`
 - 2.3 Rollback `[on demand]`
 
 <!-- Per-turn breadcrumb: shown while status='in_progress'.
@@ -223,9 +230,12 @@ Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-bef
 Sub-agent dispatch protocol applies to all platforms and all sub-agents, including native Codex `SubagentStart` context injection with child-side pull fallback, class-2 Gemini/Qoder/Copilot/Reasonix/Trae/Grok/Kimi Code, hook-backed ZCode/Snow, and `trellis-research`: every dispatch prompt starts with `Active task: <task path from task.py current>` before role-specific instructions. On Grok Build, use `spawn_subagent` with `subagent_type` set to the Trellis agent name (e.g. `trellis-implement`). On Kimi Code, dispatch the built-in `coder` / `explore` sub-agent with the matching `.kimi-code/skills/trellis-<role>/SKILL.md` instructions.
 
 [workflow-state:in_progress]
-Tools: `trellis-implement` / `trellis-research` are sub-agent types only (Task/Agent tool, NOT Skill; there is no skill by these names). `trellis-update-spec` is a skill. `trellis-check` exists as both; prefer the Agent form when verifying after code changes.
-Flow: `trellis-implement` -> `trellis-check` -> `trellis-update-spec` -> commit (Phase 3.4) -> `/trellis:finish-work`.
-Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `trellis-implement`, do NOT spawn another `trellis-implement` or `trellis-check`; if already running as `trellis-check`, do NOT spawn another `trellis-check` or `trellis-implement`. Dispatch is main session only.
+First classify the current request. An L0 status/read-only request inside an active task is answered directly without advancing task status or entering the execution loop. Otherwise read `Delivery Path` from `prd.md`; missing or unclear path fails closed to L2.
+L1: the main session edits the approved non-executable governance/documentation scope directly, runs targeted static checks, then requests one fresh luna+max read-only consistency check. No implementation/fix/QA worktree loop; batch any findings once, and escalate to L2 if runtime or executable impact appears.
+L2: dispatch one `trellis-implement` owner. That same implementer uses the `trellis-check` skill/checklist for writable self-check before freezing a full candidate SHA; do not dispatch a writable `trellis-check` Agent as formal Review. Then use a fresh luna+max read-only Agent for exhaustive formal Review of that SHA. If clean, run QA; if findings exist, return one consolidated repair batch to the same implementer and perform one final Review on the new SHA. Any substantive finding still present in the second Review triggers `trellis-break-loop` and replanning instead of a third Review round.
+Formal Review and QA conclusions are SHA-bound. QA starts only after formal Review reports P0/P1/P2 clear. Preserve project build, test, privacy, release, and real-device gates.
+Tools: `trellis-implement` / `trellis-research` are sub-agent types only. `trellis-check`, `trellis-update-spec`, and `trellis-break-loop` are skills in this flow.
+After the L1 consistency gate or L2 Review+QA gate is accepted: complete the Phase 3.3 `trellis-update-spec` judgment, present the Phase 3.4 one-shot commit/integration plan, then run `/trellis:finish-work` only after the commit step is resolved.
 Dispatch prompt starts with `Active task: <task path from task.py current>`. Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
 [/workflow-state:in_progress]
 
@@ -235,8 +245,10 @@ Dispatch prompt starts with `Active task: <task path from task.py current>`. Rea
      instead of dispatching sub-agents. -->
 
 [workflow-state:in_progress-inline]
-Flow: `trellis-before-dev` -> edit -> `trellis-check` -> validation -> `trellis-update-spec` -> commit (Phase 3.4) -> `/trellis:finish-work`.
-Do not dispatch implement/check sub-agents in inline mode.
+First classify the current request. An L0 status/read-only request inside an active task is answered directly without advancing task status or entering the execution loop. Otherwise read `Delivery Path` from `prd.md`; missing or unclear path fails closed to L2.
+L1: `trellis-before-dev` if applicable -> main-session edit -> targeted static checks -> one fresh luna+max read-only consistency check -> Phase 3.3/3.4. Batch any findings once; escalate to L2 if runtime or executable impact appears.
+L2: follow the project's sub-agent/worktree rules even when Codex inline mode is configured. The original implementer uses the `trellis-check` skill/checklist for writable self-check; formal Review is a separate fresh luna+max read-only Agent on a frozen SHA, followed by QA only when P0/P1/P2 are clear. One consolidated repair batch and one final Review are allowed; any substantive finding still present in the second Review triggers `trellis-break-loop` and replanning instead of a third Review round.
+After the L1 consistency gate or L2 Review+QA gate is accepted: complete the Phase 3.3 `trellis-update-spec` judgment, present the Phase 3.4 one-shot commit/integration plan, then run `/trellis:finish-work` only after the commit step is resolved.
 Read context: `prd.md` -> `design.md if present` -> `implement.md if present`, plus relevant spec/research loaded by skills.
 [/workflow-state:in_progress-inline]
 
@@ -275,7 +287,9 @@ When a user request matches one of these intents inside an active task, route fi
 [Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
 - Planning or unclear requirements -> `trellis-brainstorm`.
-- `in_progress` implementation/check -> dispatch `trellis-implement` / `trellis-check`.
+- L0 status/read-only request inside an active task -> answer directly without advancing the task or entering its execution loop.
+- L1 `in_progress` -> main-session edit, targeted static checks, then one fresh read-only consistency Agent; do not dispatch an implementation/check worktree loop.
+- L2 `in_progress` -> dispatch `trellis-implement`; the same implementer applies the `trellis-check` skill/checklist for self-check, while formal Review uses a different fresh read-only Agent.
 - Repeated debugging -> `trellis-break-loop`; spec updates -> `trellis-update-spec`.
 
 [/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
@@ -283,7 +297,9 @@ When a user request matches one of these intents inside an active task, route fi
 [codex-inline, Kilo, Antigravity, Devin]
 
 - Planning or unclear requirements -> `trellis-brainstorm`.
-- Before editing -> `trellis-before-dev`; after editing -> `trellis-check`.
+- L0 status/read-only request inside an active task -> answer directly without advancing the task or entering its execution loop.
+- L1 `in_progress` -> `trellis-before-dev` when applicable, main-session edit, targeted static checks, then one fresh read-only consistency Agent.
+- L2 `in_progress` -> follow project sub-agent/worktree rules; the implementer uses `trellis-check` for self-check and a different fresh read-only Agent performs formal Review.
 - Repeated debugging -> `trellis-break-loop`; spec updates -> `trellis-update-spec`.
 
 [/codex-inline, Kilo, Antigravity, Devin]
@@ -292,6 +308,8 @@ When a user request matches one of these intents inside an active task, route fi
 
 - Task creation approval is not implementation approval; implementation waits for `task.py start` after artifact review.
 - PRD-only is valid for lightweight tasks; complex tasks need `design.md` + `implement.md`.
+- Every task records an approved L1 or L2 delivery path. L0 normally bypasses task creation; mixed or unclear work uses the higher level.
+- `trellis-check` is an implementer self-check, not an independent approval. Only the fresh read-only formal Reviewer may report the Review P0/P1/P2 gate clear.
 - Planning must be persisted to task artifacts; checks must run before reporting completion.
 
 ### Loading Step Detail
@@ -307,7 +325,7 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <step>
 
 ## Phase 1: Plan
 
-Goal: classify the request, get task-creation consent when a task is needed, and produce the planning artifacts required before implementation.
+Goal: classify the request, get task-creation consent when a task is needed, and produce the planning artifacts required before execution.
 
 #### 1.0 Create task `[required · once]`
 
@@ -336,6 +354,7 @@ The brainstorm skill will guide you to:
 - Prefer researching over asking the user
 - Prefer offering options over open-ended questions
 - Update `prd.md` immediately after each user answer
+- Classify the task as L1 or L2, record the approved `Delivery Path` in `prd.md`, and fail closed to L2 when impact is unclear
 - Split large scopes into a parent task plus child tasks when the deliverables can be verified independently
 - Keep `prd.md` focused on requirements and acceptance criteria
 - For complex tasks, produce `design.md` and `implement.md` before implementation starts
@@ -384,6 +403,8 @@ Brainstorm and research can interleave freely — pause to research a technical 
 
 Curate `implement.jsonl` and `check.jsonl` so the Phase 2 sub-agents get the right spec/research context. These files were seeded on `task create` with a single self-describing `_example` line; your job here is to fill in real entries.
 
+This context gate is required for L2. L1 has no implementation/check worktree loop and may skip JSONL curation; give its one read-only consistency Agent the task artifacts and exact diff directly.
+
 **Location**: `{TASK_DIR}/implement.jsonl` and `{TASK_DIR}/check.jsonl` (already exist).
 
 **Format**: one JSON object per line — `{"file": "<path>", "reason": "<why>"}`. Paths are repo-root relative.
@@ -421,9 +442,9 @@ python3 ./.trellis/scripts/task.py add-context "$TASK_DIR" check "<path>" "<reas
 
 Delete the seed `_example` line once real entries exist (optional — it's skipped automatically by consumers).
 
-Ready gate: both `implement.jsonl` and `check.jsonl` must contain at least one real `{"file": "...", "reason": "..."}` entry before `task.py start`. The seed `_example` row alone is not ready.
+L2 ready gate: both `implement.jsonl` and `check.jsonl` must contain at least one real `{"file": "...", "reason": "..."}` entry before `task.py start`. The seed `_example` row alone is not ready. L1 skips this gate.
 
-Skip this step only when both files already have real curated entries.
+For L2, skip this step only when both files already have real curated entries. For L1, skip it because no implementation/check Agent is dispatched.
 
 [/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
@@ -441,7 +462,7 @@ After artifact review, flip the task status to `in_progress`:
 python3 ./.trellis/scripts/task.py start <task-dir>
 ```
 
-For lightweight tasks, `prd.md` can be enough. For complex tasks, `prd.md`, `design.md`, and `implement.md` must exist and be reviewed before start. On sub-agent-dispatch platforms, `implement.jsonl` and `check.jsonl` must both have real curated entries before start. Runtime consumers tolerate missing or seed-only manifests for compatibility, but that tolerance is not a planning-ready state.
+For lightweight tasks, `prd.md` can be enough. For complex tasks, `prd.md`, `design.md`, and `implement.md` must exist and be reviewed before start. The PRD must record the approved L1 or L2 delivery path. On sub-agent-dispatch platforms, L2 also requires real curated entries in both `implement.jsonl` and `check.jsonl`; L1 may skip them because it does not dispatch the implementation/check worktree loop. Runtime consumers tolerate missing or seed-only manifests for compatibility, but that tolerance is not an L2 planning-ready state.
 
 After this command succeeds, the breadcrumb auto-switches to `[workflow-state:in_progress]`, and the rest of Phase 2 / 3 follows.
 
@@ -452,6 +473,7 @@ If `task.py start` errors with a session-identity message (no context key from h
 | Condition | Required |
 |------|:---:|
 | `prd.md` exists | ✅ |
+| `prd.md` records approved `Delivery Path: L1` or `Delivery Path: L2` | ✅ |
 | User confirms task should enter implementation | ✅ |
 | `task.py start` has been run (status = in_progress) | ✅ |
 | `research/` has artifacts (complex tasks) | recommended |
@@ -460,7 +482,7 @@ If `task.py start` errors with a session-identity message (no context key from h
 
 [Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
-| `implement.jsonl` and `check.jsonl` each contain at least one real curated entry (seed row does not count) | ✅ |
+| L2 only: `implement.jsonl` and `check.jsonl` each contain at least one real curated entry (seed row does not count) | ✅ |
 
 [/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
@@ -468,16 +490,27 @@ If `task.py start` errors with a session-identity message (no context key from h
 
 ## Phase 2: Execute
 
-Goal: turn reviewed planning artifacts into code that passes quality checks.
+Goal: execute the approved risk-proportional delivery path and produce evidence appropriate to its impact.
 
-#### 2.1 Implement `[required · repeatable]`
+#### 2.1 Execute approved delivery path `[required · repeatable]`
+
+Read `Delivery Path` from `prd.md` first. If it is missing, unclear, or contradicted by the actual diff, stop and return to Phase 1; uncertain or mixed impact is L2.
+
+**L1 governance/documentation path**:
+
+1. Confirm the allowed files cannot change application code, test logic, executable scripts/hooks, build/release behavior, runtime configuration, or privacy/security behavior.
+2. The main session makes the smallest approved edit directly. This is an explicit lightweight governance path, not a code-implementation delegation.
+3. Run targeted static checks for the edited format and inspect the complete diff.
+4. Continue to the L1 branch in 2.2. Do not create implementation, repair, or QA worktrees.
+
+**L2 development/high-risk path**: dispatch exactly one implementation owner using the platform instructions below. The implementation owner remains responsible for every repair batch for this task.
 
 [Claude Code, Cursor, OpenCode, codex-sub-agent, CodeBuddy, Droid, Pi, ZCode, Snow, Oh My Pi]
 
 Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
-- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
+- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; before handoff, apply the `trellis-check` skill/checklist as writable self-check and complete the Review Readiness Gate below
 - **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`.
 
 The platform hook/plugin auto-handles:
@@ -492,7 +525,7 @@ The platform hook/plugin auto-handles:
 Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
-- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
+- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; before handoff, apply the `trellis-check` skill/checklist as writable self-check and complete the Review Readiness Gate below
 - **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then explicitly say the spawned agent is already `trellis-implement` and must implement directly without spawning another `trellis-implement` / `trellis-check`.
 
 The pull-based sub-agent definition auto-handles the context load requirement:
@@ -506,7 +539,7 @@ The pull-based sub-agent definition auto-handles the context load requirement:
 Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
-- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
+- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; before handoff, apply the `trellis-check` skill/checklist as writable self-check and complete the Review Readiness Gate below
 - **Dispatch prompt guard**: Tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`.
 
 The platform prelude auto-handles the context load requirement:
@@ -517,50 +550,52 @@ The platform prelude auto-handles the context load requirement:
 
 [codex-inline, Kilo, Antigravity, Devin]
 
-1. Load the `trellis-before-dev` skill to read project guidelines
-2. Read `{TASK_DIR}/prd.md`, then `design.md` if present, then `implement.md` if present
-3. Consult materials under `{TASK_DIR}/research/`
-4. Implement the code per reviewed artifacts
-5. Run project lint and type-check
+For L2 in this project, inline mode does not authorize main-session implementation:
+
+1. Load the task artifacts and applicable project rules, then dispatch one `trellis-implement` owner in its assigned independent branch/worktree.
+2. Start the dispatch prompt with `Active task: <task path>`, identify the Agent as the implementation owner, and prohibit it from spawning another implement/check Agent.
+3. The implementation owner reads `{TASK_DIR}/prd.md`, `design.md` if present, `implement.md` if present, applicable specs, and materials under `{TASK_DIR}/research/`.
+4. The implementation owner implements the reviewed artifacts, applies the `trellis-check` skill/checklist as writable self-check, and completes the Review Readiness Gate below.
 
 [/codex-inline, Kilo, Antigravity, Devin]
 
-#### 2.2 Quality check `[required · repeatable]`
+**L2 Review Readiness Gate** — before formal Review, the implementation owner must:
 
-[Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
+- Map every acceptance criterion to automated evidence, static evidence, or explicit real-device/manual QA.
+- Search affected call sites and same-concept implementations so the candidate is not a one-location patch.
+- Run targeted tests, then the project hard gates: `swift build -c release` with zero warnings and `make test` fully green. Also run the required diff/privacy checks and preserve explicit real-device QA for macOS window, TCC, or ScreenCaptureKit behavior.
+- Run `python3 ./.trellis/scripts/get_context.py --mode packages`, list every affected package/layer, load each package spec index and its **Quality Check** references, and perform a final full-scope check rather than checking only the latest repair chunk.
+- Apply the `trellis-check` skill/checklist in the implementation worktree and fix mechanical/spec issues directly. This is self-check only: it cannot approve the candidate or declare the formal P0/P1/P2 gate clear.
+- Commit the candidate in the implementation branch, freeze it, and report the full commit SHA with commands, actual results, failures, and unverified items. Any later change invalidates all evidence bound to the old SHA.
 
-Spawn the check sub-agent:
+Do not dispatch a writable `trellis-check` Agent as formal Review. Candidate commits created here are review artifacts; Phase 3.4 remains the user-confirmed final commit/integration gate.
 
-- **Agent type**: `trellis-check`
-- **Task description**: Review all code changes against specs and task artifacts; fix any findings directly; ensure lint and type-check pass
-- **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then tell the spawned agent it is already the `trellis-check` sub-agent and must review/fix directly, not spawn another `trellis-check` / `trellis-implement`.
+#### 2.2 Self-check, Review, and QA gate `[required · repeatable]`
 
-The check agent's job:
-- Review code changes against specs
-- Review code changes against `prd.md`, `design.md` if present, and `implement.md` if present
-- Auto-fix issues it finds
-- Run lint and typecheck to verify
+**L1 consistency gate**:
 
-[/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
+1. After targeted static checks pass, request one fresh `luna + max` Agent to review the complete diff read-only against `prd.md`, `design.md` if present, and `implement.md` if present.
+2. The Agent must not edit files, commit, merge, publish, or start an implementation/fix/QA worktree. It reports all validated consistency findings, commands run, coverage, and unverified items in one response.
+3. If findings exist, the main session batches them into one correction pass and reruns targeted static checks. Do not create a repeated Review loop. If a finding reveals executable, runtime, test, build/release, or privacy impact, stop and replan as L2.
+4. Continue to Phase 3 only when the targeted checks and this one consistency gate are accounted for.
 
-[codex-inline, Kilo, Antigravity, Devin]
+**L2 formal Review campaign**:
 
-Load the `trellis-check` skill and verify the code per its guidance:
-- Spec compliance
-- lint / type-check / tests
-- Cross-layer consistency (when changes span layers)
+1. Dispatch a fresh `luna + max` formal Reviewer in its own branch/worktree against the exact frozen candidate SHA. The Reviewer is strictly read-only and is not the implementation owner or the writable `trellis-check` Agent.
+2. Review the complete assigned scope and all acceptance criteria. Except when the candidate cannot be built/read or required evidence is missing so review cannot continue, do not stop after the first finding. Report all validated P0/P1/P2 findings together, plus covered scope, uncovered scope, commands, failures, and unverified items.
+3. If the first formal Review reports P0/P1/P2 clear, keep the SHA frozen and proceed directly to formal QA; do not add a ceremonial second Review.
+4. If the first Review has findings, the main Agent deduplicates them into one repair batch. Return the whole batch to the same implementation owner, who groups by root cause, searches analogous locations, adds regression evidence, reruns `trellis-check` self-check and the Review Readiness Gate, then freezes a new full SHA. All conclusions for the old SHA are invalid.
+5. Dispatch a fresh read-only final Reviewer for the new SHA. If this second Review has any unresolved or new substantive P0/P1/P2 finding, stop patching, load `trellis-break-loop`, identify the planning/test-matrix failure, and return to Phase 1. Do not start a third formal Review round, waive findings, or lower gates.
+6. Formal QA begins only after formal Review reports P0/P1/P2 clear. Use a fresh QA Agent and bind automated results, static conclusions, and real-device/manual results separately to the same frozen SHA. Preserve all project-specific build, test, privacy, signing, release-authorization, and real-device gates.
 
-If issues are found → fix → re-check, until green.
-
-[/codex-inline, Kilo, Antigravity, Devin]
-
-**Final pass (before Phase 3.4 commit)**: the last 2.2 of a task must run full-scope, not just on the latest implement chunk. List all affected packages with `python3 ./.trellis/scripts/get_context.py --mode packages`, then load each package's spec index Quality Check section. This catches cross-layer / multi-package issues a mid-iteration local 2.2 cannot.
+The main Agent owns campaign state: implementation owner, frozen SHA, Review round, consolidated findings, QA evidence, and acceptance decision. Agent idle state or verbal confidence is not completion evidence.
 
 #### 2.3 Rollback `[on demand]`
 
 - `check` reveals a prd defect → return to Phase 1, fix `prd.md`, then redo 2.1
 - Implementation went wrong → revert code, redo 2.1
 - Need more research → research (same as Phase 1.2), write findings into `research/`
+- A second formal Review still has any unresolved or new substantive P0/P1/P2 finding → run `trellis-break-loop`, revise the requirement/design/test matrix in Phase 1, obtain approval, then begin a new campaign; do not continue a third patch-and-Review round
 
 ---
 
@@ -577,6 +612,8 @@ If this task involved repeated debugging (the same issue was fixed multiple time
 
 The goal is to capture debugging lessons so the same class of issue doesn't recur.
 
+For L2, the Review campaign has a hard fuse: if the second formal Review still has any unresolved or new substantive P0/P1/P2 finding, this step is mandatory before any further implementation or Review.
+
 #### 3.3 Spec update `[required · once]`
 
 Load the `trellis-update-spec` skill and review whether this task produced new knowledge worth recording:
@@ -591,6 +628,8 @@ Update the docs under `.trellis/spec/` accordingly. Even if the conclusion is "n
 **Spec-sync preamble**: before drafting commits, ask: did this task fix a bug or surface non-obvious knowledge that should land in `.trellis/spec/` so future-you (or future-AI) doesn't repeat the mistake? If yes, return to Phase 3.3 first — spec writes belong in the same task's commit batch, not as a forgotten follow-up.
 
 The AI drives a batched commit of this task's code changes so `/finish-work` can run cleanly afterwards. Goal: produce work commits FIRST, then bookkeeping (archive + journal) commits land after — never interleaved.
+
+L2 candidate commits may already exist because formal Review and QA are bound to a full SHA. Do not rewrite or amend an accepted candidate here. Instead, verify that the accepted SHA is still current and present the remaining integration/bookkeeping action in the one-shot plan. L1 normally reaches this step with an uncommitted reviewed diff.
 
 **Step-by-step**:
 
@@ -669,6 +708,19 @@ All tag blocks live in the `## Phase Index` section above, immediately after eac
 ### Changing the per-turn prompt text
 
 Directly edit the body of the corresponding `[workflow-state:STATUS]` block. After editing, run `trellis update` (if you're a template maintainer) or restart your AI session (if you're customizing your own project) — no script changes required.
+
+### Project-local update safety
+
+This repository intentionally customizes `.trellis/workflow.md` with the L0/L1/L2 routing, implementer `trellis-check` self-check, read-only formal Review campaign, repair-batch fuse, and QA ordering above. `.trellis/workflow.md` is Trellis-managed, so a future project-template update must merge upstream changes with these local rules.
+
+After upgrading the Trellis CLI or before applying project template updates:
+
+1. Run `trellis update --dry-run` and review every reported template change or local conflict.
+2. Run `trellis update --create-new` so conflicting upstream content is written to a `.new` sidecar instead of overwriting this file.
+3. Compare the `.new` workflow with the current `.trellis/workflow.md`, manually merge upstream fixes while preserving the complete local delivery-path and Review contract, then rerun workflow parsing and project checks.
+4. Keep or dispose of the `.new` sidecar only after the merged file has been verified and recorded.
+
+Never use `trellis update --force` on this local customization. Do not hand-edit `.trellis/.template-hashes.json`; Trellis owns that state.
 
 ### Adding a custom status
 
