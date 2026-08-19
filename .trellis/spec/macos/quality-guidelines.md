@@ -9,6 +9,7 @@
 - `swift build -c release` **0 warning**（不是「忽略 warning」，是 0）。
 - `make docs-check` 与 `make test-docs` 必须通过；它们离线检查公开 Markdown 的本地链接、目录完整性、旧路径和隐私残留。
 - `make test` 全绿 = docs gate + `test-privacy` + test-ui + test-data + test-shell 五个独立入口；测试数字和证据以 [dev 候选验收](../../../docs/verification/dev-candidate.md) 与测试源码为准，文档测试另计。
+- `build/PetDock.app` 只作为可覆盖的 staging；开发候选须按 [产物归档规则](../../../docs/verification/dev-candidate.md#开发候选产物归档) 创建全新、提交绑定的本地目录，并验证签名与来源。
 - 自动验证**不能代替**真机 QA：TCC 屏幕录制 / ScreenCaptureKit 像素捕获 / 多屏负坐标 / Instruments 内存。
 
 ## Docs Impact

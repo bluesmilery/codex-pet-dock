@@ -58,6 +58,42 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 
 这些项目依赖 TCC、ScreenCaptureKit、Accessibility、真实多显示器和 `.app` 运行环境，不能由 `make test` 代替。`make app` 属于发布 / 真机阶段命令，本页不把其执行状态写成当前候选结论。
 
+## 开发候选产物归档
+
+`make app` 会重新组装、ad-hoc 签名并覆盖 `build/PetDock.app`。该路径是可变的 staging，不是交给用户测试的开发候选。只有针对一个**完整且精确的提交 SHA** 完成最终 QA 后，才从该次 QA 验证的 staging 归档一份新的本地候选：
+
+```text
+build/candidates/YYYY-MM-DD-<label>-<shortSHA>/PetDock.app
+```
+
+- `label` 在 `dev` 构建中固定为 `dev`；其他开发构建可使用对应 feature 或 task 标签。
+- `shortSHA` 必须是该次最终 QA 所绑定完整提交 SHA 的前 7 个字符。
+- 每次交付的候选目录都必须全新且不可变：不得覆盖或复用已有目录；重新构建、提交 SHA 变化或归档日期变化时创建新目录。
+- `build/` 是 gitignore 中的本地构建目录；候选产物不得加入 Git 或提交。
+
+以下 zsh 示例从刚完成 QA 的 staging 创建候选；变量值使用占位符，执行前替换为本次实际值：
+
+```sh
+candidate_date="<YYYY-MM-DD>"
+candidate_label="<dev-or-task-label>"
+candidate_sha="<full-40-character-SHA>"
+candidate_short_sha="$(printf '%s' "$candidate_sha" | cut -c1-7)"
+candidate_dir="build/candidates/${candidate_date}-${candidate_label}-${candidate_short_sha}"
+candidate_app="${candidate_dir}/PetDock.app"
+
+test "$(git rev-parse HEAD)" = "$candidate_sha"
+test -z "$(git status --porcelain)"
+test -d build/PetDock.app
+mkdir -p build/candidates
+test ! -e "$candidate_dir"
+mkdir "$candidate_dir"
+ditto build/PetDock.app "$candidate_app"
+codesign --verify --deep --strict --verbose=2 "$candidate_app"
+diff -qr build/PetDock.app "$candidate_app"
+```
+
+交付报告必须给出完整提交 SHA、归档后的 app 路径，以及针对该归档路径的 `codesign` 结果和 staging 内容一致性结果，以证明签名与精确来源；不能由这些静态检查推断 app 已启动、TCC 已授权或 UI / 真机交互已通过。可保留 `build/PetDock.app` 供后续 staging 使用，但面向用户的测试说明必须指向归档候选路径。归档过程不得启动或安装 app，也不得写入或覆盖 `/Applications`。
+
 ## 风险与边界
 
 - ad-hoc 签名没有稳定的开发者身份，重新签名可能要求重新授予屏幕录制权限；发布时应使用稳定签名或 notarized 构建。

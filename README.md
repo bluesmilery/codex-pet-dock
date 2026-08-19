@@ -91,6 +91,8 @@ make clean        # clean build artifacts
 make clean-logs   # clean the private Application Support runtime / diagnostic logs
 ```
 
+`make app` writes replaceable staging at `build/PetDock.app`. For a development handoff, archive a fresh, immutable, commit-bound local candidate and point user-facing test steps to that archived app; follow the [development candidate artifact procedure](docs/verification/dev-candidate.md#开发候选产物归档).
+
 Diagnostic mode (`--diagnose`) enumerates windows, locates the Codex pet, and writes only redacted structure/count information to `~/Library/Application Support/PetDock/Diagnostics/diagnose.txt` — useful for troubleshooting "pet not detected" issues. Titles, owners, WID/PID values, and exact coordinates are not persisted. If that file is not produced, it usually means screen-recording permission has not been granted.
 
 PetDock stores logs and the token cache under its private `~/Library/Application Support/PetDock/` directories (0700 directories, 0600 files). The Codex helper receives a minimal environment and does not inherit API keys, cookies, proxy credentials, or unknown variables; use Codex's own login state rather than environment-variable authentication.
