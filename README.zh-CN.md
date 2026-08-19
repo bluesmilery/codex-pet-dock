@@ -90,7 +90,7 @@ make clean        # 清理构建产物
 make clean-logs   # 清理 Application Support/PetDock 私有运行 / 诊断日志
 ```
 
-`make app` 写入的 `build/PetDock.app` 是可覆盖的 staging。交付开发构建时，应归档一份全新、不可变且绑定提交的本地候选，并让面向用户的测试步骤指向该归档 app；详见[开发候选产物归档流程](docs/verification/dev-candidate.md#开发候选产物归档)。
+`make app` 写入的 `build/PetDock.app` 是可覆盖的 staging。交付开发构建时，应将全新、不可变且绑定提交的本地候选归档到 `YYYY-MM-DD-HHmmss-<label>-<shortSHA>` 目录，并让面向用户的测试步骤指向该归档 app；详见[开发候选产物归档流程](docs/verification/dev-candidate.md#开发候选产物归档)。
 
 诊断模式（`--diagnose`）会枚举窗口、定位 Codex 宠物，并仅将数量/层级/可见性等脱敏结构写入 `~/Library/Application Support/PetDock/Diagnostics/diagnose.txt`，用于排查「识别不到宠物」类问题；默认不落盘标题、owner、真实 WID/PID 或精确坐标。若该文件未生成，通常意味着屏幕录制权限尚未授予。
 

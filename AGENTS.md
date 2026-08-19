@@ -71,7 +71,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 ## 6. 构建与分发
 
 - `make app`（ad-hoc 签名）只在**最终 QA / 发布阶段**执行，减少 TCC 重授权次数。
-- `build/PetDock.app` 只是可覆盖的 staging；开发候选交付必须按 [dev 候选验收](docs/verification/dev-candidate.md#开发候选产物归档) 归档为全新、不可复用且绑定提交的本地产物。
+- `build/PetDock.app` 只是可覆盖的 staging；开发候选交付必须按 [dev 候选验收](docs/verification/dev-candidate.md#开发候选产物归档) 归档到全新、不可复用且绑定提交的 `YYYY-MM-DD-HHmmss-<label>-<shortSHA>` 本地目录。
 - 分发包为 ad-hoc 签名（无 Developer ID、未公证），README 须含 **Preview + Open Anyway** 安装说明。
 - 用户首次安装需手动授权 Gatekeeper + 屏幕录制 + （如需）系统音频录制。
 
