@@ -77,7 +77,8 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
 (
   set -euo pipefail
 
-  test -z "$(git status --porcelain=v1 --untracked-files=all)"
+  candidate_status="$(git status --porcelain=v1 --untracked-files=all)"
+  test -z "$candidate_status"
   candidate_sha="$(git rev-parse --verify 'HEAD^{commit}')"
   candidate_short_sha="$(printf '%s' "$candidate_sha" | cut -c1-7)"
   candidate_label="<dev-or-task-label>"
@@ -89,8 +90,10 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
   PYTHONDONTWRITEBYTECODE=1 make test
   make app
 
-  test "$(git rev-parse HEAD)" = "$candidate_sha"
-  test -z "$(git status --porcelain=v1 --untracked-files=all)"
+  candidate_reconfirm_sha="$(git rev-parse HEAD)"
+  test "$candidate_reconfirm_sha" = "$candidate_sha"
+  candidate_status_after="$(git status --porcelain=v1 --untracked-files=all)"
+  test -z "$candidate_status_after"
   test -d build/PetDock.app
   candidate_stamp="$(date '+%Y-%m-%d-%H%M%S')"
   candidate_dir="build/candidates/${candidate_stamp}-${candidate_label}-${candidate_short_sha}"
