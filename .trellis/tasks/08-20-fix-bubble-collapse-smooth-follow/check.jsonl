@@ -1,6 +1,7 @@
 {"file":".trellis/spec/macos/index.md","reason":"macOS review entrypoint and platform boundary"}
 {"file":".trellis/spec/macos/appkit-conventions.md","reason":"verify main-thread display-link, timer and frame-update correctness"}
 {"file":".trellis/spec/macos/quality-guidelines.md","reason":"verify TDD evidence, zero-warning build and full quality gates"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"verify each perturbation reaches the real production consumer and observable sink"}
 {"file":".trellis/spec/macos/privacy-guidelines.md","reason":"verify no new permission, capture persistence or private API regression"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/bubble-collapse-linkage.md","reason":"review implementation against confirmed collapse chain and unresolved runtime hypotheses"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/smooth-follow-options.md","reason":"review macOS availability, no-deprecation and no-backlog scheduler contracts"}
@@ -8,3 +9,4 @@
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-2026-08-20.md","reason":"verify new candidate closes off-grid cadence and display-source liveness root causes"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-2-2026-08-20.md","reason":"verify monotonic clock unification and wall-jump cadence regressions"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-3-2026-08-20.md","reason":"verify full-hide lifecycle distinction, conservative failure semantics and bounded interpolation"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-4-2026-08-21.md","reason":"verify the new campaign closes both evidence-only final Review findings"}

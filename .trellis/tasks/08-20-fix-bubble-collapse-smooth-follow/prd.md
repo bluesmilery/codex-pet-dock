@@ -43,9 +43,9 @@ Delivery Path: L2
 
 ## Acceptance Criteria
 
-- [ ] AC1：统一可控单调时钟下，visible 气泡下一次可调度探测的启动时间不晚于 `max(tickStartedAt + 0.1s, workCompletedAt)`；覆盖 phase-aligned、off-grid wake、工作跨 deadline、missed deadline，以及独立墙上时间前跳/后跳不影响 cadence。跨期时工作完成后立即保留一个 latest-only tick，不把当前 tick 工作或 single-flight capture 在途时间计作调度等待，且空候选、无权限、in-flight 和 unavailable 捕获仍保持既有边界。
+- [ ] AC1：统一可控单调时钟下，visible 气泡下一次可调度探测的启动时间不晚于 `max(tickStartedAt + 0.1s, workCompletedAt)`；覆盖 phase-aligned、off-grid wake、工作跨 deadline 和 missed deadline。跨期时工作完成后立即保留一个 latest-only tick，不把当前 tick 工作或 single-flight capture 在途时间计作调度等待，且空候选、无权限、in-flight 和 unavailable 捕获仍保持既有边界。墙钟独立性必须形成真实可失败证据：若 cadence 生产接口本身不接受墙钟，则用单调行为回归加可执行 source/API guard 禁止 cadence 文件引入 `Date` / `CFAbsoluteTime` 等墙钟输入；仅修改被测链不读取的局部 wall fake 不算覆盖，也不得为测试向生产链添加无业务用途的第二时钟。
 - [ ] AC2：集成调度 harness 证明已有 stable/moving 调度被分类变化唤醒后会执行一次完整 tick；宠物不动也从避让 frame 回到基础 frame。
-- [ ] AC2b：集成 harness 覆盖“成功捕获 expanded 候选 → CG 候选仍短暂存在但后续一次成功 SCK 清单已无目标 → hidden 通知 → 完整布局无障碍”；底座回到基础 frame。目标从未成功观察、清单失败或截图失败的相邻用例仍保持保守避让。
+- [ ] AC2b：集成 harness 覆盖“成功捕获 expanded 候选 → CG 候选仍短暂存在但后续一次成功 SCK 清单已无目标 → hidden 通知 → scheduler coalesced wake → 一次完整布局无障碍 → 实际 `DockPanel.frame` 回到基础 frame”；stable timer 到期前只提前执行一个 latest-only tick，不得以手工调用布局 helper 或只断言 `Geometry.safeDockFrame` 作为唯一证据。目标从未成功观察、清单失败或截图失败的相邻用例仍保持保守避让。
 - [ ] AC3：重复可见性转换和密集 display callbacks 最终状态不丢失，且任意时刻待执行主线程 tick 数不超过 1。
 - [ ] AC4：macOS 14+ moving 使用与窗口所在屏幕同步的公开 display link；窗口失去 screen 时由 screen-change 事件恢复到 fallback，screen 恢复后可重新启用 display link；macOS 13 回退按 `NSScreen` 能力选择周期且不使用已弃用 `CVDisplayLink`。
 - [ ] AC5：同一静止时间序列在 60 Hz、120 Hz 和不规则节拍下进入 stable 的时间语义一致；检测到实质位移立即回到 moving。

@@ -90,6 +90,16 @@ Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布
 - 所有 NSPanel 操作在主线程；后台探测只提交无参数失效通知。
 - 不保存或输出 alpha 统计、截图、真实窗口标识、坐标或内容。
 
+## Fourth break-loop evidence contract
+
+第二轮正式 Review 对 `24b9732` 的产品静态结论为 P0=0/P1=0，但发现两个测试没有穿过其声称覆盖的生产边界。新 campaign 以该 SHA 为产品基线，先补证据，不预设生产代码必须变化。
+
+墙钟独立性不再用未被 SUT 读取的局部变量模拟。cadence 的生产契约是“只接受单调时钟”，因此证据由两部分组成：现有可注入单调时间线继续覆盖 phase/off-grid/overrun/retry；新增可执行 source/API guard 直接扫描负责 cadence 的生产文件并在出现墙钟 API 时失败。不得为了让测试有 wall provider 而向生产 scheduler/probe 携带无业务用途的第二时钟。
+
+`targetMissing` 集成测试必须从 typed capturer 结果开始，经 `BubbleVisibilityProbe.onVisibilityChange`、`FollowTickScheduler.visibilityChangeCallback`、coalesced main tick 和 `FollowLayoutPass`，最终调用一个未展示的真实 `DockPanel.placeBelow` 并断言其 `frame`。测试还要证明 stable one-shot 被提前失效、只产生一次 follow-up tick，重复 `targetMissing` 不积累 wake。现有 helper-only fixture 保留用于分类邻接态，但不再承担 AC2b 的端到端证明。
+
+如果这两个测试在 `24b9732` 上直接通过，则下一候选仅包含测试、task/spec 和必要事实文档；如果真实红测暴露生产接线错误，才做该边界内的最小修复。任何需要启动 App、修改 TCC 或引入新时钟框架的方案都重新回到规划。
+
 ## Rollout and rollback
 
 精确候选 `d8538a5` 的自动 Review/QA 结论因真机回归失效，不可复用。用户已确认 32ms 最大插值窗口。先前 `kimi/k3 + max` 实现载荷因 429 中断；用户随后用最新项目级 `AGENTS.md` 将本任务后续子 Agent 统一切换为全新 `luna + max`。实施前仍须预检实际模型与 worktree，失败即停派、不换模型。若 typed capture 红测不能证明根因，或插值需要预测/持续 SCStream，必须再次回到规划。

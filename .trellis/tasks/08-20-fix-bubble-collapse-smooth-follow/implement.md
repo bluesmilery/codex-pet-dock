@@ -79,6 +79,20 @@ git diff --check <base-sha>..<candidate-sha>
 
 Additional targeted tests must cover scheduler coalescing, repeated visibility transitions, time-based stable semantics, typed target-missing versus capture-unavailable behavior, generation/single-flight, candidate disappearance, and bounded interpolation.
 
+## Fourth break-loop replan after evidence-only final Review findings
+
+The Review campaign `0e6439b` -> `585b9a4b4e2eef291755d5bc8971294e32feafa9` is closed. Its final Review reported P0=0/P1=0/P2=2, so QA did not start and no third patch/Review round is allowed. Begin a fresh campaign only after approval:
+
+1. Create a fresh Luna Max implementation owner/worktree from `24b9732` plus this break-loop/spec commit. Do not reuse v4 Review or implementation worktrees as a new version.
+2. Replace the ineffective wall-jump fixture with two real evidence edges:
+   - keep behavioral scheduler/probe tests driven only by their injected monotonic clock;
+   - add an executable source/API guard covering the cadence-owning production files and fail on `Date`, `CFAbsoluteTime`, or equivalent wall-clock inputs used for deadline/throttle/retry logic.
+   Do not add a second production clock that exists only for tests.
+3. Add a discriminating `targetMissing` production-composition test that starts with `.stats(expanded)`, schedules an unexpired stable one-shot, then returns authoritative `.targetMissing` and observes `onVisibilityChange -> scheduler coalescer -> full FollowLayoutPass -> actual DockPanel.placeBelow/frame`. Assert exactly one early tick, zero final obstacles, base frame, invalidated old stable timer, and no repeated wake for unchanged hidden state.
+4. Keep adjacent conservative cases for never-observed targetMissing and unavailable capture. The helper-level Geometry fixture may remain, but it cannot be the AC2b evidence owner.
+5. Run the two tests against unmodified `24b9732` first. If they pass, make no product-code change. If one fails, change only the proven production boundary and add the red/green evidence; do not reopen scheduler architecture, alpha thresholds, permissions, geometry, interpolation semantics, or clock design.
+6. Apply `trellis-check`, map every AC to `source event -> production consumer -> observable`, run all hard gates, freeze a new SHA, and start a new Review campaign. No Review/QA evidence from `24b9732` is reusable.
+
 ## Review focus
 
 - No timer/display-link retain cycle, duplicate source, post-quit callback, or main-thread backlog.

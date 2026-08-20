@@ -116,6 +116,22 @@ Rendering code may format fields, but it must not redefine the payload contract.
 
 **Rule**: For optional or nullable cross-layer results, enumerate every reason the value can be absent. If two reasons require different safety behavior, encode them as distinct typed outcomes and add a discriminating end-to-end test.
 
+### Mistake 7: A Test Perturbs Data The Production Consumer Never Reads
+
+**Bad**: A cadence test advances a local wall-clock fake while scheduler and retry logic read a separate monotonic closure. Outputs stay equal, but the test cannot fail if the production clock contract regresses.
+
+**Good**: Map `perturbation -> production consumer -> observable` before writing the assertion. When production intentionally has no wall-clock input, combine monotonic behavioral tests with an executable source/API guard that fails if wall-clock dependencies enter the cadence owners. Do not add an unused production dependency solely to make a test injectable.
+
+**Rule**: Every injected fault or boundary value must be consumed by the system under test. A changed local variable is not evidence merely because it appears in the assertion message.
+
+### Mistake 8: An Integration Test Stops At A Helper Instead Of The Owner
+
+**Bad**: A visibility test manually invokes geometry after changing cache state, while production relies on `visibility callback -> scheduler coalescer -> full tick -> panel frame`. The helper can pass even when wake wiring or the frame sink is broken.
+
+**Good**: For event-driven behavior, assert the source event, transport/coalescer, and final owner-observable state in one harness. Helper tests remain useful for adjacent policies, but cannot own the end-to-end acceptance criterion.
+
+**Rule**: Name and map every required edge. Passing output from a pure helper is not proof that production composition delivered the event to the real sink.
+
 ---
 
 ## Checklist for Cross-Layer Features
@@ -140,6 +156,8 @@ After implementation:
 - [ ] Verified wall-clock discontinuities cannot affect monotonic cadence or retry logic
 - [ ] Enumerated every `nil` / missing-result cause crossing the boundary
 - [ ] Kept authoritative absence distinct from unavailable or failed observation
+- [ ] Verified every injected perturbation is consumed by the production boundary under test
+- [ ] Mapped event-driven acceptance tests from source callback through coalescing/transport to the final owner-observable sink
 
 ---
 
