@@ -76,4 +76,4 @@ Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布
 
 ## Rollout and rollback
 
-精确候选 `d8538a5` 的自动 Review/QA 结论因真机回归失效，不可复用。第三次 break-loop 后的新候选必须使用全新 `xai/grok-4.6 + high` 实现、Review 和 QA 子 Agent；当前 provider 不可用时保持停派，不换模型。若 typed capture 红测不能证明根因，或插值需要预测/持续 SCStream，必须再次回到规划。
+精确候选 `d8538a5` 的自动 Review/QA 结论因真机回归失效，不可复用。第三次 break-loop 后的新候选必须使用全新 `kimi/k3 + max` 实现、Review 和 QA 子 Agent；当前 provider 不可用时保持停派，不换模型。若 typed capture 红测不能证明根因，或插值需要预测/持续 SCStream，必须再次回到规划。

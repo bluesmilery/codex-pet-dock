@@ -54,7 +54,7 @@ Delivery Path: L2
 - [ ] AC5b：线性插值在 60 Hz、120 Hz 和不规则节拍下使用同一时长语义，单调趋近最新目标、无过冲、无历史位置队列，并在配置的最大拖尾窗口内精确到达最终 frame；安全复位路径可立即 snap。
 - [ ] AC6：停止移动、宠物隐藏、用户隐藏底座、气泡候选消失、TCC false、capture nil、旧 generation/in-flight 等既有回归测试继续通过。
 - [ ] AC7：`swift build -c release` 0 warning；`make test`、`make docs-check`、`make test-docs` 和候选 diff-check 全绿。
-- [ ] AC8：本任务后续所有实现、正式 Review、修复复核和 QA 子 Agent 使用全新 `xai/grok-4.6 + high`；任何一次模型/推理不可用都停止派发，不静默降级。Reviewer 对冻结完整 SHA 报告 P0/P1/P2=0 后，QA 才可对同一 SHA 重跑门禁。
+- [ ] AC8：本任务后续所有实现、正式 Review、修复复核和 QA 子 Agent 使用全新 `kimi/k3 + max`；任何一次模型/推理不可用都停止派发，不静默降级。Reviewer 对冻结完整 SHA 报告 P0/P1/P2=0 后，QA 才可对同一 SHA 重跑门禁。
 - [ ] AC9：最终 QA 按规范生成提交绑定的开发候选并验证架构/签名/来源；不覆盖 `/Applications/PetDock.app`。
 - [ ] AC10：在精确开发候选上把真实气泡收起、拖拽手感、TCC/ScreenCaptureKit、多屏和 Instruments 分别记录为已验证或未验证，不用自动测试替代真机结论。
 

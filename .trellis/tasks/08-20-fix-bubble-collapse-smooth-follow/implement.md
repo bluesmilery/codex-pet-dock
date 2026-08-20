@@ -4,7 +4,7 @@
 
 - Base branch: `dev` at the exact SHA verified before dispatch.
 - Delivery path: L2.
-- Per the user's latest task-specific override, every implementation, formal Review, repair recheck and QA sub-agent for this task uses `xai/grok-4.6 + high`; unavailable routing stops dispatch without model downgrade. Each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
+- Per the user's latest task-specific override, every implementation, formal Review, repair recheck and QA sub-agent for this task uses `kimi/k3 + max`; unavailable routing stops dispatch without model downgrade. Each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
 - Allowed product scope is limited to typed bubble capture outcome/lifecycle invalidation, bounded DockPanel frame interpolation, follow scheduling integration, corresponding UI tests, and directly affected docs.
 
 ## Ordered work
@@ -53,7 +53,7 @@ The Review campaign ending at `539009e` is closed and invalid. Before producing 
 
 The Review/QA-approved candidate `91a8fe6ba915f84e35f232943fd1c1c3a558063d` failed real-device acceptance and is not reusable. Before another candidate:
 
-1. Start from `d8538a5` in the clean `codex/fix-bubble-collapse-smooth-follow-v2` worktree. Preflight `xai/grok-4.6 + high`; do not substitute a model if routing is unavailable.
+1. Start from `d8538a5` in the clean `codex/fix-bubble-collapse-smooth-follow-v2` worktree. Preflight `kimi/k3 + max`; do not substitute a model if routing is unavailable.
 2. Add a red production-chain regression where a bubble remains in the CG candidate set but a successfully fetched SCK window list no longer contains its WID. Prove the old optional-nil contract preserves one obstacle and stale avoided Y. Add the adjacent failure case where SCK list/capture is unavailable and conservative visible remains required.
 3. If and only if the red test distinguishes the observed states, replace the optional capture payload with the smallest typed outcome (`stats`, `targetMissing`, `unavailable` or equivalent). Only `targetMissing` may classify hidden; retain generation, identity, known-candidate and strict single-flight guards before notification/cache writes.
 4. Extend the full `FollowLayoutPass → Geometry → frame sink` harness through hidden notification and assert the final obstacle set is empty and the dock returns to base frame. Repeated full hide/show cycles must not accumulate wakes or stale targets.
