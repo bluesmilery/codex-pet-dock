@@ -36,7 +36,7 @@
 **Only if non-Codex or channel parity is in scope:**
 
 - `.trellis/agents/check.md` (channel worker) and `.codex/hooks/inject-subagent-context.py` generic `build_check_prompt` need the same report-only/exhaustive wording.
-- Other platform agent files are not present in this checkout; do not invent `.claude/` files (the project ignores them). `docs/development/trellis.md:3-5` confirms Codex is the active tracked platform.
+- Other platform agent files are not present in this checkout; do not invent `.claude/` files (at that baseline, the project ignored them). `docs/development/trellis.md:3-5` confirms Codex is the active tracked platform.
 
 **Avoid changing unless automation is explicitly requested:**
 

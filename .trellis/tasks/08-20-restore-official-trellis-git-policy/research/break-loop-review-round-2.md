@@ -16,8 +16,8 @@
 | Priority | Mechanism | Specific Action | Status |
 |----------|-----------|-----------------|--------|
 | P1 | Documentation | 在 documentation spec 增加复合规则的未改子句保留检查 | DONE |
-| P1 | Review | 对照 base/HEAD 搜索被删除的独立政策关键词并逐项解释 | PLANNED |
-| P2 | Historical evidence | 新纳入 Git 的历史资料对已失效现在时策略增加“当时基线”限定 | PLANNED |
+| P1 | Review | 对照 base/HEAD 搜索被删除的独立政策关键词并逐项解释 | DONE |
+| P2 | Historical evidence | 新纳入 Git 的历史资料对已失效现在时策略增加“当时基线”限定 | DONE |
 | P2 | Campaign reset | 新候选重新从 Review round 1 开始，旧 SHA 证据不复用 | PLANNED |
 
 ## 4. Systematic Expansion
@@ -30,5 +30,5 @@
 
 - [x] 更新 PRD、design 和 implement 的验收矩阵。
 - [x] 更新 `.trellis/spec/macos/documentation-guidelines.md`。
-- [ ] 新实现候选修复两个 finding 并完成全量自检。
+- [x] 新实现候选修复两个 finding 并完成全量自检。
 - [ ] 对新 SHA 重新执行正式 Review round 1 和 QA。

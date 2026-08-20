@@ -28,19 +28,19 @@
 - [ ] 更新 `.trellis/spec/macos/privacy-guidelines.md`，将隐私规则表达为内容级扫描/脱敏。
 - [ ] 更新 `docs/development/trellis.md`，统一 task、workspace journal、runtime identity 和当前平台说明。
 - [ ] 搜索其他直接矛盾表述，只做必要的最小同步。
-- [ ] 对 base 中被删除的复合规则关键词做清单核对；确认只移除 `.claude/` / workspace 旧边界，保留私有 refs / bundle id 分叉等独立约束。
-- [ ] 检查新纳入 Git 的历史 task 中与 `.claude/`、workspace 和 Git 策略相关的现在时表述；已失效策略只补充“当时基线”等时间限定，不改写历史结论。
+- [x] 对 base 中被删除的复合规则关键词做清单核对；确认只移除 `.claude/` / workspace 旧边界，保留私有 refs / bundle id 分叉等独立约束。
+- [x] 检查新纳入 Git 的历史 task 中与 `.claude/`、workspace 和 Git 策略相关的现在时表述；已失效策略只补充“当时基线”等时间限定，不改写历史结论。
 - [ ] 将全部 `.trellis/tasks/**`、`.trellis/workspace/**` 纳入候选；确认无 `?? .trellis/tasks/...`，且无关 `design/` 未暂存。
 
 ## Phase 4：实现负责人自检
 
-- [ ] 使用 `trellis-check` skill/checklist 做可写自检和机械修复。
+- [x] 使用 `trellis-check` skill/checklist 做可写自检和机械修复。
 - [ ] 核对官方模板差异、`git check-ignore` 正反例、有效 config 和 `trellis update --dry-run`。
 - [ ] 执行候选内容隐私扫描，仅报告文件名和计数。
-- [ ] 执行 `git diff --check`、`make docs-check`、`make test-docs`。
-- [ ] 执行 `swift build -c release`，确认 0 warning。
-- [ ] 执行 `make test`，确认 test-ui、test-data、test-shell 全绿。
-- [ ] 使用 `bluesmilery <19263500+bluesmilery@users.noreply.github.com>` 提交，commit body 不含 `Co-Authored-By`；报告完整 SHA、修改文件、关键 diff、命令结果、失败项和未验证项。
+- [x] 执行 `git diff --check`、`make docs-check`、`make test-docs`。
+- [x] 执行 `swift build -c release`，确认 0 warning。
+- [x] 执行 `make test`，确认 test-ui、test-data、test-shell 全绿。系统 Python 缺 pytest；已用 `make PYTHON=/Users/<user>/miniconda3/bin/python test` 复验全绿。
+- [x] 使用 `bluesmilery <19263500+bluesmilery@users.noreply.github.com>` 提交，commit body 不含 `Co-Authored-By`；报告完整 SHA、修改文件、关键 diff、命令结果、失败项和未验证项。
 
 ## Phase 5：正式 Review、修复熔断与 QA
 

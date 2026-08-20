@@ -77,6 +77,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - **不读** `auth.json` / token / 邮箱 / 会话正文；**不改** Codex 应用；**不用** 私有 CGS API。
 - BubbleVisibility 只在**内存**计算 alpha 像素统计，**不 OCR、不保存图像、不记录颜色 / 文字**。
 - 公开分发前对**全 history** 敏感扫描（真实本机路径 / 用户名 / wid / 坐标 / CDHash / SHA / 旧 hash / CoAuthored），残留需清理；task、spec、workspace 内容在纳入 Git 前先用稳定占位符脱敏。
+- 私有 refs / bundle id 分叉永不上传 GitHub。
 - `.trellis/spec/`、`.trellis/tasks/`、`.trellis/workspace/`、workflow、配置和脚本是项目共享资料，由 Git 管理；`.trellis/.developer`、`.trellis/.current-task`、`.trellis/.runtime/` 及临时/缓存路径仍按官方模板忽略。不得将本机 auth/token/邮箱/认证数据或会话正文写入被跟踪内容；公开 Git 身份例外，扫描只报告文件名和计数。
 
 ## 6. 构建与分发
