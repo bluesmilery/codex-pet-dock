@@ -34,7 +34,7 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 - `selectPet` 通过公开 CGWindowList / AppKit 规则过滤主窗口、辅助控件并选择 Mascot；无合理候选时返回 nil，不误绑主聊天窗口。
 - `Geometry.safeDockFrame` 固定底座宽度，按障碍链式下移，执行水平 clamp；垂直越界返回 nil。避让隐藏与宠物可见性、数据暂停语义分离。
 - `BubbleVisibilityProbe` 使用 ScreenCaptureKit 公开 API，下一次允许启动捕获的受应用控制等待最长 0.1 秒，并保持 strict single-flight 与 generation 失效保护；捕获失败时保守按 visible 避让。
-- moving 跟随在 macOS 14+ 使用底座窗口绑定的 AppKit `CADisplayLink`；macOS 13 使用按屏幕能力、能力变化时重建且 capped 到 120 Hz 的 repeating Timer。回调 latest-only 合并；stable 以静止锚点、单调 elapsed time 与名义 `4/60s` 判定，0.1 秒探测锚定 deadline 且不补错过的节拍；不使用 `CVDisplayLink`。
+- moving 跟随在 macOS 14+ 仅当底座可见且实际 `panel.screen` 非空时使用窗口绑定的 AppKit `CADisplayLink`；screen 暂时为空时使 link 失效并使用 Timer fallback，screen 变化通过 coalesced wake 重新选择。macOS 13 使用按屏幕能力、能力变化时重建且 capped 到 120 Hz 的 repeating Timer。回调 latest-only 合并；stable 以静止锚点、单调 elapsed time 与名义 `4/60s` 判定，0.1 秒探测由每次完整 tick 的起点派生，超时后仅立即合并一次 follow-up，不补错过的节拍；不使用 `CVDisplayLink`。
 - 数据层通过 codex app-server stdio JSON-RPC 和本机日志数值聚合提供 WEEK LEFT / WEEK TOKENS，不复制 `auth.json` 或凭证。
 - 日志、诊断与 token cache 只写入 Application Support/PetDock 私有目录（0700/0600）；默认诊断脱敏，不落盘标题、owner、WID/PID 或精确坐标。helper 环境为严格白名单，resolver 拒绝不可信可执行文件。
 - Trellis context 路径执行 canonical containment，runtime 只保存 opaque context key 和最小元数据；原始 session/conversation/transcript 值不落盘。

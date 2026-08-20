@@ -5,3 +5,4 @@
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/bubble-collapse-linkage.md","reason":"current end-to-end collapse chain, confirmed latency sources and test gaps"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/smooth-follow-options.md","reason":"display-link and timer compatibility tradeoffs for macOS 13 and 14+"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/recommendation-and-acceptance.md","reason":"minimal design, TDD seams, file scope and acceptance matrix"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-2026-08-20.md","reason":"second-review root-cause analysis and replanned cadence/source-liveness contracts"}

@@ -11,6 +11,9 @@ final class DockPanel {
     private let panel: NSPanel
     private let dockView = DockView()
     private var didShow = false
+    private var screenObserver: NSObjectProtocol?
+
+    var onScreenChange: (() -> Void)?
 
     /// 点击底座回调（转发给 DockView，用于切换详情卡）。
     var onTap: (() -> Void)? {
@@ -37,6 +40,17 @@ final class DockPanel {
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         panel.ignoresMouseEvents = false
         panel.contentView = dockView
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeScreenNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            self?.onScreenChange?()
+        }
+    }
+
+    deinit {
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
     }
 
     /// 用展示快照刷新底座 WEEK LEFT / WEEK TOKENS。
@@ -47,6 +61,7 @@ final class DockPanel {
 
     var frame: NSRect { panel.frame }
     var isVisible: Bool { panel.isVisible }
+    var isDisplayLinkEligible: Bool { panel.isVisible && panel.screen != nil }
     var maximumFramesPerSecond: Int {
         panel.screen?.maximumFramesPerSecond ?? NSScreen.main?.maximumFramesPerSecond ?? 60
     }

@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard #available(macOS 14.0, *) else { return nil }
                 return dock.makeDisplayLink(target: target, selector: selector)
             },
-            canUseDisplayLink: { [dock] in dock.isVisible },
+            canUseDisplayLink: { [dock] in dock.isDisplayLinkEligible },
             maximumFramesPerSecond: { [dock] in dock.maximumFramesPerSecond }
         )
     }()
@@ -90,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = CGRequestScreenCaptureAccess()
         }
         dock.onTap = { [weak self] in self?.toggleDetail() }
+        dock.onScreenChange = { [weak self] in self?.followScheduler.requestWake() }
         // 真实数据在后台刷新，完成后切回主线程回调重渲染（不阻塞 UI）。
         provider.onUpdated = { [weak self] _ in self?.renderSnapshot() }
         setupShell()                  // 主题 / 状态栏 / 自启 / 外部主题热加载

@@ -18,7 +18,7 @@ Delivery Path: L2
 
 ### R1 气泡收起端到端回位
 
-- 对仍存在但像素内容由 expanded 变为 collapsed 的气泡，受应用控制的下一次探测启动等待不超过 0.1 秒；ScreenCaptureKit 返回成功分类后，布局唤醒不得再等待 stable/moving 周期。
+- 对仍存在但像素内容由 expanded 变为 collapsed 的气泡，调度器额外引入的下一次探测等待不超过 0.1 秒；该上限不包含当前串行主线程 tick 的工作时间或 single-flight capture 的在途时间。ScreenCaptureKit 返回成功分类后，布局唤醒不得再等待 stable/moving 周期。
 - 唤醒必须真正执行完整生产布局链，而不只证明回调收到 `interval == 0`；宠物 rect 不变时也必须重新读取气泡可见性并应用无障碍 frame。
 - 连续 expanded→collapsed→expanded→collapsed 转换不得因重复回调、已有定时器或主线程繁忙而丢失最终布局；同一时刻最多保留一个待执行 follow tick，不积压过期帧。
 - 保留 `knownWids` 候选消失立即失效、capture nil 保守 `.visible`、generation/strict single-flight 和 TCC preflight gate 语义。
@@ -41,10 +41,10 @@ Delivery Path: L2
 
 ## Acceptance Criteria
 
-- [ ] AC1：可控时钟下，visible 气泡的连续探测启动间隔不超过 0.1 秒；空候选、无权限、in-flight 和 nil 捕获仍保持既有边界。
+- [ ] AC1：可控时钟下，visible 气泡下一次可调度探测的启动时间不晚于 `max(tickStartedAt + 0.1s, workCompletedAt)`；覆盖 phase-aligned、off-grid wake、工作跨 deadline 和 missed deadline，跨期时工作完成后立即保留一个 latest-only tick，不把当前 tick 工作或 single-flight capture 在途时间计作调度等待，且空候选、无权限、in-flight 和 nil 捕获仍保持既有边界。
 - [ ] AC2：集成调度 harness 证明已有 stable/moving 调度被分类变化唤醒后会执行一次完整 tick；宠物不动也从避让 frame 回到基础 frame。
 - [ ] AC3：重复可见性转换和密集 display callbacks 最终状态不丢失，且任意时刻待执行主线程 tick 数不超过 1。
-- [ ] AC4：macOS 14+ moving 使用与窗口所在屏幕同步的公开 display link；macOS 13 回退按 `NSScreen` 能力选择周期且不使用已弃用 `CVDisplayLink`。
+- [ ] AC4：macOS 14+ moving 使用与窗口所在屏幕同步的公开 display link；窗口失去 screen 时由 screen-change 事件恢复到 fallback，screen 恢复后可重新启用 display link；macOS 13 回退按 `NSScreen` 能力选择周期且不使用已弃用 `CVDisplayLink`。
 - [ ] AC5：同一静止时间序列在 60 Hz、120 Hz 和不规则节拍下进入 stable 的时间语义一致；检测到实质位移立即回到 moving。
 - [ ] AC6：停止移动、宠物隐藏、用户隐藏底座、气泡候选消失、TCC false、capture nil、旧 generation/in-flight 等既有回归测试继续通过。
 - [ ] AC7：`swift build -c release` 0 warning；`make test`、`make docs-check`、`make test-docs` 和候选 diff-check 全绿。

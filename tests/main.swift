@@ -988,34 +988,80 @@ check("T-sch1 stable节拍不累积tick工作耗时",
       stableIntervals.count == 3 && stableIntervals.allSatisfy { abs($0 - 0.1) < 0.000_001 },
       "intervals=\(stableIntervals)")
 
-var overrunClock: TimeInterval = 0
-var overrunTicks = 0
-var overrunTimers: [TestFollowTickTimer] = []
-let overrunScheduler = FollowTickScheduler(
-    runTick: {
-        overrunTicks += 1
-        overrunClock += 0.25
-        return .stable
-    },
-    makeDisplayLink: { _, _ in nil },
-    canUseDisplayLink: { false },
-    maximumFramesPerSecond: { 60 },
-    monotonicNow: { overrunClock },
-    makeTimer: { interval, repeats, callback in
-        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
-        overrunTimers.append(timer)
-        return timer
+struct StableWakeTimingResult {
+    let nextStart: TimeInterval
+    let expectedLatestStart: TimeInterval
+    let tickCount: Int
+}
+
+func stableWakeTiming(wakeAt: TimeInterval, workDuration: TimeInterval) -> StableWakeTimingResult {
+    var clock: TimeInterval = 0
+    var starts: [TimeInterval] = []
+    var timers: [TestFollowTickTimer] = []
+    let scheduler = FollowTickScheduler(
+        runTick: {
+            starts.append(clock)
+            if starts.count == 2 { clock += workDuration }
+            return starts.count < 3 ? .stable : .hidden
+        },
+        makeDisplayLink: { _, _ in nil },
+        canUseDisplayLink: { false },
+        maximumFramesPerSecond: { 60 },
+        monotonicNow: { clock },
+        makeTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            timers.append(timer)
+            return timer
+        }
+    )
+    scheduler.start()
+    scheduler.requestWake()
+    _ = waitPumpingMain { starts.count == 1 }
+
+    clock = wakeAt
+    scheduler.requestWake()
+    _ = waitPumpingMain { starts.count >= 2 }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+    if starts.count < 3, let timer = timers.last(where: { !$0.invalidated }) {
+        clock += timer.interval
+        timer.fire()
+        _ = waitPumpingMain { starts.count >= 3 }
     }
-)
-overrunScheduler.start()
-overrunScheduler.requestWake()
-_ = waitPumpingMain { overrunTicks == 1 }
-let overrunActiveTimers = overrunTimers.filter { !$0.invalidated }
-check("T-sch1b stable错过多个deadline只排下一次latest tick",
-      overrunTicks == 1 && overrunActiveTimers.count == 1
-        && abs(overrunActiveTimers[0].interval - 0.05) < 0.000_001,
-      "ticks=\(overrunTicks) intervals=\(overrunActiveTimers.map { $0.interval })")
-overrunScheduler.stop()
+    scheduler.stop()
+    return StableWakeTimingResult(
+        nextStart: starts.count >= 3 ? starts[2] : .infinity,
+        expectedLatestStart: max(wakeAt + Follower.stableInterval, wakeAt + workDuration),
+        tickCount: starts.count
+    )
+}
+
+let alignedShort = stableWakeTiming(wakeAt: 0, workDuration: 0.03)
+check("T-sch1c phase-aligned短工作按本tick起点deadline",
+      abs(alignedShort.nextStart - alignedShort.expectedLatestStart) < 0.000_001,
+      "next=\(alignedShort.nextStart) expected=\(alignedShort.expectedLatestStart)")
+let offGridShort = stableWakeTiming(wakeAt: 0.04, workDuration: 0.02)
+check("T-sch1d off-grid wake重置stable相位",
+      abs(offGridShort.nextStart - offGridShort.expectedLatestStart) < 0.000_001,
+      "next=\(offGridShort.nextStart) expected=\(offGridShort.expectedLatestStart)")
+let offGridCrossOldPhase = stableWakeTiming(wakeAt: 0.09, workDuration: 0.02)
+check("T-sch1e off-grid工作跨旧deadline仍不晚于本tick上限",
+      offGridCrossOldPhase.nextStart <= offGridCrossOldPhase.expectedLatestStart + 0.000_001,
+      "next=\(offGridCrossOldPhase.nextStart) max=\(offGridCrossOldPhase.expectedLatestStart)")
+let deadlineCross = stableWakeTiming(wakeAt: 0.09, workDuration: 0.10)
+check("T-sch1f 工作恰跨本tick deadline→完成后一次latest follow-up",
+      deadlineCross.nextStart <= deadlineCross.expectedLatestStart + 0.000_001
+        && deadlineCross.tickCount == 3,
+      "next=\(deadlineCross.nextStart) max=\(deadlineCross.expectedLatestStart) ticks=\(deadlineCross.tickCount)")
+let oneIntervalOverrun = stableWakeTiming(wakeAt: 0.09, workDuration: 0.15)
+check("T-sch1g 工作超过一个interval→无额外完整interval等待",
+      oneIntervalOverrun.nextStart <= oneIntervalOverrun.expectedLatestStart + 0.000_001
+        && oneIntervalOverrun.tickCount == 3,
+      "next=\(oneIntervalOverrun.nextStart) max=\(oneIntervalOverrun.expectedLatestStart) ticks=\(oneIntervalOverrun.tickCount)")
+let multiIntervalOverrun = stableWakeTiming(wakeAt: 0.09, workDuration: 0.25)
+check("T-sch1h 工作超过多个interval→仅一次latest follow-up无历史backlog",
+      multiIntervalOverrun.nextStart <= multiIntervalOverrun.expectedLatestStart + 0.000_001
+        && multiIntervalOverrun.tickCount == 3,
+      "next=\(multiIntervalOverrun.nextStart) max=\(multiIntervalOverrun.expectedLatestStart) ticks=\(multiIntervalOverrun.tickCount)")
 
 // T-sch2: repeating fallback 在 moving tick 时必须重读当前屏幕能力；60→120→60
 // 均需观察并重配，不能因 activeSource 已是 repeatingTimer 就提前返回。
@@ -1058,6 +1104,69 @@ check("T-sch2b fallback moving跨屏120→60重读能力",
         && repeatingFallbackTimers[1].invalidated,
       "intervals=\(repeatingFallbackTimers.map { $0.interval })")
 fallbackScheduler.stop()
+
+// T-sch3: active window display link 必须能在 screen liveness 变化时双向恢复。
+// fake link 暴露与 CADisplayLink 相同的最小 add/invalidate 表面，避免依赖真实显示器。
+final class TestLifecycleDisplayLink: NSObject, FollowDisplayLink {
+    private(set) var added = false
+    private(set) var invalidated = false
+
+    func add(to runLoop: RunLoop, forMode mode: RunLoop.Mode) { added = true }
+    func invalidate() { invalidated = true }
+}
+
+if #available(macOS 14.0, *) {
+    var lifecycleHasScreen = true
+    var lifecycleTicks = 0
+    var lifecycleLinks: [TestLifecycleDisplayLink] = []
+    var lifecycleTimers: [TestFollowTickTimer] = []
+    let lifecycleScheduler = FollowTickScheduler(
+        runTick: {
+            lifecycleTicks += 1
+            return .moving
+        },
+        makeDisplayLink: { _, _ in
+            let link = TestLifecycleDisplayLink()
+            lifecycleLinks.append(link)
+            return link
+        },
+        canUseDisplayLink: { lifecycleHasScreen },
+        maximumFramesPerSecond: { 60 },
+        makeTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            lifecycleTimers.append(timer)
+            return timer
+        }
+    )
+    lifecycleScheduler.start()
+    lifecycleScheduler.requestWake()
+    _ = waitPumpingMain { lifecycleTicks == 1 }
+    check("T-sch3a screen存在→active display link",
+          lifecycleLinks.count == 1 && lifecycleLinks[0].added
+            && lifecycleTimers.filter { $0.repeats && !$0.invalidated }.isEmpty,
+          "links=\(lifecycleLinks.count) added=\(lifecycleLinks.first?.added ?? false)")
+
+    lifecycleHasScreen = false
+    lifecycleScheduler.requestWake() // production 由 DockPanel screen-change event 走同一 wake
+    _ = waitPumpingMain { lifecycleTicks == 2 }
+    let fallbackAfterScreenLoss = lifecycleTimers.filter { $0.repeats && !$0.invalidated }
+    check("T-sch3b active link失去screen→invalidate并启动fallback",
+          lifecycleLinks[0].invalidated && fallbackAfterScreenLoss.count == 1,
+          "invalidated=\(lifecycleLinks[0].invalidated) fallback=\(fallbackAfterScreenLoss.count)")
+
+    lifecycleHasScreen = true
+    lifecycleScheduler.requestWake()
+    _ = waitPumpingMain { lifecycleTicks == 3 }
+    check("T-sch3c screen恢复→fallback失效并重新选择display link",
+          lifecycleLinks.count == 2 && lifecycleLinks[1].added
+            && fallbackAfterScreenLoss.first?.invalidated == true,
+          "links=\(lifecycleLinks.count) fallbackInvalidated=\(fallbackAfterScreenLoss.first?.invalidated ?? false)")
+    lifecycleScheduler.stop()
+} else {
+    check("T-sch3a macOS14 display link生命周期（当前系统跳过）", true)
+    check("T-sch3b macOS14 display link生命周期（当前系统跳过）", true)
+    check("T-sch3c macOS14 display link生命周期（当前系统跳过）", true)
+}
 
 // T-bv39: 生产 FollowLayoutPass 必须贯穿候选分类→probe cache→可见障碍→frame sink。
 // 已有 stable one-shot 尚未触发时，visible→hidden wake 应提前执行且只执行一次完整 tick。

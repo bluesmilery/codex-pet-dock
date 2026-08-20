@@ -86,11 +86,19 @@ protocol FollowTickTimer: AnyObject {
 
 extension Timer: FollowTickTimer {}
 
+protocol FollowDisplayLink: AnyObject {
+    func add(to runLoop: RunLoop, forMode mode: RunLoop.Mode)
+    func invalidate()
+}
+
+@available(macOS 14.0, *)
+extension CADisplayLink: FollowDisplayLink {}
+
 /// 运行时跟随调度器：moving 用 window-bound display link（macOS 14+），
 /// macOS 13 用屏幕能力决定的 repeating Timer；stable/hidden 用低频 one-shot Timer。
 /// 所有 source callback 只请求 coalesced tick，实际 tick 始终在主线程执行。
 final class FollowTickScheduler: NSObject {
-    typealias DisplayLinkFactory = (NSObject, Selector) -> AnyObject?
+    typealias DisplayLinkFactory = (NSObject, Selector) -> FollowDisplayLink?
     typealias TimerFactory = (TimeInterval, Bool, @escaping () -> Void) -> FollowTickTimer
 
     private enum ActiveSource {
@@ -108,10 +116,9 @@ final class FollowTickScheduler: NSObject {
     private let makeTimer: TimerFactory
     private var coalescer: FollowTickCoalescer!
     private var timer: FollowTickTimer?
-    private var displayLink: AnyObject?
+    private var displayLink: FollowDisplayLink?
     private var activeSource: ActiveSource = .none
     private var activeRepeatingFPS: Int?
-    private var stableDeadline: TimeInterval?
     private var stopped = false
 
     init(
@@ -167,7 +174,6 @@ final class FollowTickScheduler: NSObject {
     }
 
     private func configure(for state: FollowState, tickStartedAt: TimeInterval?) {
-        if state != .stable { stableDeadline = nil }
         switch state {
         case .moving:
             startMovingSourceIfNeeded()
@@ -188,7 +194,7 @@ final class FollowTickScheduler: NSObject {
         if activeSource == .displayLink && wantsDisplayLink { return }
 
         if #available(macOS 14.0, *), wantsDisplayLink,
-           let link = makeDisplayLink(self, #selector(displayLinkDidFire(_:))) as? CADisplayLink {
+           let link = makeDisplayLink(self, #selector(displayLinkDidFire(_:))) {
             invalidateSources()
             link.add(to: .main, forMode: .common)
             displayLink = link
@@ -208,14 +214,12 @@ final class FollowTickScheduler: NSObject {
 
     private func scheduleStableTick(firstAnchor: TimeInterval?) {
         let now = monotonicNow()
-        if stableDeadline == nil {
-            stableDeadline = (firstAnchor ?? now) + Follower.stableInterval
+        let deadline = (firstAnchor ?? now) + Follower.stableInterval
+        guard now < deadline else {
+            invalidateSources()
+            coalescer.requestWake()
+            return
         }
-        var deadline = stableDeadline ?? now + Follower.stableInterval
-        while deadline <= now {
-            deadline += Follower.stableInterval
-        }
-        stableDeadline = deadline
         scheduleOneShot(after: deadline - now)
     }
 
@@ -230,9 +234,7 @@ final class FollowTickScheduler: NSObject {
     private func invalidateSources() {
         timer?.invalidate()
         timer = nil
-        if #available(macOS 14.0, *), let link = displayLink as? CADisplayLink {
-            link.invalidate()
-        }
+        displayLink?.invalidate()
         displayLink = nil
         activeSource = .none
         activeRepeatingFPS = nil
