@@ -27,6 +27,17 @@
 12. Only after Review P0/P1/P2=0, dispatch a fresh `gpt-5.6-sol + high` QA Agent against the identical SHA. QA runs all automated gates, builds the ad-hoc app only now, archives a fresh commit-bound candidate, verifies signature/source, and performs safe runtime checks that do not alter TCC or `/Applications`.
 13. Main session accepts and integrates only the exact reviewed/QA SHA into local `dev`; no push/tag/release. Preserve unrelated untracked content. Cleanup only after read-only dirty/pre-commit checks and backup of any unmerged ref.
 
+## Break-loop replan after second Review
+
+The review campaign for `ee759ca` → `6e3536a` is closed and invalid. Before producing a new candidate, the same implementation owner must:
+
+1. Cherry-pick the main-session break-loop/spec commit into the implementation branch.
+2. Add red tests for an off-grid wake whose work crosses the nearest stable deadline, plus work exceeding the interval; assert the next tick starts no later than `max(tickStartedAt + stableInterval, workCompletedAt)`. When work overruns, assert exactly one latest-only tick starts immediately after completion without another full-interval delay.
+3. Remove carried stable phase state if no longer necessary; calculate stable delay from each tick's monotonic start and schedule immediate latest-only work when the deadline is already missed.
+4. Add an injectable screen-liveness lifecycle test: active display link → visible window loses screen and screen-change wake fires → display link invalidates and Timer fallback starts → screen restores and display link can be selected again.
+5. Expose only the minimum DockPanel state/event needed: real `panel.screen != nil` eligibility plus screen-change callback. Do not add a general notification abstraction.
+6. Re-run `trellis-check`, all gates and simplicity review; freeze a new SHA and start a fresh full formal Review campaign. Any findings follow the normal new-campaign workflow; no old Review approval or QA evidence is reusable.
+
 ## Required validation
 
 ```bash

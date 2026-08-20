@@ -25,6 +25,8 @@
   "meta": {
     "delivery_path": "L2",
     "subagent_model": "gpt-5.6-sol",
-    "subagent_reasoning": "high"
+    "subagent_reasoning": "high",
+    "break_loop_count": "1",
+    "review_campaign": "reset_after_break_loop"
   }
 }

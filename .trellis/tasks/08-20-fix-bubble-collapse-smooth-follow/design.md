@@ -22,9 +22,13 @@
 2. `stable` / `hidden`：保留低频 one-shot Timer，分别按 Follower 决策的 0.1 秒/1 秒触发。
 3. `wakeNow`：气泡分类变化请求立即 tick；取消低频 timer 或把已有待执行 tick 提前，但不重复排队。
 
+Break-loop 后 stable 不再携带旧 cadence phase：每次完整 tick 以自身的单调开始时间 `tickStartedAt` 计算 `tickStartedAt + 0.1s` deadline。外部 off-grid wake 自然重置相位；下一次启动不晚于 `max(deadline, workCompletedAt)`。若串行主线程工作结束时已经跨过 deadline，coalescer 只保留一个在完成后立即执行的 latest-only tick，不补发历史 deadline，也不再额外等待 0.1 秒。
+
 macOS 13 回退使用 repeating Timer，周期取当前屏幕 `maximumFramesPerSecond` 的倒数并以 120 Hz 为实验上限；无有效屏幕能力时回退 60 Hz。repeating Timer 以原始 fire schedule 为基准，避免现有“工作耗时 + interval”的累积漂移。回退仍加入 `.common` run-loop mode。
 
 Scheduler 维护一个 `tickPending`/执行门闩：display link 或 timer 只提交请求；若主线程已有待执行/正在执行 tick，新节拍不追加。tick 完成后根据最新 Follower 决策切换 cadence，保证最终状态优先于过期帧。
+
+Window-bound display link 只有在 dock `isVisible && screen != nil` 时可用。DockPanel 对自身 window screen 变化提供主线程通知，AppDelegate 将其路由到同一 coalesced wake；外接屏移除或窗口暂时失去 screen 时，即使 display link 已停止回调，通知仍能驱动一次 tick 切换到 Timer fallback，screen 恢复后再重新评估 display link。
 
 不使用 `CVDisplayLink`，因为当前 SDK 已将其在 macOS 15 标为 deprecated；不使用固定 120 Hz，因为普通屏没有收益且窗口枚举有长尾；不做 frame 插值，因为它会引入尾随、预测误差和跨屏复杂度。
 
@@ -60,4 +64,4 @@ Scheduler 维护一个 `tickPending`/执行门闩：display link 或 timer 只�
 
 ## Rollout and rollback
 
-实现分为调度状态机、气泡 cadence、运行时接线三个可审查批次，但冻结为一个完整候选 SHA。若 display link 路径出现兼容问题，可回退到无漂移 Timer scheduler 而不回退气泡唤醒和时间型稳定判定。任何分类阈值变化或持续 SCStream 方案都超出本设计，必须重新规划。
+实现分为调度状态机、气泡 cadence、运行时接线三个可审查批次，但冻结为一个完整候选 SHA。第二轮 Review 后已执行 break-loop；新候选开启一轮全新的完整 Review campaign，不复用 `ee759ca` 或 `6e3536a` 的任何结论。若 display link 路径出现兼容问题，可回退到 Timer scheduler 而不回退气泡唤醒和时间型稳定判定。任何分类阈值变化或持续 SCStream 方案都超出本设计，必须重新规划。
