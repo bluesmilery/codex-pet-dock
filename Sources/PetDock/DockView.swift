@@ -135,8 +135,11 @@ final class DockView: NSView {
 
     /// 主题字体 token → 系统字体（system/rounded/monospace），caption 与 value 区分字号/字重。
     static func font(_ token: ThemeFont, caption: Bool) -> NSFont {
-        let size: CGFloat = caption ? 9 : 15
-        let weight: NSFont.Weight = caption ? .medium : .semibold
+        font(token, size: caption ? 9 : 15, weight: caption ? .medium : .semibold)
+    }
+
+    /// 主题字体 token → 指定字号/字重的系统字体。详情表体复用同一 token，但用更紧凑的 11pt medium。
+    static func font(_ token: ThemeFont, size: CGFloat, weight: NSFont.Weight) -> NSFont {
         switch token {
         case .system:     return .systemFont(ofSize: size, weight: weight)
         case .monospace:  return .monospacedSystemFont(ofSize: size, weight: weight)

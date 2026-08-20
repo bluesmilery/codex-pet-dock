@@ -114,7 +114,7 @@ final class DetailPanel {
         let accent = m.accent.nsColor
         let label = m.label.nsColor
         let dim = label.withAlphaComponent(0.6)
-        panel.backgroundColor = bg
+        panel.backgroundColor = .clear
         panel.contentView?.wantsLayer = true
         panel.contentView?.layer?.backgroundColor = bg.cgColor
         panel.contentView?.layer?.cornerRadius = m.cornerRadius
@@ -126,7 +126,7 @@ final class DetailPanel {
         }
         for val in rowValues {
             val.textColor = label
-            val.font = DockView.font(m.font, caption: false)
+            val.font = DockView.font(m.font, size: 11, weight: .medium)
         }
         noteLabel.textColor = dim
         noteLabel.font = DockView.font(m.font, caption: true)
@@ -223,7 +223,8 @@ final class DetailPanel {
         return view.convert(align, to: cv)
     }
     var contentBoundsForTesting: NSRect { panel.contentView?.bounds ?? .zero }
-    var backgroundColorForTesting: NSColor { panel.backgroundColor }
+    var windowBackgroundColorForTesting: NSColor { panel.backgroundColor }
+    var contentLayerBackgroundColorForTesting: CGColor? { panel.contentView?.layer?.backgroundColor }
     var borderColorForTesting: CGColor? { panel.contentView?.layer?.borderColor }
     var cornerRadiusForTesting: CGFloat { panel.contentView?.layer?.cornerRadius ?? 0 }
     var borderWidthForTesting: CGFloat { panel.contentView?.layer?.borderWidth ?? 0 }
@@ -231,6 +232,8 @@ final class DetailPanel {
     var valueColorForTesting: NSColor? { rowValues.first?.textColor }
     var captionFontForTesting: NSFont? { captionLabels.first?.font }
     var valueFontForTesting: NSFont? { rowValues.first?.font }
+    var noteFontForTesting: NSFont? { noteLabel.font }
+    var valueFontsForTesting: [NSFont?] { rowValues.map { $0.font } }
 
     // MARK: - 工厂
 

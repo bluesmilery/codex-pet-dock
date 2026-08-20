@@ -1018,48 +1018,11 @@ check("DU5 空提示仍渲染",
       "note=\(detailUI.noteForTesting)")
 
 detailUI.render(snapFilled)
-detailUI.layoutForTesting()
-let capWs = detailUI.captionWidthsForTesting
-let valWs = detailUI.valueWidthsForTesting
-let capXs = detailUI.captionMinXForTesting
-let valMaxXs = detailUI.valueMaxXForTesting
-let rowFs = detailUI.rowFramesForTesting
-let noteF = detailUI.noteFrameForTesting
-let seps = detailUI.separatorFramesForTesting
-let bounds = detailUI.contentBoundsForTesting
 func nearlyEqual(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat = 1.0) -> Bool { abs(a - b) < t }
 func allNearlyEqual(_ xs: [CGFloat], _ t: CGFloat = 1.0) -> Bool {
     guard let first = xs.first else { return false }
     return xs.allSatisfy { nearlyEqual($0, first, t) }
 }
-check("DU6 标签列左对齐且共享稳定宽度",
-      detailUI.captionAlignmentForTesting == .left
-        && allNearlyEqual(capWs) && allNearlyEqual(capXs)
-        && capXs.allSatisfy { nearlyEqual($0, 12, 1.0) },
-      "align=\(detailUI.captionAlignmentForTesting.rawValue) widths=\(capWs) minX=\(capXs)")
-check("DU7 数值列右对齐且共享稳定宽度",
-      detailUI.valueAlignmentForTesting == .right
-        && allNearlyEqual(valWs) && allNearlyEqual(valMaxXs)
-        && valMaxXs.allSatisfy { nearlyEqual($0, 218, 1.0) },
-      "align=\(detailUI.valueAlignmentForTesting.rawValue) widths=\(valWs) maxX=\(valMaxXs)")
-check("DU8 七行之间有克制分隔线",
-      detailUI.separatorCountForTesting >= 6,
-      "sepCount=\(detailUI.separatorCountForTesting)")
-let rowsInside = rowFs.allSatisfy { bounds.contains($0) }
-let noteInside = bounds.contains(noteF)
-let sepsInside = seps.allSatisfy { bounds.insetBy(dx: -1, dy: -1).intersects($0) }
-var overlap = false
-for i in 0..<rowFs.count {
-    for j in (i+1)..<rowFs.count where rowFs[i].intersects(rowFs[j]) { overlap = true }
-    if rowFs[i].intersects(noteF) { overlap = true }
-}
-let lowestRowMinY = rowFs.map { $0.minY }.min() ?? 0
-let noteBelowRows = lowestRowMinY >= noteF.maxY - 1.0
-let noteLeftAligned = nearlyEqual(noteF.minX, 12, 1.0)
-check("DU9 内容不截断/重叠且底部提示分层",
-      rowsInside && noteInside && sepsInside && !overlap && noteBelowRows && !noteF.isEmpty && noteLeftAligned,
-      "rowsInside=\(rowsInside) noteInside=\(noteInside) overlap=\(overlap) noteLeft=\(noteLeftAligned) note=\(noteF) bounds=\(bounds)")
-
 func sameCGColor(_ a: CGColor?, _ b: CGColor?) -> Bool {
     guard let a, let b else { return false }
     return a == b
@@ -1073,8 +1036,21 @@ func sameNSColor(_ a: NSColor?, _ b: NSColor?) -> Bool {
         && abs(ac.blueComponent - bc.blueComponent) < 0.02
         && abs(ac.alphaComponent - bc.alphaComponent) < 0.02
 }
+func isClearWindowBackground(_ c: NSColor) -> Bool {
+    let sc = c.usingColorSpace(.sRGB) ?? c
+    return sc.alphaComponent < 0.01
+}
+func fontPointSize(_ f: NSFont?) -> CGFloat { f?.pointSize ?? -1 }
+func fontIsMedium(_ f: NSFont?) -> Bool {
+    guard let f else { return false }
+    let traits = f.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
+    let weight = (traits?[.weight] as? NSNumber)?.doubleValue ?? 0
+    return abs(weight - Double(NSFont.Weight.medium.rawValue)) < 0.08
+}
+
 var themeOk = true
 var themeExtra = ""
+var geoOk = true
 let dockTheme = DockView()
 for spec in Theme.builtins {
     let m = spec.metrics
@@ -1084,9 +1060,12 @@ for spec in Theme.builtins {
     detailUI.layoutForTesting()
     let expectedCaption = m.label.nsColor.withAlphaComponent(0.6)
     let expectedValue = m.label.nsColor
+    let expectedCaptionFont = DockView.font(m.font, caption: true)
+    let expectedBodyFont = DockView.font(m.font, size: 11, weight: .medium)
     let checks: [(String, Bool)] = [
-        ("bg", sameNSColor(detailUI.backgroundColorForTesting, m.background.nsColor)),
-        ("bgAlpha", abs((detailUI.backgroundColorForTesting.usingColorSpace(.sRGB) ?? detailUI.backgroundColorForTesting).alphaComponent - CGFloat(m.background.a)) < 0.02),
+        ("windowClear", isClearWindowBackground(detailUI.windowBackgroundColorForTesting)),
+        ("layerBg", sameCGColor(detailUI.contentLayerBackgroundColorForTesting, m.background.nsColor.cgColor)),
+        ("layerBgAlpha", abs((detailUI.contentLayerBackgroundColorForTesting?.alpha ?? -1) - CGFloat(m.background.a)) < 0.02),
         ("border", sameCGColor(detailUI.borderColorForTesting, m.accent.nsColor.cgColor)),
         ("radius", abs(detailUI.cornerRadiusForTesting - CGFloat(m.cornerRadius)) < 0.01),
         ("borderW", abs(detailUI.borderWidthForTesting - CGFloat(m.borderWidth)) < 0.01),
@@ -1096,15 +1075,58 @@ for spec in Theme.builtins {
         ("dockBorder", sameCGColor(dockTheme.borderColorForTesting, m.accent.nsColor.cgColor)),
         ("dockCapFont", dockTheme.captionFontForTesting == DockView.font(m.font, caption: true)),
         ("dockValFont", dockTheme.valueFontForTesting == DockView.font(m.font, caption: false)),
-        ("detailCapFont", detailUI.captionFontForTesting == DockView.font(m.font, caption: true)),
-        ("detailValFont", detailUI.valueFontForTesting == DockView.font(m.font, caption: false)),
+        ("detailCapFont", detailUI.captionFontForTesting == expectedCaptionFont
+            && abs(fontPointSize(detailUI.captionFontForTesting) - 9) < 0.01),
+        ("detailNoteFont", detailUI.noteFontForTesting == expectedCaptionFont
+            && abs(fontPointSize(detailUI.noteFontForTesting) - 9) < 0.01),
+        ("detailBodyFont", detailUI.valueFontsForTesting.allSatisfy { abs(fontPointSize($0) - 11) < 0.01 && fontIsMedium($0) }
+            && detailUI.valueFontsForTesting.allSatisfy { $0 == expectedBodyFont }
+            && abs(fontPointSize(detailUI.valueFontForTesting) - 11) < 0.01
+            && fontIsMedium(detailUI.valueFontForTesting)
+            && abs(fontPointSize(detailUI.valueFontForTesting) - 15) > 0.5),
     ]
     let failed = checks.filter { !$0.1 }.map { $0.0 }
     if !failed.isEmpty {
         themeOk = false
         themeExtra += "\(spec.id):\(failed) "
     }
+
+    let capWs = detailUI.captionWidthsForTesting
+    let valWs = detailUI.valueWidthsForTesting
+    let capXs = detailUI.captionMinXForTesting
+    let valMaxXs = detailUI.valueMaxXForTesting
+    let rowFs = detailUI.rowFramesForTesting
+    let noteF = detailUI.noteFrameForTesting
+    let seps = detailUI.separatorFramesForTesting
+    let bounds = detailUI.contentBoundsForTesting
+    let rowsInside = rowFs.allSatisfy { bounds.contains($0) }
+    let noteInside = bounds.contains(noteF)
+    let sepsInside = seps.allSatisfy { bounds.insetBy(dx: -1, dy: -1).intersects($0) }
+    var overlap = false
+    for i in 0..<rowFs.count {
+        for j in (i+1)..<rowFs.count where rowFs[i].intersects(rowFs[j]) { overlap = true }
+        if rowFs[i].intersects(noteF) { overlap = true }
+    }
+    let lowestRowMinY = rowFs.map { $0.minY }.min() ?? 0
+    let noteBelowRows = lowestRowMinY >= noteF.maxY - 1.0
+    let noteLeftAligned = nearlyEqual(noteF.minX, 12, 1.0)
+    let geo: [(String, Bool)] = [
+        ("size", abs(detailUI.frameForTesting.width - 230) < 0.01 && abs(detailUI.frameForTesting.height - 190) < 0.01),
+        ("capAlign", detailUI.captionAlignmentForTesting == .left && allNearlyEqual(capWs) && allNearlyEqual(capXs) && capXs.allSatisfy { nearlyEqual($0, 12, 1.0) }),
+        ("valAlign", detailUI.valueAlignmentForTesting == .right && allNearlyEqual(valWs) && allNearlyEqual(valMaxXs) && valMaxXs.allSatisfy { nearlyEqual($0, 218, 1.0) }),
+        ("seps", detailUI.separatorCountForTesting >= 6),
+        ("inside", rowsInside && noteInside && sepsInside && !overlap && noteBelowRows && !noteF.isEmpty && noteLeftAligned),
+    ]
+    let geoFailed = geo.filter { !$0.1 }.map { $0.0 }
+    if !geoFailed.isEmpty {
+        geoOk = false
+        themeExtra += "\(spec.id)-geo:\(geoFailed) "
+    }
 }
+check("DU6 标签列左对齐且共享稳定宽度（换肤后）", geoOk, themeExtra)
+check("DU7 数值列右对齐且共享稳定宽度（换肤后）", geoOk, themeExtra)
+check("DU8 七行之间有克制分隔线（换肤后）", geoOk, themeExtra)
+check("DU9 内容不截断/重叠且底部提示分层（换肤后）", geoOk, themeExtra)
 check("DU10 三主题详情卡与底座共用 ThemeMetrics 并同步换肤", themeOk, themeExtra)
 
 print("\n[DetailPanel UI] \(pass - duPass) passed, \(fail - duBase) failed")
