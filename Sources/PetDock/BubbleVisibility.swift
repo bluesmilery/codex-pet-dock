@@ -43,6 +43,30 @@ enum BubbleCaptureOutcome: Equatable, Sendable {
     case unavailable
 }
 
+/// CGWindowList 候选的最小身份快照。WID 重用或同 WID 的几何/owner 变化时，
+/// 旧 capture completion 不得写入新候选的可见性 cache。
+struct BubbleCandidateIdentity: Equatable, Sendable {
+    let ownerPID: Int32
+    let ownerName: String
+    let title: String
+    let layer: Int
+    let alpha: Double
+    let isOnscreen: Bool
+    let sharingState: Int
+    let bounds: CGRect
+
+    init(_ candidate: WinCandidate) {
+        ownerPID = candidate.ownerPID
+        ownerName = candidate.ownerName
+        title = candidate.title
+        layer = candidate.layer
+        alpha = candidate.alpha
+        isOnscreen = candidate.isOnscreen
+        sharingState = candidate.sharingState
+        bounds = candidate.bounds
+    }
+}
+
 /// 纯函数分类（有滞回）。
 /// - stats 有值：按 alpha 阈值判 visible/hidden，中间区滞回（沿用 previous）。
 /// - unavailable（capture 失败 / macOS 13 / TCC 抖动）→ `.visible`（保守避让）。
@@ -107,12 +131,14 @@ final class BubbleVisibilityProbe: Sendable {
         var lastCaptureAt: TimeInterval = -.greatestFiniteMagnitude
         var inFlight = false
         var pendingRetryAt: TimeInterval?
-        /// 候选版本：候选集合变化或 reset 递增。旧 Task 回调 generation 不匹配时丢弃。
+        /// 候选版本：候选集合/identity 变化或 reset 递增。旧 Task 回调 generation 不匹配时丢弃。
         var generation = 0
         /// 最近一次 `probe(candidates:)` 传入的 wid 集合（当前帧实际存在的候选）。
         /// `visibility(for:)` 对不在此集合中的 wid 返回 `.hidden`（当前帧失效），
         /// 防止已从 obstaclesNear 消失的候选残留 visible 缓存导致底座不复位（回归 A）。
         var knownWids: Set<CGWindowID> = []
+        /// 当前候选 WID 对应的完整身份快照；同 WID 但 bounds/owner/layer 变化也会换 generation。
+        var knownCandidates: [CGWindowID: BubbleCandidateIdentity] = [:]
         /// 当前 generation 内至少一次成功取得 alpha 统计的目标 WID。
         /// 只有这些 WID 的后续 targetMissing 才是权威 hidden；unavailable 永远保守 visible。
         var successfullyObservedWids: Set<CGWindowID> = []
@@ -151,31 +177,36 @@ final class BubbleVisibilityProbe: Sendable {
         let gen: Int
         let prev: [CGWindowID: BubbleVisibility]
         let previouslyObserved: Set<CGWindowID>
+        let capturedCandidates: [CGWindowID: BubbleCandidateIdentity]
         let shouldStart: Bool
         let captureAllowed = !candidates.isEmpty && canCapture()
-        (gen, prev, previouslyObserved, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Set<CGWindowID>, Bool) in
+        (gen, prev, previouslyObserved, capturedCandidates, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Set<CGWindowID>, [CGWindowID: BubbleCandidateIdentity], Bool) in
             s.pendingRetryAt = nil
             // 同步刷新 knownWids：当前帧实际存在的候选 wid（每帧事实，立即生效）。
             let nextWids = Set(candidates.map { $0.wid })
-            if s.knownWids != nextWids {
+            let nextCandidates = candidates.reduce(into: [CGWindowID: BubbleCandidateIdentity]()) { result, candidate in
+                result[candidate.wid] = BubbleCandidateIdentity(candidate)
+            }
+            if s.knownWids != nextWids || s.knownCandidates != nextCandidates {
                 s.generation += 1
                 s.cached.removeAll()
                 s.successfullyObservedWids.removeAll()
             }
             s.knownWids = nextWids
+            s.knownCandidates = nextCandidates
             guard !candidates.isEmpty else {
                 // 完全空闲（无候选 + 无缓存 + 无在途）→ 无意义锁写，直接 return。
                 // 宠物可见但下方无会话气泡时，moving 态会高频调用 probe([])，
                 // 此早退避免每帧递增 generation + 清空字典的无意义锁写。
                 if s.cached.isEmpty && s.successfullyObservedWids.isEmpty && !s.inFlight {
-                    return (0, [:], [], false)
+                    return (0, [:], [], [:], false)
                 }
                 // 仍有缓存或在途：与 reset() 一致递增 generation + 清 cached，使旧结果失效。
                 // 旧 Task 仍持有唯一 token，完成时清 inFlight；期间候选重新出现 probe 被拒。
                 s.generation += 1
                 s.cached.removeAll()
                 s.successfullyObservedWids.removeAll()
-                return (0, [:], [], false)
+                return (0, [:], [], [:], false)
             }
             guard captureAllowed else {
                 // 权限尚未对本进程生效：不进入 ScreenCaptureKit，并清除旧 hidden 缓存，
@@ -185,25 +216,25 @@ final class BubbleVisibilityProbe: Sendable {
                     s.cached.removeAll()
                     s.successfullyObservedWids.removeAll()
                 }
-                return (0, [:], [], false)
+                return (0, [:], [], [:], false)
             }
             let time = monotonicNow()
             guard !s.inFlight else {
-                return (0, [:], [], false)
+                return (0, [:], [], [:], false)
             }
             let elapsed = time - s.lastCaptureAt
             guard elapsed >= Self.minInterval else {
                 s.pendingRetryAt = s.lastCaptureAt + Self.minInterval
-                return (0, [:], [], false)
+                return (0, [:], [], [:], false)
             }
             s.inFlight = true
             s.lastCaptureAt = time
-            return (s.generation, s.cached, s.successfullyObservedWids, true)
+            return (s.generation, s.cached, s.successfullyObservedWids, s.knownCandidates, true)
         }
         guard shouldStart else { return }
         let cap = capturer
         let notify = onVisibilityChange
-        // Task.detached：不捕获 self（仅捕获 Sendable 值 lock/cap/gen/prev/candidates）→ 0 #SendableClosureCaptures warning。
+        // Task.detached：不捕获 self（仅捕获 Sendable 值 lock/cap/gen/prev/candidates/identity）→ 0 #SendableClosureCaptures warning。
         // 像素计算（cap → captureStats → computeAlphaStats）在后台线程执行。
         Task.detached { [lock] in
             var r: [CGWindowID: BubbleVisibility] = [:]
@@ -222,7 +253,8 @@ final class BubbleVisibilityProbe: Sendable {
             // generation 校验：旧 Task 回调（reset/候选切换后）仅清自己的 inFlight token，绝不写 cached。
             let didChange = lock.withLock { s -> Bool in
                 s.inFlight = false   // 始终清 inFlight（旧 Task 的责任，保证新 probe 能在下一 tick 启动）
-                guard s.generation == gen else { return false }   // generation 过期 → 不写 cached/通知
+                guard s.generation == gen,
+                      s.knownCandidates == capturedCandidates else { return false } // generation/identity 过期 → 不写 cached/通知
                 let changed = results.contains { entry in
                     s.knownWids.contains(entry.key)
                         && (s.cached[entry.key] ?? .visible) != entry.value
@@ -256,13 +288,14 @@ final class BubbleVisibilityProbe: Sendable {
         }
     }
 
-    /// 候选/宠物消失 → 递增 generation（旧 Task 回调失效）+ 清 cached + 清 knownWids。
+    /// 候选/宠物消失 → 递增 generation（旧 Task 回调失效）+ 清 cached/knownWids/knownCandidates。
     /// **不设 inFlight=false**：旧 Task 在途时由其自身回调清 inFlight，保证 reset 期间新 probe 不启动（strict single-flight）。
     func reset() {
         lock.withLock { s in
             s.generation += 1
             s.cached.removeAll()
             s.knownWids.removeAll()
+            s.knownCandidates.removeAll()
             s.successfullyObservedWids.removeAll()
             s.pendingRetryAt = nil
         }

@@ -458,46 +458,94 @@ let stableFinal = stableInterpolator.frame(at: Follower.stationaryDuration)
 check("T-ip7 stable阈值前最终插值段已精确到位", rectNear(stableFinal, interpB),
       "stableDuration=\(Follower.stationaryDuration) final=\(String(describing: stableFinal))")
 
-let panelInterpolator = DockPanel()
 let panelPetA = CGRect(x: 100, y: 100, width: 172, height: 179)
 let panelPetB = panelPetA.offsetBy(dx: 100, dy: 0)
-_ = panelInterpolator.placeBelow(petQuartzRect: panelPetA, movementChanged: false, monotonicNow: 0)
-let panelStart = panelInterpolator.frame
-_ = panelInterpolator.placeBelow(petQuartzRect: panelPetB, movementChanged: true, monotonicNow: 0)
-let panelMovingStart = panelInterpolator.frame
-_ = panelInterpolator.placeBelow(petQuartzRect: panelPetB, movementChanged: false, monotonicNow: 0.016)
-let panelMovingMid = panelInterpolator.frame
-let panelTargetB = Geometry.appKitRectFromQuartz(CGRect(
-    x: panelPetB.origin.x + (panelPetB.width - panelInterpolator.dockWidth) / 2,
-    y: panelPetB.origin.y + panelPetB.height + panelInterpolator.gap,
-    width: panelInterpolator.dockWidth,
-    height: panelInterpolator.dockHeight
-))
-check("T-ip8 DockPanel frame sink沿用32ms插值", abs(panelMovingStart.origin.x - panelStart.origin.x) < 1.0
-        && panelMovingMid.origin.x > min(panelStart.origin.x, panelTargetB.origin.x)
-        && panelMovingMid.origin.x < max(panelStart.origin.x, panelTargetB.origin.x),
-      "start=\(panelStart) mid=\(panelMovingMid) target=\(panelTargetB)")
-let panelObstacle = CGRect(x: panelPetB.minX, y: panelPetB.maxY, width: panelPetB.width, height: 54)
-_ = panelInterpolator.placeBelow(
-    petQuartzRect: panelPetB,
-    avoiding: [panelObstacle],
-    movementChanged: true,
-    monotonicNow: 0.016
-)
-let panelSafetyTarget = Geometry.appKitRectFromQuartz(
-    Geometry.safeDockFrame(
-        pet: panelPetB,
+if let interpolationScreen = NSScreen.screens.first {
+    let panelInterpolator = DockPanel()
+    _ = panelInterpolator.placeBelow(
+        petQuartzRect: panelPetA,
+        visibleScreen: interpolationScreen,
+        movementChanged: false,
+        monotonicNow: 0
+    )
+    let panelStart = panelInterpolator.frame
+    _ = panelInterpolator.placeBelow(
+        petQuartzRect: panelPetB,
+        visibleScreen: interpolationScreen,
+        movementChanged: true,
+        monotonicNow: 0
+    )
+    let panelMovingStart = panelInterpolator.frame
+    _ = panelInterpolator.placeBelow(
+        petQuartzRect: panelPetB,
+        visibleScreen: interpolationScreen,
+        movementChanged: false,
+        monotonicNow: 0.016
+    )
+    let panelMovingMid = panelInterpolator.frame
+    let panelTargetB = Geometry.appKitRectFromQuartz(
+        Geometry.safeDockFrame(
+            pet: panelPetB,
+            avoiding: [],
+            dockSize: CGSize(width: panelInterpolator.dockWidth, height: panelInterpolator.dockHeight),
+            gap: panelInterpolator.gap,
+            screen: interpolationScreen
+        ).frame!
+    )
+    check("T-ip8 DockPanel frame sink沿用32ms插值", abs(panelMovingStart.origin.x - panelStart.origin.x) < 1.0
+            && panelMovingMid.origin.x > min(panelStart.origin.x, panelTargetB.origin.x)
+            && panelMovingMid.origin.x < max(panelStart.origin.x, panelTargetB.origin.x),
+          "start=\(panelStart) mid=\(panelMovingMid) target=\(panelTargetB)")
+    let panelObstacle = CGRect(x: panelPetB.minX, y: panelPetB.maxY, width: panelPetB.width, height: 54)
+    _ = panelInterpolator.placeBelow(
+        petQuartzRect: panelPetB,
         avoiding: [panelObstacle],
-        dockSize: CGSize(width: panelInterpolator.dockWidth, height: panelInterpolator.dockHeight),
-        gap: panelInterpolator.gap,
-        screen: nil
-    ).frame!
-)
-check("T-ip9 DockPanel障碍变化立即snap", abs(panelInterpolator.frame.origin.y - panelSafetyTarget.origin.y) < 1.0,
-      "actual=\(panelInterpolator.frame) target=\(panelSafetyTarget)")
-panelInterpolator.hideIfNeeded()
-_ = panelInterpolator.placeBelow(petQuartzRect: panelPetB, movementChanged: true, monotonicNow: 0.016)
-check("T-ip10 DockPanel隐藏后重现首帧snap", abs(panelInterpolator.frame.origin.x - panelTargetB.origin.x) < 1.0, "frame=\(panelInterpolator.frame)")
+        visibleScreen: interpolationScreen,
+        movementChanged: true,
+        monotonicNow: 0.016
+    )
+    let panelSafetyTarget = Geometry.appKitRectFromQuartz(
+        Geometry.safeDockFrame(
+            pet: panelPetB,
+            avoiding: [panelObstacle],
+            dockSize: CGSize(width: panelInterpolator.dockWidth, height: panelInterpolator.dockHeight),
+            gap: panelInterpolator.gap,
+            screen: interpolationScreen
+        ).frame!
+    )
+    check("T-ip9 DockPanel障碍变化立即snap", abs(panelInterpolator.frame.origin.y - panelSafetyTarget.origin.y) < 1.0,
+          "actual=\(panelInterpolator.frame) target=\(panelSafetyTarget)")
+    panelInterpolator.hideIfNeeded()
+    _ = panelInterpolator.placeBelow(
+        petQuartzRect: panelPetB,
+        visibleScreen: interpolationScreen,
+        movementChanged: true,
+        monotonicNow: 0.016
+    )
+    check("T-ip10 DockPanel隐藏后重现首帧snap", abs(panelInterpolator.frame.origin.x - panelTargetB.origin.x) < 1.0, "frame=\(panelInterpolator.frame)")
+} else {
+    check("T-ip8 DockPanel frame sink沿用32ms插值（无screen跳过）", true, "无有效screen")
+    check("T-ip9 DockPanel障碍变化立即snap（无screen跳过）", true, "无有效screen")
+    check("T-ip10 DockPanel隐藏后重现首帧snap（无screen跳过）", true, "无有效screen")
+}
+
+// P2 red regression: 持续无有效 screen 时，移动也必须每帧 snap/reset，不能进入 32ms segment。
+let noScreenInterpolator = DockPanel()
+_ = noScreenInterpolator.placeBelow(petQuartzRect: panelPetA, visibleScreen: nil, movementChanged: false, monotonicNow: 0)
+let noScreenTargetB = Geometry.appKitRectFromQuartz(CGRect(
+    x: panelPetB.origin.x + (panelPetB.width - noScreenInterpolator.dockWidth) / 2,
+    y: panelPetB.origin.y + panelPetB.height + noScreenInterpolator.gap,
+    width: noScreenInterpolator.dockWidth,
+    height: noScreenInterpolator.dockHeight
+))
+_ = noScreenInterpolator.placeBelow(petQuartzRect: panelPetB, visibleScreen: nil, movementChanged: true, monotonicNow: 0.016)
+let noScreenMovedFrame = noScreenInterpolator.frame
+_ = noScreenInterpolator.placeBelow(petQuartzRect: panelPetB, visibleScreen: nil, movementChanged: false, monotonicNow: 0.024)
+let noScreenStableFrame = noScreenInterpolator.frame
+check("T-ip11 RED 持续无screen移动每帧snap且不延续segment",
+      abs(noScreenMovedFrame.origin.x - noScreenTargetB.origin.x) < 1.0
+        && abs(noScreenStableFrame.origin.x - noScreenTargetB.origin.x) < 1.0,
+      "moved=\(noScreenMovedFrame) stable=\(noScreenStableFrame) target=\(noScreenTargetB)")
 print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) failed")
 
 // ---- T-avoid: 会话气泡避让（obstaclesNear + safeDockFrame + placeBelow）----
@@ -1306,6 +1354,7 @@ struct ProductionProbeCadenceResult {
     let captureStarts: [TimeInterval]
     let firedTimerIntervals: [TimeInterval]
     let remainingActiveTimerIntervals: [TimeInterval]
+    let wallClockSamples: [TimeInterval]
     let tickCount: Int
     let captureCallCount: Int
 }
@@ -1313,14 +1362,17 @@ struct ProductionProbeCadenceResult {
 func productionProbeCadence(
     preProbeOffsets: [TimeInterval],
     postProbeOffsets: [TimeInterval] = [],
-    keepFirstCaptureInFlight: Bool = false
+    keepFirstCaptureInFlight: Bool = false,
+    wallJumps: [TimeInterval] = []
 ) -> ProductionProbeCadenceResult {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(0))
+    let wallClock = OSAllocatedUnfairLock(initialState: TimeInterval(1_700_000_000))
     var probeAttempts: [TimeInterval] = []
     var captureStarts: [TimeInterval] = []
     var lastObservedCapture = -TimeInterval.greatestFiniteMagnitude
     var timers: [TestFollowTickTimer] = []
     var firedIntervals: [TimeInterval] = []
+    var wallClockSamples: [TimeInterval] = []
     var ticks = 0
     let captureCalls = OSAllocatedUnfairLock(initialState: 0)
     let releaseFirstCapture = OSAllocatedUnfairLock(initialState: false)
@@ -1360,6 +1412,10 @@ func productionProbeCadence(
                 lastObservedCapture = capturedAt
                 captureStarts.append(capturedAt)
             }
+            if tickIndex < wallJumps.count {
+                wallClock.withLock { $0 += wallJumps[tickIndex] }
+            }
+            wallClockSamples.append(wallClock.withLock { $0 })
             if tickIndex < postProbeOffsets.count {
                 let postProbeOffset = postProbeOffsets[tickIndex]
                 clock.withLock { $0 += postProbeOffset }
@@ -1410,6 +1466,7 @@ func productionProbeCadence(
         captureStarts: captureStarts,
         firedTimerIntervals: firedIntervals,
         remainingActiveTimerIntervals: activeIntervals,
+        wallClockSamples: wallClockSamples,
         tickCount: ticks,
         captureCallCount: captureCalls.withLock { $0 }
     )
@@ -1500,6 +1557,27 @@ check("T-sch4e reset/空候选/权限false均不残留retry hint",
       hintAfterReset == nil && hintAfterEmpty == nil && hintAfterPermissionLoss == nil,
       "reset=\(String(describing: hintAfterReset)) empty=\(String(describing: hintAfterEmpty)) "
         + "permission=\(String(describing: hintAfterPermissionLoss))")
+
+let wallClockBaseline = productionProbeCadence(
+    preProbeOffsets: [0.02, 0.01, 0],
+    postProbeOffsets: [0, 0.02, 0],
+    wallJumps: [0, 0, 0]
+)
+let wallClockJumped = productionProbeCadence(
+    preProbeOffsets: [0.02, 0.01, 0],
+    postProbeOffsets: [0, 0.02, 0],
+    wallJumps: [86_400, -172_800, 86_400]
+)
+check("T-sch4f wall前跳/后跳不改变monotonic phase、recapture与retry",
+      wallClockBaseline.wallClockSamples != wallClockJumped.wallClockSamples
+        && cadenceTimesEqual(wallClockBaseline.probeAttempts, wallClockJumped.probeAttempts)
+        && cadenceTimesEqual(wallClockBaseline.captureStarts, wallClockJumped.captureStarts)
+        && cadenceTimesEqual(wallClockBaseline.firedTimerIntervals, wallClockJumped.firedTimerIntervals)
+        && wallClockBaseline.tickCount == wallClockJumped.tickCount
+        && wallClockBaseline.captureCallCount == wallClockJumped.captureCallCount,
+      "baselineWall=\(wallClockBaseline.wallClockSamples) jumpedWall=\(wallClockJumped.wallClockSamples) "
+        + "baselineAttempts=\(wallClockBaseline.probeAttempts) jumpedAttempts=\(wallClockJumped.probeAttempts) "
+        + "baselineCaptures=\(wallClockBaseline.captureStarts) jumpedCaptures=\(wallClockJumped.captureStarts)")
 
 // T-bv39: 生产 FollowLayoutPass 必须贯穿候选分类→probe cache→可见障碍→frame sink。
 // 已有 stable one-shot 尚未触发时，visible→hidden wake 应提前执行且只执行一次完整 tick。
@@ -1715,6 +1793,74 @@ while staleProbe.lock.withLock({ $0.inFlight }) && Date() < stalePump {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
 check("T-bv40 旧generation结果不通知", staleNotifications.withLock { $0 } == 0, "")
+
+// P1 red regression: 同 WID 但 bounds/ownerPID/ownerName/layer 变化时，旧身份的在途结果
+// 不能写入新候选的 cache、通知布局或把新身份误判为 targetMissing hidden。
+let identityCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+let identityObserved = OSAllocatedUnfairLock(initialState: [(CGWindowID, CGRect, Int32, String, Int)]())
+let identityNotifications = OSAllocatedUnfairLock(initialState: 0)
+let identityTime = OSAllocatedUnfairLock(initialState: TimeInterval(14_000))
+let identityCap: BubbleCapturer = { candidate in
+    identityObserved.withLock { $0.append((candidate.wid, candidate.bounds, candidate.ownerPID, candidate.ownerName, candidate.layer)) }
+    let call = identityCaptureCalls.withLock { count -> Int in
+        count += 1
+        return count
+    }
+    if call == 1 { return .stats(expandedS) }
+    try? await Task.sleep(nanoseconds: 200_000_000)
+    return .targetMissing
+}
+let identityProbe = BubbleVisibilityProbe(
+    monotonicNow: { identityTime.withLock { $0 } },
+    canCapture: { true },
+    capturer: identityCap,
+    onVisibilityChange: { identityNotifications.withLock { $0 += 1 } }
+)
+let identityOld = WinCandidate(
+    wid: CGWindowID(520), ownerPID: 11111, ownerName: "ChatGPT", title: "",
+    layer: 3, alpha: 1.0, isOnscreen: true, sharingState: 1,
+    bounds: CGRect(x: 80, y: 280, width: 345, height: 54)
+)
+let identityReplacement = WinCandidate(
+    wid: CGWindowID(520), ownerPID: 22222, ownerName: "Other", title: "",
+    layer: 7, alpha: 1.0, isOnscreen: true, sharingState: 1,
+    bounds: CGRect(x: 100, y: 300, width: 320, height: 64)
+)
+identityProbe.probe(candidates: [identityOld])
+_ = waitPumpingMain { !identityProbe.lock.withLock { $0.inFlight } }
+check("T-bv41a identity前置:旧候选成功expanded→visible",
+      identityProbe.visibility(for: identityOld.wid) == .visible, "")
+identityTime.withLock { $0 += 1 }
+identityProbe.probe(candidates: [identityOld])
+check("T-bv41b identity旧候选第二次capture在途", identityProbe.lock.withLock { $0.inFlight }, "")
+identityProbe.probe(candidates: [identityReplacement])
+let identityChanged = identityOld.bounds != identityReplacement.bounds
+    && identityOld.ownerPID != identityReplacement.ownerPID
+    && identityOld.ownerName != identityReplacement.ownerName
+    && identityOld.layer != identityReplacement.layer
+let identityPump = Date().addingTimeInterval(5)
+while identityProbe.lock.withLock({ $0.inFlight }) && Date() < identityPump {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+}
+let identityCached = identityProbe.lock.withLock { $0.cached[identityReplacement.wid] }
+let identitySeenOld = identityObserved.withLock { seen in
+    seen.count == 2
+        && seen.allSatisfy { $0.0 == identityOld.wid }
+        && seen.allSatisfy { $0.1 == identityOld.bounds }
+        && seen.allSatisfy { $0.2 == identityOld.ownerPID }
+        && seen.allSatisfy { $0.3 == identityOld.ownerName }
+        && seen.allSatisfy { $0.4 == identityOld.layer }
+}
+check("T-bv41c RED 同WID身份变化使旧in-flight结果失效",
+      identityChanged
+        && identitySeenOld
+        && identityCaptureCalls.withLock { $0 } == 2
+        && identityProbe.visibility(for: identityReplacement.wid) == .visible
+        && identityCached == nil
+        && identityNotifications.withLock { $0 } == 0,
+      "changed=\(identityChanged) seenOld=\(identitySeenOld) calls=\(identityCaptureCalls.withLock { $0 }) "
+        + "visibility=\(identityProbe.visibility(for: identityReplacement.wid)) cached=\(String(describing: identityCached)) "
+        + "notifications=\(identityNotifications.withLock { $0 })")
 
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
 

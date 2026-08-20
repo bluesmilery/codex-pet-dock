@@ -187,7 +187,8 @@ final class DockPanel {
         let screenID = visibleScreen.map(ObjectIdentifier.init)
         let screenChanged = lastVisibleScreenID != screenID
         let obstaclesChanged = lastAvoiding != nil && lastAvoiding! != obstacles
-        if screenChanged || obstaclesChanged {
+        let hasVisibleScreen = visibleScreen != nil
+        if !hasVisibleScreen || screenChanged || obstaclesChanged {
             frameInterpolator.reset()
         }
         lastVisibleScreenID = screenID
@@ -206,7 +207,7 @@ final class DockPanel {
             target = Geometry.appKitRectFromQuartz(q)
         }
 
-        let shouldAnimate = movementChanged && !screenChanged && !obstaclesChanged
+        let shouldAnimate = movementChanged && hasVisibleScreen && !screenChanged && !obstaclesChanged
         let frame = frameInterpolator.update(to: target, at: monotonicNow, movementChanged: shouldAnimate)
         panel.setFrame(frame, display: true)
         return true
