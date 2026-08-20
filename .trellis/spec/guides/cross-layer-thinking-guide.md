@@ -100,6 +100,14 @@ create one owner for:
 
 Rendering code may format fields, but it must not redefine the payload contract.
 
+### Mistake 5: Same Numeric Type, Different Clock Domain
+
+**Bad**: One layer schedules a duration from monotonic uptime while another stores the related deadline as wall-clock `Date`; matching `TimeInterval` arithmetic hides incompatible clock semantics.
+
+**Good**: Name the clock domain in the boundary contract. Durations, throttles, retries, and deadlines that must survive system-time changes use one injected monotonic clock end to end; wall time is reserved for calendar display or persisted timestamps.
+
+**Rule**: For a cadence or deadline crossing layers, map `clock source → stored instant → comparison → retry scheduling`, and test that forward/backward wall-clock changes cannot alter the result.
+
 ---
 
 ## Checklist for Cross-Layer Features
@@ -120,6 +128,8 @@ After implementation:
       casting payload fields locally
 - [ ] Checked that derived state points back to the source event identifier
       (`seq`, `id`, `version`) instead of inventing a second cursor
+- [ ] Identified the clock domain for every duration/deadline crossing a boundary
+- [ ] Verified wall-clock discontinuities cannot affect monotonic cadence or retry logic
 
 ---
 

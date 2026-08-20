@@ -6,3 +6,4 @@
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/smooth-follow-options.md","reason":"review macOS availability, no-deprecation and no-backlog scheduler contracts"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/recommendation-and-acceptance.md","reason":"review exact acceptance matrix and minimum-scope recommendation"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-2026-08-20.md","reason":"verify new candidate closes off-grid cadence and display-source liveness root causes"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-2-2026-08-20.md","reason":"verify monotonic clock unification and wall-jump cadence regressions"}

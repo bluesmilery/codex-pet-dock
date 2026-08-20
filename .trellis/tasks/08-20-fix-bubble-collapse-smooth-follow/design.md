@@ -24,6 +24,8 @@
 
 Break-loop 后 stable 不再携带旧 cadence phase：每次完整 tick 以自身的单调开始时间 `tickStartedAt` 计算 `tickStartedAt + 0.1s` deadline。外部 off-grid wake 自然重置相位；下一次启动不晚于 `max(deadline, workCompletedAt)`。若串行主线程工作结束时已经跨过 deadline，coalescer 只保留一个在完成后立即执行的 latest-only tick，不补发历史 deadline，也不再额外等待 0.1 秒。
 
+第二次 break-loop 统一时间域：scheduler tick、BubbleVisibility capture cadence 与 pending retry deadline 全部由同一个可注入单调时钟提供，生产默认 `ProcessInfo.systemUptime`。`Date()` 仅表示墙上时间，不得参与节流或 deadline 比较；系统时间前跳/后跳不应在 cadence 数据流中有输入通道。
+
 macOS 13 回退使用 repeating Timer，周期取当前屏幕 `maximumFramesPerSecond` 的倒数并以 120 Hz 为实验上限；无有效屏幕能力时回退 60 Hz。repeating Timer 以原始 fire schedule 为基准，避免现有“工作耗时 + interval”的累积漂移。回退仍加入 `.common` run-loop mode。
 
 Scheduler 维护一个 `tickPending`/执行门闩：display link 或 timer 只提交请求；若主线程已有待执行/正在执行 tick，新节拍不追加。tick 完成后根据最新 Follower 决策切换 cadence，保证最终状态优先于过期帧。
@@ -53,6 +55,8 @@ Window-bound display link 只有在 dock `isVisible && screen != nil` 时可用�
 - 候选消失：同一枚举 tick 内 knownWids 立即生效并布局；
 - TCC false/capture nil：不声称收起已识别。
 
+Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布局在 cadence 尚差少量时间时到达，probe 暴露绝对单调 due instant；scheduler 在 tick 完成后用同一时钟动态计算剩余等待，已跨 due 时只保留一次立即 follow-up。
+
 同 WID、同几何但内容在 capture in-flight 期间变化时，没有公开的无权限事件可使旧截图自动失效；本轮依靠 single-flight 后的 0.1 秒再探测限制额外等待。若真机仍证明该长尾不可接受，持续 `SCStream` 属于需要重新规划的下一阶段，不在本轮暗中扩张。
 
 ## Compatibility and privacy
@@ -64,4 +68,4 @@ Window-bound display link 只有在 dock `isVisible && screen != nil` 时可用�
 
 ## Rollout and rollback
 
-实现分为调度状态机、气泡 cadence、运行时接线三个可审查批次，但冻结为一个完整候选 SHA。第二轮 Review 后已执行 break-loop；新候选开启一轮全新的完整 Review campaign，不复用 `ee759ca` 或 `6e3536a` 的任何结论。若 display link 路径出现兼容问题，可回退到 Timer scheduler 而不回退气泡唤醒和时间型稳定判定。任何分类阈值变化或持续 SCStream 方案都超出本设计，必须重新规划。
+实现分为调度状态机、气泡 cadence、运行时接线三个可审查批次，但冻结为一个完整候选 SHA。`539009e` 所在 Review campaign 因第二轮 wall-clock finding 已关闭；第二次 break-loop 后的新候选开启全新完整 Review campaign，不复用任何旧 Review 或 QA 结论。若 display link 路径出现兼容问题，可回退到 Timer scheduler 而不回退气泡唤醒和时间型稳定判定。任何分类阈值变化或持续 SCStream 方案都超出本设计，必须重新规划。
