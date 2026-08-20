@@ -294,6 +294,29 @@ check("T16b DockView resetAt nil→占位—", dv.resetTextForTesting == DockSna
 check("T17a DockView frame 200x48", dv.frame.width == 200 && dv.frame.height == 48, "\(dv.frame.size)")
 check("T17b DockPanel dockWidth=200", DockPanel().dockWidth == 200, "")
 check("T17c DockPanel dockHeight=48", DockPanel().dockHeight == 48, "")
+
+// T18 WEEK TOKENS 内容组中点与底座可用区域中点对齐（允许 AppKit 像素舍入 1pt）
+dv.layoutForTesting()
+let available = dv.availableContentFrameForTesting
+let tokensCapF = dv.tokensCaptionTitleRectForTesting
+let tokensValF = dv.tokensValueTitleRectForTesting
+let tokensCapIntrinsicH = dv.tokensCaptionIntrinsicSizeForTesting.height
+let tokensValIntrinsicH = dv.tokensValueIntrinsicSizeForTesting.height
+let tokensGap = tokensCapF.minY - tokensValF.maxY
+let compactTokensH = tokensCapF.height + tokensValF.height + max(0, tokensGap)
+let compactTop = max(tokensCapF.maxY, tokensValF.maxY)
+let compactBottom = min(tokensCapF.minY, tokensValF.minY)
+let compactMidY = (compactTop + compactBottom) / 2
+check("T18a WEEK TOKENS 标题与值之间无拉伸大空隙",
+      tokensGap <= 1.0
+        && abs(tokensCapF.height - tokensCapIntrinsicH) < 1.0
+        && abs(tokensValF.height - tokensValIntrinsicH) < 1.0,
+      "gap=\(tokensGap) spacing=\(dv.tokensColumnSpacingForTesting) cap=\(tokensCapF) val=\(tokensValF) capH=\(tokensCapIntrinsicH) valH=\(tokensValIntrinsicH)")
+check("T18b WEEK TOKENS 紧凑组 midY 与可用区 midY 对齐",
+      abs(compactMidY - available.midY) < 1.0,
+      "compactMidY=\(compactMidY) availableMidY=\(available.midY) compactH=\(compactTokensH) compactTop=\(compactTop) compactBottom=\(compactBottom) available=\(available)")
+check("T18c 对齐后底座仍为 200x48",
+      dv.frame.width == 200 && dv.frame.height == 48, "\(dv.frame.size)")
 print("\n[Dock 几何/reset/placeBelow] \(pass - dkPass) passed, \(fail - dkBase) failed")
 
 // ---- T-avoid: 会话气泡避让（obstaclesNear + safeDockFrame + placeBelow）----
@@ -961,6 +984,130 @@ check("D5 无screen→不clamp(x与dock对齐)", abs(df5.origin.x - noScrDock.or
       "detailX=\(df5.origin.x) dockX=\(noScrDock.origin.x)")
 
 print("\n[DetailPanel clamp] \(pass - dtPass) passed, \(fail - dtBase) failed")
+
+// ---- T-detail-ui: B 方案双列表格 + ThemeMetrics 同步 ----
+let duBase = fail, duPass = pass
+let detailUI = DetailPanel()
+let snapFilled = DockSnapshot(
+    weekLeft: "73%", weekTokens: "1.2M", plan: "Plus",
+    resetAt: "08-21 09:00", cacheRatio: "12%", inputTokens: "800k",
+    outputTokens: "400k", sessionCount: 3, updatedAt: "08-20 10:00",
+    localEstimateNote: "本机估算 · 仅供参考")
+detailUI.render(snapFilled)
+detailUI.layoutForTesting()
+check("DU1 七行标签保留",
+      detailUI.captionsForTesting == ["套餐", "重置时间", "缓存比例", "输入", "输出", "会话数", "更新时间"],
+      "caps=\(detailUI.captionsForTesting)")
+check("DU2 既有字段渲染",
+      detailUI.valuesForTesting == ["Plus", "08-21 09:00", "12%", "800k", "400k", "3", "08-20 10:00"],
+      "vals=\(detailUI.valuesForTesting)")
+check("DU3 本机估算提示渲染",
+      detailUI.noteForTesting == "本机估算 · 仅供参考",
+      "note=\(detailUI.noteForTesting)")
+
+let snapPlace = DockSnapshot(
+    weekLeft: nil, weekTokens: nil, plan: nil, resetAt: nil, cacheRatio: nil,
+    inputTokens: nil, outputTokens: nil, sessionCount: nil, updatedAt: nil,
+    localEstimateNote: "本机估算 · 暂无数据")
+detailUI.render(snapPlace)
+check("DU4 空字段占位不回归",
+      detailUI.valuesForTesting.allSatisfy { $0 == DockSnapshot.placeholder },
+      "vals=\(detailUI.valuesForTesting)")
+check("DU5 空提示仍渲染",
+      detailUI.noteForTesting == "本机估算 · 暂无数据",
+      "note=\(detailUI.noteForTesting)")
+
+detailUI.render(snapFilled)
+detailUI.layoutForTesting()
+let capWs = detailUI.captionWidthsForTesting
+let valWs = detailUI.valueWidthsForTesting
+let capXs = detailUI.captionMinXForTesting
+let valMaxXs = detailUI.valueMaxXForTesting
+let rowFs = detailUI.rowFramesForTesting
+let noteF = detailUI.noteFrameForTesting
+let seps = detailUI.separatorFramesForTesting
+let bounds = detailUI.contentBoundsForTesting
+func nearlyEqual(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat = 1.0) -> Bool { abs(a - b) < t }
+func allNearlyEqual(_ xs: [CGFloat], _ t: CGFloat = 1.0) -> Bool {
+    guard let first = xs.first else { return false }
+    return xs.allSatisfy { nearlyEqual($0, first, t) }
+}
+check("DU6 标签列左对齐且共享稳定宽度",
+      detailUI.captionAlignmentForTesting == .left
+        && allNearlyEqual(capWs) && allNearlyEqual(capXs)
+        && capXs.allSatisfy { nearlyEqual($0, 12, 1.0) },
+      "align=\(detailUI.captionAlignmentForTesting.rawValue) widths=\(capWs) minX=\(capXs)")
+check("DU7 数值列右对齐且共享稳定宽度",
+      detailUI.valueAlignmentForTesting == .right
+        && allNearlyEqual(valWs) && allNearlyEqual(valMaxXs)
+        && valMaxXs.allSatisfy { nearlyEqual($0, 218, 1.0) },
+      "align=\(detailUI.valueAlignmentForTesting.rawValue) widths=\(valWs) maxX=\(valMaxXs)")
+check("DU8 七行之间有克制分隔线",
+      detailUI.separatorCountForTesting >= 6,
+      "sepCount=\(detailUI.separatorCountForTesting)")
+let rowsInside = rowFs.allSatisfy { bounds.contains($0) }
+let noteInside = bounds.contains(noteF)
+let sepsInside = seps.allSatisfy { bounds.insetBy(dx: -1, dy: -1).intersects($0) }
+var overlap = false
+for i in 0..<rowFs.count {
+    for j in (i+1)..<rowFs.count where rowFs[i].intersects(rowFs[j]) { overlap = true }
+    if rowFs[i].intersects(noteF) { overlap = true }
+}
+let lowestRowMinY = rowFs.map { $0.minY }.min() ?? 0
+let noteBelowRows = lowestRowMinY >= noteF.maxY - 1.0
+let noteLeftAligned = nearlyEqual(noteF.minX, 12, 1.0)
+check("DU9 内容不截断/重叠且底部提示分层",
+      rowsInside && noteInside && sepsInside && !overlap && noteBelowRows && !noteF.isEmpty && noteLeftAligned,
+      "rowsInside=\(rowsInside) noteInside=\(noteInside) overlap=\(overlap) noteLeft=\(noteLeftAligned) note=\(noteF) bounds=\(bounds)")
+
+func sameCGColor(_ a: CGColor?, _ b: CGColor?) -> Bool {
+    guard let a, let b else { return false }
+    return a == b
+}
+func sameNSColor(_ a: NSColor?, _ b: NSColor?) -> Bool {
+    guard let a, let b else { return false }
+    let ac = a.usingColorSpace(.sRGB) ?? a
+    let bc = b.usingColorSpace(.sRGB) ?? b
+    return abs(ac.redComponent - bc.redComponent) < 0.02
+        && abs(ac.greenComponent - bc.greenComponent) < 0.02
+        && abs(ac.blueComponent - bc.blueComponent) < 0.02
+        && abs(ac.alphaComponent - bc.alphaComponent) < 0.02
+}
+var themeOk = true
+var themeExtra = ""
+let dockTheme = DockView()
+for spec in Theme.builtins {
+    let m = spec.metrics
+    dockTheme.applyTheme(m)
+    detailUI.applyTheme(m)
+    dockTheme.layoutForTesting()
+    detailUI.layoutForTesting()
+    let expectedCaption = m.label.nsColor.withAlphaComponent(0.6)
+    let expectedValue = m.label.nsColor
+    let checks: [(String, Bool)] = [
+        ("bg", sameNSColor(detailUI.backgroundColorForTesting, m.background.nsColor)),
+        ("bgAlpha", abs((detailUI.backgroundColorForTesting.usingColorSpace(.sRGB) ?? detailUI.backgroundColorForTesting).alphaComponent - CGFloat(m.background.a)) < 0.02),
+        ("border", sameCGColor(detailUI.borderColorForTesting, m.accent.nsColor.cgColor)),
+        ("radius", abs(detailUI.cornerRadiusForTesting - CGFloat(m.cornerRadius)) < 0.01),
+        ("borderW", abs(detailUI.borderWidthForTesting - CGFloat(m.borderWidth)) < 0.01),
+        ("capColor", sameNSColor(detailUI.captionColorForTesting, expectedCaption)),
+        ("valColor", sameNSColor(detailUI.valueColorForTesting, expectedValue)),
+        ("dockBg", sameCGColor(dockTheme.backgroundColorForTesting, m.background.nsColor.cgColor)),
+        ("dockBorder", sameCGColor(dockTheme.borderColorForTesting, m.accent.nsColor.cgColor)),
+        ("dockCapFont", dockTheme.captionFontForTesting == DockView.font(m.font, caption: true)),
+        ("dockValFont", dockTheme.valueFontForTesting == DockView.font(m.font, caption: false)),
+        ("detailCapFont", detailUI.captionFontForTesting == DockView.font(m.font, caption: true)),
+        ("detailValFont", detailUI.valueFontForTesting == DockView.font(m.font, caption: false)),
+    ]
+    let failed = checks.filter { !$0.1 }.map { $0.0 }
+    if !failed.isEmpty {
+        themeOk = false
+        themeExtra += "\(spec.id):\(failed) "
+    }
+}
+check("DU10 三主题详情卡与底座共用 ThemeMetrics 并同步换肤", themeOk, themeExtra)
+
+print("\n[DetailPanel UI] \(pass - duPass) passed, \(fail - duBase) failed")
 
 // ---- T-log: PetLogger release 门控 + 后台异步 IO ----
 let lgBase = fail, lgPass = pass
