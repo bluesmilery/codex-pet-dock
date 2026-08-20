@@ -1,0 +1,7 @@
+{"file":".trellis/spec/macos/index.md","reason":"macOS review entrypoint and platform boundary"}
+{"file":".trellis/spec/macos/appkit-conventions.md","reason":"verify main-thread display-link, timer and frame-update correctness"}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"verify TDD evidence, zero-warning build and full quality gates"}
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"verify no new permission, capture persistence or private API regression"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/bubble-collapse-linkage.md","reason":"review implementation against confirmed collapse chain and unresolved runtime hypotheses"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/smooth-follow-options.md","reason":"review macOS availability, no-deprecation and no-backlog scheduler contracts"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/recommendation-and-acceptance.md","reason":"review exact acceptance matrix and minimum-scope recommendation"}

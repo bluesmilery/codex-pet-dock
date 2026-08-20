@@ -1,0 +1,30 @@
+{
+  "id": "fix-bubble-collapse-smooth-follow",
+  "name": "fix-bubble-collapse-smooth-follow",
+  "title": "修复气泡收起并提升跟随平滑度",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "macos-follow-layout",
+  "package": null,
+  "priority": "P2",
+  "creator": "bluesmilery",
+  "assignee": "bluesmilery",
+  "createdAt": "2026-08-20",
+  "completedAt": null,
+  "branch": "codex/fix-bubble-collapse-smooth-follow",
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "delivery_path": "L2",
+    "subagent_model": "gpt-5.6-sol",
+    "subagent_reasoning": "high"
+  }
+}

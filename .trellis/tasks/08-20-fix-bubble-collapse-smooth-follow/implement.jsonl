@@ -1,0 +1,7 @@
+{"file":".trellis/spec/macos/index.md","reason":"macOS package constraints and relevant guideline index"}
+{"file":".trellis/spec/macos/appkit-conventions.md","reason":"main-thread AppKit, RunLoop and concurrency contracts"}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"TDD, zero-warning build, full gates and runtime evidence boundaries"}
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"TCC, ScreenCaptureKit and in-memory alpha privacy constraints"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/bubble-collapse-linkage.md","reason":"current end-to-end collapse chain, confirmed latency sources and test gaps"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/smooth-follow-options.md","reason":"display-link and timer compatibility tradeoffs for macOS 13 and 14+"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/recommendation-and-acceptance.md","reason":"minimal design, TDD seams, file scope and acceptance matrix"}
