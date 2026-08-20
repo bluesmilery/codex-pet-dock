@@ -12,7 +12,9 @@
 
 上一版测试证明了“成功分类后的通知桥接”，但没有证明端到端延迟或真实调度器替换已有 timer 后执行完整 tick。用户可见延迟仍包含探测等待和捕获耗时；若 TCC/capture 失败则按契约一直保守 visible，不能承诺回位。
 
-本次保留 one-shot screenshot 架构，仅把有 visible 气泡候选时的探测 cadence 提升到不高于 0.1 秒，并把布局唤醒接入新的 coalesced scheduler。single-flight 使实际捕获频率自动受捕获耗时上限约束，不产生截图任务积压。
+真机复测补充了一个与像素折叠不同的失败形态：完全隐藏会话 UI 后，底座继续跟随宠物但保持旧避让间距。这反证“调度器完全未 tick”是主因，更符合障碍仍被判定 visible。当前 `BubbleCapturer` 用一个可选 `BubbleAlphaStats?` 同时表达目标不在成功取得的 SCK 窗口清单、清单获取失败、截图失败和像素统计失败；`nil` 又统一按保守 visible 分类。最强假设是 CGWindowList 与 SCK 生命周期短暂不同步时，已消失目标被这个可选值契约保活。实现前必须用独立红测把该假设与几何筛选错误、scheduler/frame stale 区分开；若红测不能复现，停止并回到规划，不改 alpha 阈值。
+
+本次保留 one-shot screenshot 架构和 0.1 秒 cadence。捕获边界改为带来源语义的结果：成功取得 SCK 窗口清单但目标 WID 不存在是 `.targetMissing`，可使当前同身份候选 hidden；权限/清单/截图/统计失败是 `.unavailable`，继续保守 visible；成功统计是 `.stats`，沿用现有 alpha 分类。异步结果仍受 generation、当前候选身份和 strict single-flight 约束。
 
 ## Follow scheduler
 
@@ -32,7 +34,13 @@ Scheduler 维护一个 `tickPending`/执行门闩：display link 或 timer 只�
 
 Window-bound display link 只有在 dock `isVisible && screen != nil` 时可用。DockPanel 对自身 window screen 变化提供主线程通知，AppDelegate 将其路由到同一 coalesced wake；外接屏移除或窗口暂时失去 screen 时，即使 display link 已停止回调，通知仍能驱动一次 tick 切换到 Timer fallback，screen 恢复后再重新评估 display link。
 
-不使用 `CVDisplayLink`，因为当前 SDK 已将其在 macOS 15 标为 deprecated；不使用固定 120 Hz，因为普通屏没有收益且窗口枚举有长尾；不做 frame 插值，因为它会引入尾随、预测误差和跨屏复杂度。
+不使用 `CVDisplayLink`，因为当前 SDK 已将其在 macOS 15 标为 deprecated；不使用固定 120 Hz，因为普通屏没有收益且窗口枚举有长尾。
+
+## Bounded linear frame interpolation
+
+现有 `DockPanel.placeBelow` 在每次完整 tick 中直接 `setFrame` 到最新目标，display link 只提高采样/写回频率，视觉仍是离散跳到采样点。新增一个主线程、纯时间驱动的短时线性段：保存当前渲染 frame、最新目标 frame、段起点和单调起止时间；每个 display beat 按 `lerp(start, target, progress)` 写回。目标更新时从当下已渲染位置重定向到最新目标，不排队历史目标；进度到 1 后精确 snap，禁止过冲。
+
+插值上限由用户确认，推荐 32ms。隐藏/显示、跨屏失去有效 screen、几何返回 nil，以及气泡 hidden 后的安全复位可直接 snap，避免动画延迟正确避让。该方案不预测宠物位置，不使用隐式 AppKit animation，也不改变窗口枚举频率；代价是最多一个配置窗口的视觉拖尾，必须在真机拖动体感中单独验收。
 
 ## Follower state semantics
 
@@ -68,4 +76,4 @@ Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布
 
 ## Rollout and rollback
 
-实现分为调度状态机、气泡 cadence、运行时接线三个可审查批次，但冻结为一个完整候选 SHA。`539009e` 所在 Review campaign 因第二轮 wall-clock finding 已关闭；第二次 break-loop 后的新候选开启全新完整 Review campaign，不复用任何旧 Review 或 QA 结论。若 display link 路径出现兼容问题，可回退到 Timer scheduler 而不回退气泡唤醒和时间型稳定判定。任何分类阈值变化或持续 SCStream 方案都超出本设计，必须重新规划。
+精确候选 `d8538a5` 的自动 Review/QA 结论因真机回归失效，不可复用。第三次 break-loop 后的新候选必须使用全新 `xai/grok-4.6 + high` 实现、Review 和 QA 子 Agent；当前 provider 不可用时保持停派，不换模型。若 typed capture 红测不能证明根因，或插值需要预测/持续 SCStream，必须再次回到规划。

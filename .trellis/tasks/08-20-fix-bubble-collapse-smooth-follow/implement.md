@@ -4,8 +4,8 @@
 
 - Base branch: `dev` at the exact SHA verified before dispatch.
 - Delivery path: L2.
-- Per the user's task-specific override, every implementation, formal Review, repair recheck and QA sub-agent for this task uses `gpt-5.6-sol + high` instead of the project default; each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
-- Allowed product scope is limited to follow scheduling, the minimal DockPanel display-link adapter, bubble probe cadence/wake integration, Follower state, corresponding UI tests, Makefile source list if a focused scheduler file is added, and directly affected docs.
+- Per the user's latest task-specific override, every implementation, formal Review, repair recheck and QA sub-agent for this task uses `xai/grok-4.6 + high`; unavailable routing stops dispatch without model downgrade. Each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
+- Allowed product scope is limited to typed bubble capture outcome/lifecycle invalidation, bounded DockPanel frame interpolation, follow scheduling integration, corresponding UI tests, and directly affected docs.
 
 ## Ordered work
 
@@ -49,6 +49,18 @@ The Review campaign ending at `539009e` is closed and invalid. Before producing 
 5. Preserve reset/empty/TCC false/in-flight/generation hygiene, single Timer source, latest-only coalescing, display-link recovery and capture-rate cap. Do not introduce a clock framework or unrelated timestamp refactor.
 6. Re-run `trellis-check`, all gates and simplicity review; freeze a new SHA and start a new full formal Review campaign. No Review or QA evidence from `539009e` is reusable.
 
+## Third break-loop replan after real-device full-hide failure
+
+The Review/QA-approved candidate `91a8fe6ba915f84e35f232943fd1c1c3a558063d` failed real-device acceptance and is not reusable. Before another candidate:
+
+1. Start from `d8538a5` in the clean `codex/fix-bubble-collapse-smooth-follow-v2` worktree. Preflight `xai/grok-4.6 + high`; do not substitute a model if routing is unavailable.
+2. Add a red production-chain regression where a bubble remains in the CG candidate set but a successfully fetched SCK window list no longer contains its WID. Prove the old optional-nil contract preserves one obstacle and stale avoided Y. Add the adjacent failure case where SCK list/capture is unavailable and conservative visible remains required.
+3. If and only if the red test distinguishes the observed states, replace the optional capture payload with the smallest typed outcome (`stats`, `targetMissing`, `unavailable` or equivalent). Only `targetMissing` may classify hidden; retain generation, identity, known-candidate and strict single-flight guards before notification/cache writes.
+4. Extend the full `FollowLayoutPass → Geometry → frame sink` harness through hidden notification and assert the final obstacle set is empty and the dock returns to base frame. Repeated full hide/show cycles must not accumulate wakes or stale targets.
+5. After the user resolves the interpolation window, add red pure tests for a monotonic bounded linear segment at 60 Hz, 120 Hz and irregular beats: latest-target retargeting, no overshoot, no history queue, exact final snap, and immediate safety snap. Then wire the smallest main-thread interpolation owner at the DockPanel/frame boundary.
+6. Do not change alpha thresholds, CG obstacle geometry, permissions, capture cadence, scheduler source architecture, or introduce prediction, spring animation, implicit AppKit animation or continuous SCStream unless the discriminating red test disproves the typed-outcome hypothesis and planning is reopened.
+7. Apply `trellis-check`, rerun every hard gate, freeze a new SHA and begin a new full Review campaign. The prior `d8538a5` Review/QA evidence is invalid after any change.
+
 ## Required validation
 
 ```bash
@@ -61,21 +73,22 @@ make app
 codesign --verify --deep --strict build/PetDock.app
 ```
 
-Additional targeted tests must cover scheduler coalescing, repeated visibility transitions, time-based stable semantics, permission/capture fallback, generation/single-flight, and candidate disappearance.
+Additional targeted tests must cover scheduler coalescing, repeated visibility transitions, time-based stable semantics, typed target-missing versus capture-unavailable behavior, generation/single-flight, candidate disappearance, and bounded interpolation.
 
 ## Review focus
 
 - No timer/display-link retain cycle, duplicate source, post-quit callback, or main-thread backlog.
 - AppKit display link availability is guarded for macOS 14; no deprecated `CVDisplayLink` and release build remains 0 warning.
 - Variable refresh cannot shorten the intended moving→stable elapsed time.
-- Bubble polling cannot start overlapping captures or weaken nil/TCC conservative behavior.
+- Bubble polling cannot start overlapping captures or let generic capture/TCC failure masquerade as authoritative target disappearance.
+- Interpolation cannot overshoot, queue stale targets, delay safety reset, mutate off the main thread, or exceed the approved trailing window.
 - No new permission, private API, screenshot persistence, OCR, content logging, real WID/PID/coordinates, or unrelated refactor.
 
 ## Runtime QA matrix
 
 - Exact candidate executable and commit provenance.
 - Bubble expanded→collapsed with pet stationary; repeat at least three cycles.
-- Bubble candidate disappearance and capture-nil fallback distinguished.
+- Expanded→collapsed and complete message/control hide tested separately; authoritative target missing and generic capture failure distinguished.
 - Drag on a 60 Hz display and, if available, a high-refresh display; record observed smoothness separately from automated cadence tests.
 - Multi-display crossing/negative coordinates if safely available.
 - TCC/ScreenCaptureKit status and Instruments CPU/memory only when actually exercised; otherwise explicitly `未验证`.

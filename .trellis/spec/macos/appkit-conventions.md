@@ -42,3 +42,5 @@ appKitOriginY = mainScreenHeight - quartzOriginY - height
 - 测试必须覆盖 `wake phase × tick work duration`：相位起点、off-grid wake、工作跨 deadline、工作超过一个或多个 interval；只测 interval 常量或 phase-aligned 情况不构成 cadence 证明。
 - `NSWindow.isVisible` 不代表窗口属于某个 display，也不保证 window-bound display link 仍会回调。display-link eligibility 必须检查 `window.screen != nil`，并由 window-screen / screen-parameters 变化通知或等价恢复源触发重新评估。
 - display-link 生命周期测试必须覆盖 active → no-screen fallback → screen restored，而不仅是创建失败时的 Timer fallback；任一 source 停止发 beat 后仍须存在可证明的恢复路径。
+- CGWindowList 的当前候选与 ScreenCaptureKit 的窗口清单是不同来源，生命周期可能短暂不同步。一次成功取得的 SCK 清单中目标 WID 不存在可以表示目标已消失；权限、清单获取、截图或像素统计失败只表示 unavailable，必须继续保守处理。捕获边界不得用同一个可选 `nil` 混合这两类语义，异步结果仍须经 generation 与当前候选身份校验。
+- 位置平滑若使用显式插值，必须在主线程按单调时间推进，限制最大拖尾，只追最新目标且不排队历史 frame；隐藏、无有效屏幕、越界和安全避让/复位路径可立即 snap。测试覆盖 60 Hz、120 Hz、不规则节拍、重定向、最终 snap 与无过冲。
