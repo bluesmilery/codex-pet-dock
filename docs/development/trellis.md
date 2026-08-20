@@ -25,7 +25,32 @@ trellis platforms       # 确认 Codex 为 active
 | `.codex/` | Codex agents、hooks wiring 和项目级 config 的平台入口 | `config.toml` 固定项目文档入口和 agent 深度；`hooks/` 中的注入脚本及 `hooks.json` 与本仓库 Trellis workflow 对接。 |
 | `.trellis/` | workflow、agents、scripts、版本 / template metadata 和任务运行时使用的目录 | `spec/macos/`、`spec/guides/`、`config.yaml` 与 workflow 体现本项目的 Swift/AppKit、隐私和质量约束；不要把生成的 web spec 当作项目规范。 |
 
-`.trellis/` 的模板文件由 Trellis 维护，项目规则应放在托管区外的 `AGENTS.md`、项目 spec 或显式配置中。修改 `.codex/`、`.agents/` 的生成文件前，先确认是否属于项目定制；否则应通过 Trellis CLI 更新，避免只改一个平台导致漂移。
+`.trellis/` 的模板文件由 Trellis 维护，项目持久规则优先放在托管区外的 `AGENTS.md`、项目 spec 或显式配置中。`.trellis/workflow.md` 是本项目唯一有意维护的 Trellis 模板定制，用于注入下文的分级交付与 Review 流程；其他 `.trellis/` 模板以及 `.codex/`、`.agents/` 生成文件不为这套流程做本地分叉，避免升级时多面合并。
+
+## 分级交付与审查职责
+
+| 路径 | 适用范围 | 执行与验证 |
+| --- | --- | --- |
+| L0 | 解释、讨论、状态查询、只读检查 | 主会话直接处理；不创建开发 task/worktree，不进入 Review/QA loop。 |
+| L1 | 流程规则、说明文档、task/spec、AI agent 提示或非可执行配置 | 主会话最小修改；目标静态检查；一次全新 `luna + max` Agent 只读一致性检查。无实现、修复、QA worktree。 |
+| L2 | 应用代码、测试逻辑、可执行脚本/Hook、构建发布、运行时配置、隐私/TCC/ScreenCaptureKit | 唯一实现负责人 + Review Readiness + 独立完整 Review + 正式 QA；跨级或不明确时按 L2。 |
+
+L2 中，原实现负责人在自己的 worktree 内运行 `trellis-check` **skill/checklist**，结合目标测试、`swift build -c release`、`make test`、diff/隐私检查和相关 package Quality Check 做可写自检。`trellis-check` 自检不产生批准结论，也不替代正式 Review。
+
+自检完成并冻结完整候选 SHA 后，由全新 `luna + max` 只读 Agent 完整审查，不因首个 finding 提前结束。首轮 findings 由主 Agent 去重并一次性退回原实现负责人批量修复；新 SHA 使旧结论失效。第二轮仍有任何实质 P0/P1/P2 时执行 `trellis-break-loop` 并回到规划，不进入第三轮逐项补丁。正式 QA 只在 Review 清零后针对同一冻结 SHA 执行，自动验证、静态推断和真机 QA 分开报告。
+
+`AGENTS.md` 保存上述项目持久边界，`.trellis/workflow.md` 保存可被 Hook 注入的详细阶段和状态提示；两者语义必须保持一致。
+
+## 本地 workflow 升级合并
+
+升级 Trellis CLI 后，不要直接覆盖项目 workflow。先预览，再生成 sidecar 并人工合并：
+
+```sh
+trellis update --dry-run
+trellis update --create-new
+```
+
+比较生成的 `.new` 文件与当前 `.trellis/workflow.md`，合入上游修复，同时保留 L0/L1/L2、实现者 `trellis-check` 自检、只读正式 Review、两轮熔断和 QA 后移规则。合并后重新运行 workflow 解析及文档门禁。禁止对本地 workflow 使用 `trellis update --force`，也不要手工修改 `.trellis/.template-hashes.json`。
 
 ## 本地状态与忽略边界
 
