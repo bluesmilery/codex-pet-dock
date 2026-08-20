@@ -77,6 +77,7 @@ final class BubbleVisibilityProbe: Sendable {
         var cached: [CGWindowID: BubbleVisibility] = [:]
         var lastCapture: Date = .distantPast
         var inFlight = false
+        var pendingRetryDeadline: Date?
         /// 候选版本：reset 递增。旧 Task 回调 generation 不匹配时丢弃。
         var generation = 0
         /// 最近一次 `probe(candidates:)` 传入的 wid 集合（当前帧实际存在的候选）。
@@ -120,6 +121,7 @@ final class BubbleVisibilityProbe: Sendable {
         let shouldStart: Bool
         let captureAllowed = !candidates.isEmpty && canCapture()
         (gen, prev, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Bool) in
+            s.pendingRetryDeadline = nil
             // 同步刷新 knownWids：当前帧实际存在的候选 wid（每帧事实，立即生效）。
             s.knownWids = Set(candidates.map { $0.wid })
             guard !candidates.isEmpty else {
@@ -142,7 +144,12 @@ final class BubbleVisibilityProbe: Sendable {
                 return (0, [:], false)
             }
             let time = now()
-            guard !s.inFlight && time.timeIntervalSince(s.lastCapture) >= Self.minInterval else {
+            guard !s.inFlight else {
+                return (0, [:], false)
+            }
+            let elapsed = time.timeIntervalSince(s.lastCapture)
+            guard elapsed >= Self.minInterval else {
+                s.pendingRetryDeadline = s.lastCapture.addingTimeInterval(Self.minInterval)
                 return (0, [:], false)
             }
             s.inFlight = true
@@ -176,6 +183,17 @@ final class BubbleVisibilityProbe: Sendable {
         }
     }
 
+    /// 当前完整布局 tick 因 cadence 尚未 due 时，取走距下次允许捕获的剩余等待。
+    /// in-flight、无候选或无权限不产生该 hint，继续沿用 scheduler 原 cadence。
+    func takePendingRetryDelay() -> TimeInterval? {
+        let deadline = lock.withLock { state -> Date? in
+            defer { state.pendingRetryDeadline = nil }
+            return state.pendingRetryDeadline
+        }
+        guard let deadline else { return nil }
+        return max(0, deadline.timeIntervalSince(now()))
+    }
+
     /// 同步读缓存（tick 主线程，非阻塞）。
     /// - wid 在当前帧候选集（knownWids）中：返回 cached 结果；尚未完成首次探测 → `.visible`（保守避让）。
     /// - wid 不在当前帧候选集（已从 obstaclesNear 消失）→ `.hidden`（当前帧失效，复位，回归 A）。
@@ -193,6 +211,7 @@ final class BubbleVisibilityProbe: Sendable {
             s.generation += 1
             s.cached.removeAll()
             s.knownWids.removeAll()
+            s.pendingRetryDeadline = nil
         }
     }
 

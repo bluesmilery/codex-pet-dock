@@ -45,7 +45,7 @@ macOS 14+ 下一次允许启动捕获的受应用控制等待最长 0.1 秒，�
 
 成功结果写入缓存后，只有当前 `knownWids` 中候选的可见性实际变化才发出一次 `onVisibilityChange`；结果不变、空候选、reset 与旧 generation 均不通知。运行时由 `FollowTickScheduler` 把后台通知合并为最多一个待执行主线程 tick；若通知在 tick 执行中到达，只保留一次 follow-up。该 tick 的生产 `FollowLayoutPass` 走候选分类、probe/cache 重读、可见障碍筛选与 frame sink，再由 sink 执行 `safeDockFrame` 和面板 frame 回写。因此即使宠物 rect 未变化，气泡从 visible 变为 hidden 后，底座也会在该完整 tick 中回到宠物正下方。
 
-moving 状态在 macOS 14+ 且底座可见、实际 `panel.screen` 非空时使用 `NSWindow.displayLink(target:selector:)`，随窗口所在显示器同步；可见窗口暂时没有所属屏幕时使 link 失效并使用 Timer fallback，窗口 screen 变化通过同一 coalesced wake 触发重新选择。macOS 13 使用 `.common` run-loop mode 的 repeating Timer，周期取当前屏幕 `maximumFramesPerSecond` 的倒数并 capped 到 120 Hz，无有效能力值时回退 60 Hz；moving tick 发现能力变化时会重建 Timer。display/timer callback 都只请求 latest-only tick，主线程忙时丢弃过期节拍；不使用已弃用的 `CVDisplayLink`。moving 进入 stable 使用单调 elapsed time 与名义 `4/60s` 静止窗口，并相对固定静止锚点吸收抖动，连续小位移累计越过容差会重置变化时刻。stable 的 0.1 秒 one-shot 由每次完整 tick 的单调起点派生，外部 wake 重置相位；工作跨过 deadline 时只在完成后立即合并一次 latest-only follow-up，不回放历史节拍，也不额外等待完整 interval。hidden 降为 1 秒 one-shot Timer。
+moving 状态在 macOS 14+ 且底座可见、实际 `panel.screen` 非空时使用 `NSWindow.displayLink(target:selector:)`，随窗口所在显示器同步；可见窗口暂时没有所属屏幕时使 link 失效并使用 Timer fallback，窗口 screen 变化通过同一 coalesced wake 触发重新选择。macOS 13 使用 `.common` run-loop mode 的 repeating Timer，周期取当前屏幕 `maximumFramesPerSecond` 的倒数并 capped 到 120 Hz，无有效能力值时回退 60 Hz；moving tick 发现能力变化时会重建 Timer。display/timer callback 都只请求 latest-only tick，主线程忙时丢弃过期节拍；不使用已弃用的 `CVDisplayLink`。moving 进入 stable 使用单调 elapsed time 与名义 `4/60s` 静止窗口，并相对固定静止锚点吸收抖动，连续小位移累计越过容差会重置变化时刻。stable 的 0.1 秒 one-shot 由每次完整 tick 的单调起点派生，外部 wake 重置相位；若本次生产布局中的气泡 probe 因 cadence 尚未 due 而跳过，probe 保存绝对 due deadline，scheduler 在 tick 完成时重新计算剩余 delay 并取更早的 one-shot。若本 tick 工作已经跨过 probe deadline，则只立即合并一次 latest-only follow-up；不回放历史节拍。hidden 降为 1 秒 one-shot Timer。
 
 ## 控制按钮与边界
 
@@ -60,4 +60,4 @@ moving 状态在 macOS 14+ 且底座可见、实际 `panel.screen` 非空时使�
 make test-ui
 ```
 
-`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、固定宽度、水平 clamp、屏幕边界、权限门控、可见性变化通知、候选消失复位、elapsed-time stable 语义和调度合并。当前公开口径为 **BubbleVisibility 79 项**（`test-ui` 套件的一部分）；细分用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、macOS 13 Timer、实际 display-link cadence、多屏硬件与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
+`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、固定宽度、水平 clamp、屏幕边界、权限门控、可见性变化通知、候选消失复位、elapsed-time stable 语义和调度合并。当前公开口径为 **BubbleVisibility 84 项**（`test-ui` 套件的一部分）；细分用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、macOS 13 Timer、实际 display-link cadence、多屏硬件与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。

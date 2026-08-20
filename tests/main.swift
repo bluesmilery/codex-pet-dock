@@ -1168,6 +1168,210 @@ if #available(macOS 14.0, *) {
     check("T-sch3c macOS14 display link生命周期（当前系统跳过）", true)
 }
 
+// T-sch4: stable scheduler 与生产 FollowLayoutPass/probe 必须共享同一可控时间线。
+// tick 起点与实际 probe 之间存在工作偏移时，due miss 只能等待剩余 probe cadence，
+// 不能重新等待完整 stable interval；in-flight 仍保持 single-flight 且不新增 backlog。
+struct ProductionProbeCadenceResult {
+    let probeAttempts: [TimeInterval]
+    let captureStarts: [TimeInterval]
+    let firedTimerIntervals: [TimeInterval]
+    let remainingActiveTimerIntervals: [TimeInterval]
+    let tickCount: Int
+    let captureCallCount: Int
+}
+
+func productionProbeCadence(
+    preProbeOffsets: [TimeInterval],
+    postProbeOffsets: [TimeInterval] = [],
+    keepFirstCaptureInFlight: Bool = false
+) -> ProductionProbeCadenceResult {
+    let baseDate = Date(timeIntervalSince1970: 12_000)
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(0))
+    var probeAttempts: [TimeInterval] = []
+    var captureStarts: [TimeInterval] = []
+    var lastObservedCapture = Date.distantPast
+    var timers: [TestFollowTickTimer] = []
+    var firedIntervals: [TimeInterval] = []
+    var ticks = 0
+    let captureCalls = OSAllocatedUnfairLock(initialState: 0)
+    let releaseFirstCapture = OSAllocatedUnfairLock(initialState: false)
+    let mascot = mkw(603, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
+    let bubble = mkw(601, layer: 3, bubbleForCollapse)
+    let capturer: BubbleCapturer = { _ in
+        let call = captureCalls.withLock { count -> Int in
+            count += 1
+            return count
+        }
+        if keepFirstCaptureInFlight && call == 1 {
+            while !releaseFirstCapture.withLock({ $0 }) {
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+        }
+        return expandedS
+    }
+    var probe: BubbleVisibilityProbe!
+    let scheduler = FollowTickScheduler(
+        runTick: {
+            let tickIndex = ticks
+            let offset = preProbeOffsets[min(tickIndex, preProbeOffsets.count - 1)]
+            ticks += 1
+            let probeTime = clock.withLock { value -> TimeInterval in
+                value += offset
+                return value
+            }
+            probeAttempts.append(probeTime)
+            _ = FollowLayoutPass.placeDock(
+                mascot: mascot,
+                candidates: [mascot, bubble],
+                bubbleProbe: probe,
+                frameSink: { _, _ in true }
+            )
+            let capturedAt = probe.lock.withLock { $0.lastCapture }
+            if capturedAt != lastObservedCapture {
+                lastObservedCapture = capturedAt
+                captureStarts.append(capturedAt.timeIntervalSince(baseDate))
+            }
+            if tickIndex < postProbeOffsets.count {
+                let postProbeOffset = postProbeOffsets[tickIndex]
+                clock.withLock { $0 += postProbeOffset }
+            }
+            return .stable
+        },
+        makeDisplayLink: { _, _ in nil },
+        canUseDisplayLink: { false },
+        maximumFramesPerSecond: { 60 },
+        monotonicNow: { clock.withLock { $0 } },
+        stableDelayHint: { probe.takePendingRetryDelay() },
+        makeTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            timers.append(timer)
+            return timer
+        }
+    )
+    probe = BubbleVisibilityProbe(
+        now: { baseDate.addingTimeInterval(clock.withLock { $0 }) },
+        canCapture: { true },
+        capturer: capturer
+    )
+    scheduler.start()
+    scheduler.requestWake()
+    _ = waitPumpingMain { ticks == 1 }
+
+    for expectedTicks in 2...preProbeOffsets.count {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        if ticks >= expectedTicks { continue }
+        if !(keepFirstCaptureInFlight && expectedTicks == 2) {
+            _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+        }
+        guard let timer = timers.last(where: { !$0.invalidated }) else { break }
+        firedIntervals.append(timer.interval)
+        clock.withLock { $0 += timer.interval }
+        timer.fire()
+        _ = waitPumpingMain { ticks == expectedTicks }
+        if keepFirstCaptureInFlight && expectedTicks == 2 {
+            releaseFirstCapture.withLock { $0 = true }
+        }
+    }
+    _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+    let activeIntervals = timers.filter { !$0.invalidated }.map { $0.interval }
+    scheduler.stop()
+    return ProductionProbeCadenceResult(
+        probeAttempts: probeAttempts,
+        captureStarts: captureStarts,
+        firedTimerIntervals: firedIntervals,
+        remainingActiveTimerIntervals: activeIntervals,
+        tickCount: ticks,
+        captureCallCount: captureCalls.withLock { $0 }
+    )
+}
+
+func cadenceTimesEqual(_ actual: [TimeInterval], _ expected: [TimeInterval]) -> Bool {
+    actual.count == expected.count
+        && zip(actual, expected).allSatisfy { abs($0 - $1) < 0.000_001 }
+}
+
+let alignedProbeCadence = productionProbeCadence(preProbeOffsets: [0, 0])
+check("T-sch4a phase-aligned生产probe保持0.1s capture cadence",
+      cadenceTimesEqual(alignedProbeCadence.captureStarts, [0, 0.1])
+        && alignedProbeCadence.tickCount == 2,
+      "attempts=\(alignedProbeCadence.probeAttempts) captures=\(alignedProbeCadence.captureStarts)")
+
+let offsetProbeCadence = productionProbeCadence(preProbeOffsets: [0.02, 0.01, 0])
+check("T-sch4b .020→.110 due miss仅等待剩余probe delay",
+      cadenceTimesEqual(offsetProbeCadence.probeAttempts, [0.02, 0.11, 0.12])
+        && cadenceTimesEqual(offsetProbeCadence.captureStarts, [0.02, 0.12])
+        && offsetProbeCadence.firedTimerIntervals.count == 2
+        && abs(offsetProbeCadence.firedTimerIntervals[1] - 0.01) < 0.000_001
+        && offsetProbeCadence.tickCount == 3
+        && offsetProbeCadence.remainingActiveTimerIntervals.count == 1,
+      "attempts=\(offsetProbeCadence.probeAttempts) captures=\(offsetProbeCadence.captureStarts) "
+        + "fired=\(offsetProbeCadence.firedTimerIntervals) active=\(offsetProbeCadence.remainingActiveTimerIntervals)")
+
+let consumedProbeDelay = productionProbeCadence(
+    preProbeOffsets: [0.02, 0.01, 0],
+    postProbeOffsets: [0, 0.02, 0]
+)
+check("T-sch4c probe后工作跨due→完成后立即latest-only",
+      cadenceTimesEqual(consumedProbeDelay.probeAttempts, [0.02, 0.11, 0.13])
+        && cadenceTimesEqual(consumedProbeDelay.captureStarts, [0.02, 0.13])
+        && consumedProbeDelay.firedTimerIntervals.count == 1
+        && consumedProbeDelay.tickCount == 3
+        && consumedProbeDelay.remainingActiveTimerIntervals.count == 1,
+      "attempts=\(consumedProbeDelay.probeAttempts) captures=\(consumedProbeDelay.captureStarts) "
+        + "fired=\(consumedProbeDelay.firedTimerIntervals) active=\(consumedProbeDelay.remainingActiveTimerIntervals)")
+
+let inFlightProbeCadence = productionProbeCadence(
+    preProbeOffsets: [0.02, 0.01],
+    keepFirstCaptureInFlight: true
+)
+check("T-sch4d in-flight不留hint、不加retry source且无queued backlog",
+      cadenceTimesEqual(inFlightProbeCadence.probeAttempts, [0.02, 0.11])
+        && cadenceTimesEqual(inFlightProbeCadence.captureStarts, [0.02])
+        && inFlightProbeCadence.captureCallCount == 1
+        && inFlightProbeCadence.tickCount == 2
+        && inFlightProbeCadence.remainingActiveTimerIntervals.count == 1
+        && abs((inFlightProbeCadence.remainingActiveTimerIntervals.first ?? 0) - 0.09) < 0.000_001,
+      "attempts=\(inFlightProbeCadence.probeAttempts) captures=\(inFlightProbeCadence.captureStarts) "
+        + "calls=\(inFlightProbeCadence.captureCallCount) ticks=\(inFlightProbeCadence.tickCount) "
+        + "active=\(inFlightProbeCadence.remainingActiveTimerIntervals)")
+
+let hintClock = OSAllocatedUnfairLock(initialState: Date(timeIntervalSince1970: 13_000))
+let hintCanCapture = OSAllocatedUnfairLock(initialState: true)
+let hintProbe = BubbleVisibilityProbe(
+    now: { hintClock.withLock { $0 } },
+    canCapture: { hintCanCapture.withLock { $0 } },
+    capturer: { _ in expandedS }
+)
+let hintCandidate = mkw(701, layer: 3, bubbleForCollapse)
+hintProbe.probe(candidates: [hintCandidate])
+_ = waitPumpingMain { !hintProbe.lock.withLock { $0.inFlight } }
+hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.05) }
+hintProbe.probe(candidates: [hintCandidate])
+hintProbe.reset()
+let hintAfterReset = hintProbe.takePendingRetryDelay()
+
+hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.11) }
+hintProbe.probe(candidates: [hintCandidate])
+_ = waitPumpingMain { !hintProbe.lock.withLock { $0.inFlight } }
+hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.15) }
+hintProbe.probe(candidates: [hintCandidate])
+hintProbe.probe(candidates: [])
+let hintAfterEmpty = hintProbe.takePendingRetryDelay()
+
+hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.22) }
+hintProbe.probe(candidates: [hintCandidate])
+_ = waitPumpingMain { !hintProbe.lock.withLock { $0.inFlight } }
+hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.26) }
+hintProbe.probe(candidates: [hintCandidate])
+hintCanCapture.withLock { $0 = false }
+hintProbe.probe(candidates: [hintCandidate])
+let hintAfterPermissionLoss = hintProbe.takePendingRetryDelay()
+check("T-sch4e reset/空候选/权限false均不残留retry hint",
+      hintAfterReset == nil && hintAfterEmpty == nil && hintAfterPermissionLoss == nil,
+      "reset=\(String(describing: hintAfterReset)) empty=\(String(describing: hintAfterEmpty)) "
+        + "permission=\(String(describing: hintAfterPermissionLoss))")
+
 // T-bv39: 生产 FollowLayoutPass 必须贯穿候选分类→probe cache→可见障碍→frame sink。
 // 已有 stable one-shot 尚未触发时，visible→hidden wake 应提前执行且只执行一次完整 tick。
 var transitionTime = Date(timeIntervalSince1970: 11_000)

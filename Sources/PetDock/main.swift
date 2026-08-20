@@ -53,7 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return dock.makeDisplayLink(target: target, selector: selector)
             },
             canUseDisplayLink: { [dock] in dock.isDisplayLinkEligible },
-            maximumFramesPerSecond: { [dock] in dock.maximumFramesPerSecond }
+            maximumFramesPerSecond: { [dock] in dock.maximumFramesPerSecond },
+            stableDelayHint: { [weak self] in self?.bubbleProbe.takePendingRetryDelay() }
         )
     }()
     private lazy var bubbleProbe = BubbleVisibilityProbe(

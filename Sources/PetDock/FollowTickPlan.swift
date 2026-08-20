@@ -113,6 +113,7 @@ final class FollowTickScheduler: NSObject {
     private let canUseDisplayLink: () -> Bool
     private let maximumFramesPerSecond: () -> Int
     private let monotonicNow: () -> TimeInterval
+    private let stableDelayHint: () -> TimeInterval?
     private let makeTimer: TimerFactory
     private var coalescer: FollowTickCoalescer!
     private var timer: FollowTickTimer?
@@ -127,6 +128,7 @@ final class FollowTickScheduler: NSObject {
         canUseDisplayLink: @escaping () -> Bool,
         maximumFramesPerSecond: @escaping () -> Int,
         monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        stableDelayHint: @escaping () -> TimeInterval? = { nil },
         makeTimer: @escaping TimerFactory = FollowTickScheduler.makeRunLoopTimer
     ) {
         self.runTick = runTick
@@ -134,6 +136,7 @@ final class FollowTickScheduler: NSObject {
         self.canUseDisplayLink = canUseDisplayLink
         self.maximumFramesPerSecond = maximumFramesPerSecond
         self.monotonicNow = monotonicNow
+        self.stableDelayHint = stableDelayHint
         self.makeTimer = makeTimer
         super.init()
         self.coalescer = FollowTickCoalescer { [weak self] in self?.performTick() }
@@ -170,15 +173,19 @@ final class FollowTickScheduler: NSObject {
         let tickStartedAt = monotonicNow()
         let nextState = runTick()
         guard !stopped else { return }
-        configure(for: nextState, tickStartedAt: tickStartedAt)
+        configure(for: nextState, tickStartedAt: tickStartedAt, stableRetryAfter: stableDelayHint())
     }
 
-    private func configure(for state: FollowState, tickStartedAt: TimeInterval?) {
+    private func configure(
+        for state: FollowState,
+        tickStartedAt: TimeInterval?,
+        stableRetryAfter: TimeInterval? = nil
+    ) {
         switch state {
         case .moving:
             startMovingSourceIfNeeded()
         case .stable:
-            scheduleStableTick(firstAnchor: tickStartedAt)
+            scheduleStableTick(firstAnchor: tickStartedAt, retryAfter: stableRetryAfter)
         case .hidden:
             scheduleOneShot(after: Follower.hiddenInterval)
         }
@@ -212,15 +219,16 @@ final class FollowTickScheduler: NSObject {
         activeRepeatingFPS = fps
     }
 
-    private func scheduleStableTick(firstAnchor: TimeInterval?) {
+    private func scheduleStableTick(firstAnchor: TimeInterval?, retryAfter: TimeInterval?) {
         let now = monotonicNow()
         let deadline = (firstAnchor ?? now) + Follower.stableInterval
-        guard now < deadline else {
+        let delay = min(deadline - now, retryAfter ?? .greatestFiniteMagnitude)
+        guard delay > 0 else {
             invalidateSources()
             coalescer.requestWake()
             return
         }
-        scheduleOneShot(after: deadline - now)
+        scheduleOneShot(after: delay)
     }
 
     private func scheduleOneShot(after interval: TimeInterval) {
