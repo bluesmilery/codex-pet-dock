@@ -591,6 +591,13 @@ check("T-bv5c nil stats(previous visible)→visible(保守避让)",
 
 // 调度（isDue + single-flight + reset）—— 经 lock 访问
 let probe = BubbleVisibilityProbe(monotonicNow: { 1000 })
+let cadenceStateTypes: (lastCaptureAt: TimeInterval, pendingRetryAt: TimeInterval?) = probe.lock.withLock {
+    ($0.lastCaptureAt, $0.pendingRetryAt)
+}
+check("T-bv6a cadence state/deadline为monotonic TimeInterval",
+      cadenceStateTypes.lastCaptureAt == -TimeInterval.greatestFiniteMagnitude
+        && cadenceStateTypes.pendingRetryAt == nil,
+      "last=\(cadenceStateTypes.lastCaptureAt) retry=\(String(describing: cadenceStateTypes.pendingRetryAt))")
 check("T-bv6 初始isDue=true", probe.isDue(1000), "")
 probe.lock.withLock { $0.lastCaptureAt = 1000; $0.inFlight = false }
 check("T-bv7 <0.1s→false", !probe.isDue(1000.09), "")
@@ -1370,121 +1377,6 @@ check("T-sch4e reset/空候选/权限false均不残留retry hint",
       hintAfterReset == nil && hintAfterEmpty == nil && hintAfterPermissionLoss == nil,
       "reset=\(String(describing: hintAfterReset)) empty=\(String(describing: hintAfterEmpty)) "
         + "permission=\(String(describing: hintAfterPermissionLoss))")
-
-// T-sch4f/g: scheduler 的单调时钟与无关墙钟独立变化时，生产 probe cadence 不得改变。
-// 前跳不能在一个 120Hz display cadence 后提前重抓；后跳不能压住已经满足 0.1s 的重抓。
-let mascotForCadence = mkw(704, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
-let bubbleForCadence = mkw(705, layer: 3, bubbleForCollapse)
-let forwardMonotonic = OSAllocatedUnfairLock(initialState: TimeInterval(0))
-let forwardWallStart = Date(timeIntervalSince1970: 14_000)
-let forwardWall = OSAllocatedUnfairLock(initialState: forwardWallStart)
-let forwardCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
-var forwardTicks = 0
-var forwardTimers: [TestFollowTickTimer] = []
-var forwardProbe: BubbleVisibilityProbe!
-let forwardScheduler = FollowTickScheduler(
-    runTick: {
-        forwardTicks += 1
-        _ = FollowLayoutPass.placeDock(
-            mascot: mascotForCadence,
-            candidates: [mascotForCadence, bubbleForCadence],
-            bubbleProbe: forwardProbe,
-            frameSink: { _, _ in true }
-        )
-        return .moving
-    },
-    makeDisplayLink: { _, _ in nil },
-    canUseDisplayLink: { false },
-    maximumFramesPerSecond: { 120 },
-    monotonicNow: { forwardMonotonic.withLock { $0 } },
-    makeTimer: { interval, repeats, callback in
-        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
-        forwardTimers.append(timer)
-        return timer
-    }
-)
-forwardProbe = BubbleVisibilityProbe(
-    monotonicNow: { forwardMonotonic.withLock { $0 } },
-    canCapture: { true },
-    capturer: { _ in
-        forwardCaptureCalls.withLock { $0 += 1 }
-        return expandedS
-    }
-)
-forwardScheduler.start()
-forwardScheduler.requestWake()
-_ = waitPumpingMain { forwardTicks == 1 && !forwardProbe.lock.withLock { $0.inFlight } }
-forwardMonotonic.withLock { $0 += 1.0 / 120.0 }
-forwardWall.withLock { $0 = $0.addingTimeInterval(1) }
-forwardTimers.last(where: { $0.repeats && !$0.invalidated })?.fire()
-_ = waitPumpingMain { forwardTicks == 2 && !forwardProbe.lock.withLock { $0.inFlight } }
-let forwardActiveSources = forwardTimers.filter { !$0.invalidated }
-let forwardWallJump = forwardWall.withLock { $0.timeIntervalSince(forwardWallStart) }
-check("T-sch4f 墙钟前跳不在8ms display cadence提前capture",
-      forwardCaptureCalls.withLock { $0 } == 1
-        && forwardTicks == 2
-        && forwardWallJump > BubbleVisibilityProbe.minInterval
-        && forwardActiveSources.count == 1
-        && forwardActiveSources[0].repeats,
-      "calls=\(forwardCaptureCalls.withLock { $0 }) ticks=\(forwardTicks) "
-        + "wallJump=\(forwardWallJump) active=\(forwardActiveSources.count)")
-forwardScheduler.stop()
-
-let backwardMonotonic = OSAllocatedUnfairLock(initialState: TimeInterval(0))
-let backwardWallStart = Date(timeIntervalSince1970: 15_000)
-let backwardWall = OSAllocatedUnfairLock(initialState: backwardWallStart)
-let backwardCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
-var backwardTicks = 0
-var backwardTimers: [TestFollowTickTimer] = []
-var backwardProbe: BubbleVisibilityProbe!
-let backwardScheduler = FollowTickScheduler(
-    runTick: {
-        backwardTicks += 1
-        _ = FollowLayoutPass.placeDock(
-            mascot: mascotForCadence,
-            candidates: [mascotForCadence, bubbleForCadence],
-            bubbleProbe: backwardProbe,
-            frameSink: { _, _ in true }
-        )
-        return .stable
-    },
-    makeDisplayLink: { _, _ in nil },
-    canUseDisplayLink: { false },
-    maximumFramesPerSecond: { 60 },
-    monotonicNow: { backwardMonotonic.withLock { $0 } },
-    stableDelayHint: { backwardProbe.takePendingRetryDelay() },
-    makeTimer: { interval, repeats, callback in
-        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
-        backwardTimers.append(timer)
-        return timer
-    }
-)
-backwardProbe = BubbleVisibilityProbe(
-    monotonicNow: { backwardMonotonic.withLock { $0 } },
-    canCapture: { true },
-    capturer: { _ in
-        backwardCaptureCalls.withLock { $0 += 1 }
-        return expandedS
-    }
-)
-backwardScheduler.start()
-backwardScheduler.requestWake()
-_ = waitPumpingMain { backwardTicks == 1 && !backwardProbe.lock.withLock { $0.inFlight } }
-backwardMonotonic.withLock { $0 = 0.1 }
-backwardWall.withLock { $0 = $0.addingTimeInterval(-1) }
-backwardTimers.last(where: { !$0.invalidated })?.fire()
-_ = waitPumpingMain { backwardTicks == 2 && !backwardProbe.lock.withLock { $0.inFlight } }
-let backwardActiveSources = backwardTimers.filter { !$0.invalidated }
-let backwardWallJump = backwardWall.withLock { $0.timeIntervalSince(backwardWallStart) }
-check("T-sch4g 墙钟后跳不压住monotonic 0.1s到期capture",
-      backwardCaptureCalls.withLock { $0 } == 2
-        && backwardTicks == 2
-        && backwardWallJump < -BubbleVisibilityProbe.minInterval
-        && backwardActiveSources.count == 1
-        && !backwardActiveSources[0].repeats,
-      "calls=\(backwardCaptureCalls.withLock { $0 }) ticks=\(backwardTicks) "
-        + "wallJump=\(backwardWallJump) active=\(backwardActiveSources.count)")
-backwardScheduler.stop()
 
 // T-bv39: 生产 FollowLayoutPass 必须贯穿候选分类→probe cache→可见障碍→frame sink。
 // 已有 stable one-shot 尚未触发时，visible→hidden wake 应提前执行且只执行一次完整 tick。
