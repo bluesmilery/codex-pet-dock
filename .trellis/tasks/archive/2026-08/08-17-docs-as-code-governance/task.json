@@ -1,0 +1,31 @@
+{
+  "id": "docs-as-code-governance",
+  "name": "docs-as-code-governance",
+  "title": "建立 docs-as-code 管理门禁",
+  "description": "为项目文档增加统一索引、Trellis 文档规范和可重复的 docs-check 质量门禁",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "docs",
+  "package": null,
+  "priority": "P2",
+  "creator": "bluesmilery",
+  "assignee": "bluesmilery",
+  "createdAt": "2026-08-17",
+  "completedAt": "2026-08-17",
+  "branch": "codex/docs-as-code-governance-0817",
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_path": "<worktree>/.codex/worktrees/codex-pet-dock-docs-as-code-governance-0817",
+    "accepted_commit": "3cecbcdf3cd4c67e491159ca3898db59e8b83bf6",
+    "review_status": "approved",
+    "qa_status": "accepted"
+  }
+}

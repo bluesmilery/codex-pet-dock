@@ -2,7 +2,7 @@
 
 本项目使用 Trellis **0.6.14** 管理开发流程。当前仓库的活动平台是 **Codex**：`trellis platforms` 应显示 Codex，并指向 `.codex`；Codex 平台同时使用共享的 `.agents/skills/`。
 
-本文只说明项目中已跟踪的 Trellis 结构、项目定制点和本地状态。`.claude/` 是 Trellis 支持的其他可选平台，不是本项目当前必需的平台，也不应被当作仓库配置提交。
+本文只说明项目中已跟踪的 Trellis 结构、项目定制点和本地状态。当前项目只维护 Codex 平台；未实际启用其他平台时，不生成或维护对应的平台文件。
 
 ## 新克隆初始化
 
@@ -54,15 +54,15 @@ trellis update --create-new
 
 ## 本地状态与忽略边界
 
-下列内容由初始化或任务流程在本机生成，不属于项目配置：
+下列内容由初始化或任务流程在本机生成，属于本机 runtime/身份状态，不纳入项目共享配置：
 
 - `.trellis/.developer`：当前开发者身份；
-- `.trellis/workspace/<developer>/`：journal、session 记录等开发者机器状态；
 - `.trellis/.runtime/`、`.trellis/.current-task`：会话与当前任务指针；
-- `.trellis/spec/backend/`、`.trellis/spec/frontend/`：CLI 可能重新生成的默认 web spec，本项目只跟踪 `spec/macos/` 与 `spec/guides/`；
-- 根目录 `.claude/`（若某贡献者启用其他平台）：由根 `.gitignore` 忽略，不能提交。
+- 临时文件、备份目录和 Python cache。
 
-上述目录已由仓库的 Trellis / Git ignore 规则覆盖。`.trellis/tasks/` 是任务工作流产生的本地任务资料，当前不属于本次文档候选；它可能以未跟踪状态出现，提交时不要将其加入候选。项目配置、源码和公开文档仍按正常 Git 跟踪。
+上述本机状态由仓库的 Trellis / Git ignore 规则覆盖。`.trellis/spec/`、`.trellis/tasks/`、`.trellis/workspace/`、`workflow.md`、`config.yaml` 和脚本是项目共享资料，按正常 Git 管理。纳入候选前必须做内容级隐私扫描：真实本机路径、用户名和其他本机标识替换为 `<user>`、`<repo>`、`<worktree>` 等稳定占位符，且不得包含本机 auth/token/邮箱/认证数据或会话正文；公开 Git 身份可以保留。扫描只报告文件名和计数，不回显疑似秘密原值。
+
+`config.yaml` 的 `session_auto_commit: true` 允许 Trellis 自动记录 task archive 与 workspace journal；自动提交不绕过上述脱敏和审查。官方 `.trellis/.gitignore` 只负责本机身份、runtime、临时和缓存路径，不能用目录忽略代替内容治理。
 
 ## 文档门禁与 Docs Impact
 
@@ -87,7 +87,7 @@ trellis update --dry-run
 git status --short
 ```
 
-检查结果应显示 Codex active，且工作树只包含本次任务明确允许的文件。不要提交开发者身份、session/journal、runtime 指针或平台私有配置；不要把本地认证文件、会话正文或用户路径写入文档。
+检查结果应显示 Codex active，且工作树只包含本次任务明确允许的文件。不要提交 `.trellis/.developer`、`.trellis/.current-task`、`.trellis/.runtime/` 或平台私有配置；task/workspace 共享记录应纳入审查后的候选。不要把本地认证文件、会话正文或用户路径写入被跟踪内容。
 
 ## Runtime 隐私边界
 

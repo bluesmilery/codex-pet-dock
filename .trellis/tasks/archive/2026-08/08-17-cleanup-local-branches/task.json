@@ -1,0 +1,32 @@
+{
+  "id": "cleanup-local-branches",
+  "name": "cleanup-local-branches",
+  "title": "审计并清理本地分支与 worktree",
+  "description": "审计 main/dev 之外的本地分支、独有提交与脏 worktree，保留必要内容后安全清理",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "git",
+  "package": null,
+  "priority": "P1",
+  "creator": "bluesmilery",
+  "assignee": "bluesmilery",
+  "createdAt": "2026-08-17",
+  "completedAt": "2026-08-17",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "review_status": "APPROVED",
+    "qa_status": "ACCEPTED",
+    "accepted_commit": "3cecbcdf3cd4c67e491159ca3898db59e8b83bf6",
+    "spec_update": "not-needed: one-off local Git cleanup; existing AGENTS.md lifecycle rules already cover it",
+    "cleanup_result": "67 branches and 12 worktrees removed; stash retained; protected refs unchanged"
+  }
+}

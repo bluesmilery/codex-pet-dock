@@ -1,0 +1,4 @@
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"Verify the candidate contains no local paths, local usernames, secrets, authentication data, or raw session content."}
+{"file":".trellis/spec/macos/documentation-guidelines.md","reason":"Verify all directly affected governance documentation is synchronized and passes documentation checks."}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"Verify the frozen SHA satisfies all required build, test, warning, Review, and QA gates."}
+{"file":".trellis/tasks/08-20-restore-official-trellis-git-policy/research/current-state.md","reason":"Compare implementation results against the verified official baseline and pre-migration inventory."}

@@ -1,0 +1,4 @@
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"Review 五项隐私不变量与禁止读取范围"}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"Review/QA 门禁、TDD 证据与真机未验证边界"}
+{"file":".trellis/spec/macos/documentation-guidelines.md","reason":"README、架构文档、验证文档和 spec 的单一事实源"}
+{"file":"docs/verification/dev-candidate.md","reason":"最终 dev 候选验证状态与未验证项事实源"}

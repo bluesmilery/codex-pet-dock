@@ -1,0 +1,4 @@
+{"file":".trellis/spec/macos/directory-structure.md","reason":"新增 tools/tests/docs 文件须符合项目目录与最小文件职责"}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"实现需保持 release build、Swift 测试和独立验收门禁"}
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"checker 与公开文档必须遵守敏感路径和窗口元数据边界"}
+{"file":"docs/development/trellis.md","reason":"文档治理需与当前 Trellis 0.6.14 Codex 接入事实一致"}

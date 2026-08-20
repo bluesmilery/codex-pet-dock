@@ -1,0 +1,5 @@
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"五项修复的隐私硬边界、全历史扫描与禁止读取范围"}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"TDD、0 warning、完整测试和 Docs Impact 门禁"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trellis hooks、Swift 应用、文件权限与子进程环境跨层数据流"}
+{"file":"docs/architecture/data-layer.md","reason":"Codex resolver、app-server 环境和 token cache 当前事实源"}
+{"file":"docs/development/trellis.md","reason":"Trellis 生成文件、runtime 与本地身份边界"}

@@ -1,0 +1,29 @@
+{
+  "id": "optimize-review-loop",
+  "name": "optimize-review-loop",
+  "title": "优化开发审查闭环",
+  "description": "按 L0/L1/L2 风险分级优化 Review 闭环，前移准入门禁、批量审查修复、两轮熔断并后移正式 QA。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "Trellis-managed surface: only .trellis/workflow.md; persistent project rules in AGENTS.md and human-facing guidance in docs/development/trellis.md; no .trellis/spec, .agents, .codex, hooks, scripts, tests, or application changes",
+  "package": null,
+  "priority": "P2",
+  "creator": "bluesmilery",
+  "assignee": "bluesmilery",
+  "createdAt": "2026-08-19",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "delivery_path": "L1",
+    "docs_impact": "update"
+  }
+}

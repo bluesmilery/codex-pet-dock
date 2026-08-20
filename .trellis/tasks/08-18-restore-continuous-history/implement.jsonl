@@ -1,0 +1,4 @@
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"历史净化、禁止读取、公开分发和运行时隐私硬边界"}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"0 warning、测试、Review先于QA及SHA绑定门禁"}
+{"file":".trellis/tasks/08-18-restore-continuous-history/research/history-privacy-audit.md","reason":"已冻结的原GitHub历史完整隐私findings与restricted fixture边界"}
+{"file":".trellis/tasks/08-18-restore-continuous-history/research/replay-map.md","reason":"原链、连续开发链、orphan链的完整source mapping与重放顺序"}

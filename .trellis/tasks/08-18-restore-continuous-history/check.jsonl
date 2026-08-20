@@ -1,0 +1,4 @@
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"Review候选可达历史隐私、禁止读取范围和公开边界"}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"Review与QA顺序、P0/P1/P2、构建测试及真机未验证门禁"}
+{"file":".trellis/tasks/08-18-restore-continuous-history/research/history-privacy-audit.md","reason":"核对每类offender是否从首次引入点净化且无遗漏"}
+{"file":".trellis/tasks/08-18-restore-continuous-history/research/replay-map.md","reason":"核对80行映射、79个候选commit、重复根skip和tree允许差异"}
