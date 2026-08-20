@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/macos/index.md", "reason": "macOS Swift AppKit project scope and build/test entrypoint"}
+{"file": ".trellis/spec/macos/appkit-conventions.md", "reason": "NSPanel main-thread and pixel-alignment conventions"}
+{"file": ".trellis/spec/macos/quality-guidelines.md", "reason": "TDD, minimal-change, release build, test, and candidate gates"}
+{"file": ".trellis/spec/macos/directory-structure.md", "reason": "UI and test file ownership boundaries"}
