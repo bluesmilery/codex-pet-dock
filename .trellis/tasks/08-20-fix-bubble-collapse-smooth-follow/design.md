@@ -2,23 +2,29 @@
 
 ## Scope and boundaries
 
-本次只改 follow 调度、气泡探测节流/失效唤醒、Follower 稳定判定、对应测试与事实文档。现有窗口选择、几何放置、数据刷新、主题和权限请求策略保持不变。
+本轮从 `d8538a5` 的已审候选继续，只改 BubbleVisibility 捕获结果语义、DockPanel 显式 frame 插值、最小 main 接线、对应 UI 测试和直接受影响的事实文档。现有窗口选择/障碍几何、0.1 秒 cadence、FollowTickScheduler、Follower 稳定判定、数据刷新、主题和权限请求策略保持不变。
 
 ## Root-cause model
 
 ### Bubble collapse
 
-生产链为：follow tick 枚举候选 → `BubbleVisibilityProbe.probe` 受 0.5 秒最小间隔约束 → 后台 ScreenCaptureKit 捕获/分类 → cache 变化通知 → 主线程 `schedule(0)` → 新 tick 重新计算障碍与 frame。
+当前生产链为：follow tick 枚举 CGWindowList 候选 → `BubbleVisibilityProbe.probe` 按 0.1 秒单调 cadence 发起后台捕获 → ScreenCaptureKit 清单/截图/alpha 分类 → cache 变化通知 → latest-only 主线程 tick → `FollowLayoutPass` 重算障碍 → DockPanel 写回 frame。
 
-上一版测试证明了“成功分类后的通知桥接”，但没有证明端到端延迟或真实调度器替换已有 timer 后执行完整 tick。用户可见延迟仍包含探测等待和捕获耗时；若 TCC/capture 失败则按契约一直保守 visible，不能承诺回位。
+真机复测显示底座在完整隐藏后仍随宠物改变绝对位置，却保持旧避让间距。这使“scheduler 未 tick / frame 完全 stale”的后验概率很低，最强假设是障碍仍被判 visible。当前 `BubbleCapturer` 的 `BubbleAlphaStats?` 把以下状态压成同一个 `nil`：SCK 清单获取失败、清单成功但目标 WID 不存在、截图失败。分类器对所有 `nil` 都返回 visible；若 CGWindowList 在窗口 teardown 后短暂保留旧几何，`knownWids` 仍包含该 WID，旧障碍便不会失效。
 
-真机复测补充了一个与像素折叠不同的失败形态：完全隐藏会话 UI 后，底座继续跟随宠物但保持旧避让间距。这反证“调度器完全未 tick”是主因，更符合障碍仍被判定 visible。当前 `BubbleCapturer` 用一个可选 `BubbleAlphaStats?` 同时表达目标不在成功取得的 SCK 窗口清单、清单获取失败、截图失败和像素统计失败；`nil` 又统一按保守 visible 分类。最强假设是 CGWindowList 与 SCK 生命周期短暂不同步时，已消失目标被这个可选值契约保活。实现前必须用独立红测把该假设与几何筛选错误、scheduler/frame stale 区分开；若红测不能复现，停止并回到规划，不改 alpha 阈值。
+实现前先用生产链红测区分该假设与“另一个透明 wrapper/control 仍满足障碍几何”。只有红测证明“同一 CG 候选 + 先成功捕获 + 后续 SCK 清单成功但目标缺失”会保留 stale obstacle，才实施 typed outcome；否则停止并重查候选几何，不改 alpha 阈值。
 
-本次保留 one-shot screenshot 架构和 0.1 秒 cadence。捕获边界改为带来源语义的结果：成功取得 SCK 窗口清单但目标 WID 不存在是 `.targetMissing`，可使当前同身份候选 hidden；权限/清单/截图/统计失败是 `.unavailable`，继续保守 visible；成功统计是 `.stats`，沿用现有 alpha 分类。异步结果仍受 generation、当前候选身份和 strict single-flight 约束。
+最小捕获契约：
+
+- `.stats(BubbleAlphaStats)`：标记该 WID 已成功观察，并沿用现有滞回分类。
+- `.targetMissing`：仅当该 WID 在当前 generation 内已有成功 `.stats` 观察时分类 hidden；从未成功观察的目标缺失仍按 unavailable/visible，避免把不支持捕获的可见窗口误判为隐藏。
+- `.unavailable`：TCC、macOS 13、SCK 清单获取、截图或统计失败，始终保守 visible。
+
+默认 capturer 只有在 `SCShareableContent` 调用成功后找不到目标 WID 才返回 `.targetMissing`；所有 `try?`/截图失败路径返回 `.unavailable`。成功观察集合与 cache 一起在 reset、候选消失、generation 变化和权限 false 路径清理。异步写回继续检查 generation 和当前 `knownWids`，不新增第二个 capture 或 Timer。
 
 ## Follow scheduler
 
-引入职责单一的 follow scheduler，区分三类输入：
+保留 `d8538a5` 已实现的职责单一 follow scheduler，其三类输入为：
 
 1. `moving`：macOS 14+ 从底座 `NSWindow` 获取 `CADisplayLink`，随窗口跨屏自动切换节拍；每个 display callback 请求 coalesced main tick。
 2. `stable` / `hidden`：保留低频 one-shot Timer，分别按 Follower 决策的 0.1 秒/1 秒触发。
@@ -38,30 +44,40 @@ Window-bound display link 只有在 dock `isVisible && screen != nil` 时可用�
 
 ## Bounded linear frame interpolation
 
-现有 `DockPanel.placeBelow` 在每次完整 tick 中直接 `setFrame` 到最新目标，display link 只提高采样/写回频率，视觉仍是离散跳到采样点。新增一个主线程、纯时间驱动的短时线性段：保存当前渲染 frame、最新目标 frame、段起点和单调起止时间；每个 display beat 按 `lerp(start, target, progress)` 写回。目标更新时从当下已渲染位置重定向到最新目标，不排队历史目标；进度到 1 后精确 snap，禁止过冲。
+现有 `DockPanel.placeBelow` 每次完整 tick 直接 `setFrame` 到最新目标；display link 只提高采样频率，视觉仍是离散跳到采样点。新增放在 `DockPanel.swift` 内的纯值 `DockFrameInterpolator`，不创建独立计时器，不使用 `NSAnimationContext`：
 
-插值上限由用户确认，推荐 32ms。隐藏/显示、跨屏失去有效 screen、几何返回 nil，以及气泡 hidden 后的安全复位可直接 snap，避免动画延迟正确避让。该方案不预测宠物位置，不使用隐式 AppKit animation，也不改变窗口枚举频率；代价是最多一个配置窗口的视觉拖尾，必须在真机拖动体感中单独验收。
+- 状态只保存 `renderedFrame`、`segmentStartFrame`、`targetFrame`、`segmentStartedAt`，时间源为注入的单调时钟。
+- 线性段固定最大 `0.032s`。求值为 `lerp(start, target, clamp((now-startedAt)/0.032, 0...1))`；`now >= end` 必须精确返回 target，禁止过冲。
+- 宠物发生实质位移且目标变化时，先在 `now` 求出旧段当前 frame，再从该 frame 重定向到最新目标；历史目标不入队。
+- `Follower.shouldSetFrame == true` 表示宠物位移引起的 retarget。`shouldSetFrame == false` 且目标与当前 segment target 相同，则继续采样未完成的段；若目标不同，说明障碍/屏幕/布局状态变化，立即 snap 而不动画。
+- 首次显示、隐藏、无有效 screen、几何返回 nil、跨屏 screen identity 变化，以及气泡/控制障碍导致的目标变化都 reset/snap。`hideIfNeeded` 清空插值状态。
+- 当前 moving→stable 至少保留约 66.7ms 的 display cadence，长于 32ms，因此最后一个插值段可在降频前完成。实际写回发生在下一个可用 display beat；主线程忙时不补历史帧。
+
+`DockPanel.placeBelow` 增加最小的 `movementChanged` 与单调 `now` 输入，先计算唯一目标 Quartz/AppKit frame，再由 interpolator 决定本拍写回 frame。`main.swift` 只传入已有 `d.shouldSetFrame` 和共享 `followMonotonicNow()`；`DetailPanel` 继续读取实际 `dock.frame`，自然跟随已插值后的 frame。
+
+32ms 是最大视觉拖尾而非额外 sleep。它在 60 Hz 约两个显示周期、120 Hz 约四个周期，可柔化 CGWindowList 离散更新；代价是持续拖动时约一个上限窗口的空间滞后，须在真机体感中单独验收。
 
 ## Follower state semantics
 
-现有 `stableCount` 把稳定判定绑定到 tick 次数；切换到 60/120 Hz 或可变刷新后，同样的 4 tick 分别约为 67/33ms，会改变行为。将稳定条件改为基于单调时钟的连续无实质位移时长，并用现有名义 60 Hz 下 `4 / 60 ≈ 66.7ms` 作为兼容阈值：
+`d8538a5` 已把旧 `stableCount` 改为基于单调时钟的连续无实质位移时长，并保留名义 60 Hz 下 `4 / 60 ≈ 66.7ms` 的兼容阈值。本轮保持以下语义不变：
 
 - 首次捕获/发生实质位移：清空 stable 起点，进入 moving；
 - 未发生实质位移：记录或沿用 stable 起点；
 - 连续稳定达到既定时间阈值后进入 stable；
-- 测试注入时间，覆盖 60、120 和不规则节拍。
+- 既有测试继续覆盖 60、120 和不规则节拍。
 
 实际状态以时长为准，日志只记录非敏感 cadence/state，不记录窗口身份或坐标。
 
 ## Bubble visibility scheduling
 
-`BubbleVisibilityProbe` 保留 generation、knownWids、single-flight 和保守 nil 分类。受控 cadence 只改变“何时允许下一次捕获”，不改变分类阈值或缓存语义：
+`BubbleVisibilityProbe` 保留 generation、knownWids、single-flight 和保守 unavailable 分类。0.1 秒 cadence 不变：
 
 - 当前候选包含 visible/未分类气泡：下一次 probe 最迟 0.1 秒可启动；
 - 捕获在途：新请求直接合并；
 - 分类结果变化：只触发一次 `wakeNow`；
 - 候选消失：同一枚举 tick 内 knownWids 立即生效并布局；
-- TCC false/capture nil：不声称收起已识别。
+- TCC false/capture unavailable：不声称收起已识别。
+- 仅“当前 generation 已成功观察过的 WID 后续从成功 SCK 清单缺失”可转 hidden 并唤醒布局。
 
 Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布局在 cadence 尚差少量时间时到达，probe 暴露绝对单调 due instant；scheduler 在 tick 完成后用同一时钟动态计算剩余等待，已跨 due 时只保留一次立即 follow-up。
 
@@ -76,4 +92,4 @@ Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布
 
 ## Rollout and rollback
 
-精确候选 `d8538a5` 的自动 Review/QA 结论因真机回归失效，不可复用。第三次 break-loop 后的新候选必须使用全新 `kimi/k3 + max` 实现、Review 和 QA 子 Agent；当前 provider 不可用时保持停派，不换模型。若 typed capture 红测不能证明根因，或插值需要预测/持续 SCStream，必须再次回到规划。
+精确候选 `d8538a5` 的自动 Review/QA 结论因真机回归失效，不可复用。用户已确认 32ms 最大插值窗口。新候选必须使用全新 `kimi/k3 + max` 实现、Review 和 QA 子 Agent；可用性探针成功但两次真实只读分析载荷超时，因此实施前必须以实际任务载荷重新预检，失败即停派、不换模型。若 typed capture 红测不能证明根因，或插值需要预测/持续 SCStream，必须再次回到规划。

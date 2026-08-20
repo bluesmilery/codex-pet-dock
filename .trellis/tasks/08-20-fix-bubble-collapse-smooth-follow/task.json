@@ -27,6 +27,7 @@
     "subagent_model": "kimi/k3",
     "subagent_reasoning": "max",
     "break_loop_count": "3",
-    "review_campaign": "runtime_failure_replan"
+    "review_campaign": "awaiting_final_plan_approval",
+    "interpolation_duration_ms": "32"
   }
 }
