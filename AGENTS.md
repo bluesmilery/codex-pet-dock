@@ -24,9 +24,9 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 - 每个请求先按 `.trellis/workflow.md` 分类为 L0 / L1 / L2；跨级或影响不明确时按最高风险级别处理。
 - **L0（对话 / 只读）**：解释、讨论、状态查询和只读检查直接处理，不创建开发分支、worktree 或 Review/QA loop；活动任务中的 L0 请求不得推进任务状态。
-- **L1（治理 / 文档）**：仅修改流程规则、说明文档、task/spec、AI agent 提示或非可执行配置，且不改变应用代码、测试逻辑、可执行脚本/Hook、构建发布、运行时或隐私安全行为。主 Agent 可直接实施，执行目标静态检查和一次全新 `luna + max` Agent 的只读一致性检查；不创建实现、修复或 QA worktree，不进入反复 Review loop。若发现触及 L2 边界，停止并按 L2 重新规划。
+- **L1（治理 / 文档）**：仅修改流程规则、说明文档、task/spec、AI agent 提示或非可执行配置，且不改变应用代码、测试逻辑、可执行脚本/Hook、构建发布、运行时或隐私安全行为。主 Agent 可直接实施，执行目标静态检查和一次按第 2 节模型选择规则创建的全新只读一致性检查 Agent；不创建实现、修复或 QA worktree，不进入反复 Review loop。若发现触及 L2 边界，停止并按 L2 重新规划。
 - **L2（开发 / 高风险）**：应用代码、测试逻辑、可执行脚本/Hook、构建签名发布、运行时配置及隐私/TCC/ScreenCaptureKit 行为变化，必须执行本文件后续章节规定的完整闭环。
-- L2 的原实现负责人在自己的 worktree 内使用 `trellis-check` **skill/checklist** 做可写自检和机械修复；不得把可写 `trellis-check` Agent 当作正式 Review。候选冻结完整 SHA 后，由全新 `luna + max` 只读 Agent 完整 Review 并集中报告全部 P0/P1/P2；首轮有 findings 时由原实现负责人批量修复，第二轮仍有任何实质 finding 则执行 `trellis-break-loop` 并重新规划。正式 QA 只在 Review 清零后对同一冻结 SHA 执行。
+- L2 的原实现负责人在自己的 worktree 内使用 `trellis-check` **skill/checklist** 做可写自检和机械修复；不得把可写 `trellis-check` Agent 当作正式 Review。候选冻结完整 SHA 后，由按第 2 节模型选择规则创建的全新只读 Agent 完整 Review 并集中报告全部 P0/P1/P2；首轮有 findings 时由原实现负责人批量修复，第二轮仍有任何实质 finding 则执行 `trellis-break-loop` 并重新规划。正式 QA 只在 Review 清零后对同一冻结 SHA 执行。
 - 本节是项目持久边界；详细阶段、状态提示和 Trellis 升级合并步骤以 `.trellis/workflow.md` 为准。以下第 1–7 节中涉及实现、Review 和 QA 的完整流程要求均适用于 L2，L1 按本节例外执行。
 
 ## 1. 仓库与分支
@@ -41,9 +41,9 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 ## 2. Agent 编排与生命周期
 
 - 对于 L2，主 Agent 只负责任务拆解、范围划分、派发、验收和集成，不直接修改业务代码；所有实现、测试和 Review 均委派给子 Agent。L1 按第 0 节由主 Agent 直接实施。
-- 所有子 Agent 固定使用 `luna` 模型、推理强度 `max`；若当前运行时无法满足该配置，则停止派发并明确报告，不自动降级或替换模型。
+- 子 Agent 优先使用任务下达或已批准任务规划中显式指定的模型和推理强度；未显式指定的模型默认使用 `luna`，未显式指定的推理强度默认使用 `max`。若当前运行时无法满足解析后的配置，则停止派发并明确报告，不自动降级或替换模型。
 - 每项任务同一时间只能有一个实现负责人；派发记录必须包含任务名、角色、worktree、分支、base commit、允许修改的文件范围、验收标准和目标 commit。
-- 派发前必须预检：`luna` + `max` 实际可用、base commit 正确、分支与 worktree 唯一、worktree 初始状态干净，并且不存在负责同一任务的活跃子 Agent；任一项不满足则不启动。
+- 派发前必须预检：按上述优先级解析后的模型和推理强度实际可用、base commit 正确、分支与 worktree 唯一、worktree 初始状态干净，并且不存在负责同一任务的活跃子 Agent；任一项不满足则不启动。
 - 子 Agent 状态统一为 `planning → working → waiting_input / blocked → review → qa → accepted → cleanup`；状态必须由实际活动和交付证据驱动，`idle` 仅表示当前无活动，绝不表示完成。
 - 并发数量不得超过当前运行时上限，主 Agent 占用一个并发槽位；只有任务边界和依赖均独立时才可并行。
 - L2 开发按审查、实现、独立 Review、QA 分阶段进行；实现子 Agent 先写失败测试，再做最小修复。
