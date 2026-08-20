@@ -2,30 +2,34 @@
 
 ## Preconditions
 
-- Base branch: `dev` at the exact SHA verified before dispatch.
+- Product base: exact candidate `91a8fe6ba915f84e35f232943fd1c1c3a558063d`; the v2 implementation branch additionally carries planning/spec commits only. Verify the final planning HEAD before dispatch.
 - Delivery path: L2.
-- Per the user's task-specific override, every implementation, formal Review, repair recheck and QA sub-agent for this task uses `gpt-5.6-sol + high` instead of the project default; each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
-- Allowed product scope is limited to follow scheduling, the minimal DockPanel display-link adapter, bubble probe cadence/wake integration, Follower state, corresponding UI tests, Makefile source list if a focused scheduler file is added, and directly affected docs.
+- Per the latest project-level `AGENTS.md`, every implementation, formal Review, repair recheck and QA sub-agent for this task uses `luna + max`; unavailable routing stops dispatch without model downgrade. Each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
+- Allowed product scope is limited to typed bubble capture outcome/lifecycle invalidation, bounded DockPanel frame interpolation, follow scheduling integration, corresponding UI tests, and directly affected docs.
 
 ## Ordered work
 
-1. Dispatch preflight: verify `gpt-5.6-sol + high`, clean unique worktree/branch from current `dev`, public Git identity, no duplicate active owner, and record full base SHA.
-2. Red tests for end-to-end wake: model an existing stable timer, successful visible→hidden classification, scheduler wake, complete layout tick, and repeated transitions; prove current callback-only coverage is insufficient.
-3. Red tests for cadence coalescing: dense display callbacks produce at most one pending tick; busy main-loop periods drop stale beats; wakeNow advances stable/hidden scheduling without duplicate execution.
-4. Red tests for time-based stability: identical elapsed-time sequences at 60 Hz, 120 Hz and irregular cadence preserve the current nominal 4/60-second stationary threshold and resume moving on material change.
-5. Implement the smallest scheduler abstraction:
-   - macOS 14+ window-bound AppKit `CADisplayLink` in moving;
-   - macOS 13 screen-capability repeating Timer fallback;
-   - stable/hidden one-shot Timer;
-   - main-thread coalescing and lifecycle stop/invalidate.
-6. Replace tick-count stability with injected monotonic elapsed-time semantics; keep existing geometric tolerance and hidden behavior.
-7. Reduce visible bubble probe scheduling wait to at most 0.1 seconds while preserving permission gate, single-flight, generation, knownWids and nil=>visible contracts; route actual result changes to scheduler `wakeNow`.
-8. Wire AppDelegate to the scheduler without changing unrelated data/UI behavior; ensure quit/hidden/lifecycle paths invalidate display link and timers.
-9. Update affected English/Chinese README and architecture/verification facts. Do not duplicate candidate artifact procedure. Record actual test counts only after running them.
-10. Implementer applies `trellis-check` skill/checklist in its own worktree, fixes mechanical/spec issues, then commits with public identity and reports full SHA, diff, commands, failures and unverified runtime items.
-11. Freeze SHA and dispatch a fresh `gpt-5.6-sol + high` read-only formal Reviewer in its own branch/worktree. Batch all P0/P1/P2 findings back to the same implementer. If second full Review has any substantive finding, run `trellis-break-loop` and replan.
-12. Only after Review P0/P1/P2=0, dispatch a fresh `gpt-5.6-sol + high` QA Agent against the identical SHA. QA runs all automated gates, builds the ad-hoc app only now, archives a fresh commit-bound candidate, verifies signature/source, and performs safe runtime checks that do not alter TCC or `/Applications`.
-13. Main session accepts and integrates only the exact reviewed/QA SHA into local `dev`; no push/tag/release. Preserve unrelated untracked content. Cleanup only after read-only dirty/pre-commit checks and backup of any unmerged ref.
+1. Dispatch preflight: verify `luna + max` is available, create a fresh clean/unique v3 implementation worktree from the recorded planning HEAD, confirm the public Git identity, and ensure no duplicate implementation owner is active. The interrupted v2 Kimi worktree remains preserved but is not an implementation input; failure stops dispatch without model substitution.
+2. Typed-capture red tests in `Tests/main.swift`:
+   - successful `.stats(visible)` for a WID followed by `.targetMissing` while the same CG candidate remains must currently preserve one obstacle/stale avoided Y and fail;
+   - `.targetMissing` without prior successful stats remains visible;
+   - `.unavailable` from TCC/list/screenshot failure remains visible;
+   - generation reset, candidate disappearance and in-flight completion cannot revive stale state.
+3. Implement the smallest `BubbleCaptureObservation` (or equivalent) in `BubbleVisibility.swift`: `.stats`, `.targetMissing`, `.unavailable`, plus a per-generation set of successfully observed WIDs. Do not add a generic error hierarchy or expose ScreenCaptureKit objects.
+4. Extend the production `FollowLayoutPass → visibility cache → Geometry → frame sink` test through expanded → authoritative missing → hidden wake; assert final obstacle count zero, base frame, exactly one latest-only follow-up, and repeated hide/show convergence.
+5. Linear-interpolation red tests for a pure `DockFrameInterpolator` in `Tests/main.swift`:
+   - 0ms, 16ms and 32ms samples lie exactly on the segment and 32ms returns target;
+   - 60 Hz, 120 Hz and irregular beats share the same monotonic duration semantics;
+   - retarget starts from the current sampled frame, only the latest target survives, and no coordinate overshoots;
+   - obstacle/screen/hidden safety transitions snap and reset;
+   - continuous moving cadence completes the final segment before the existing 66.7ms stable threshold.
+6. Add `DockFrameInterpolator` within `DockPanel.swift`; keep all state and `setFrame` calls on main. `placeBelow` accepts only the minimal movement intent/time inputs. First placement and non-movement target changes snap; movement retargets over at most 32ms.
+7. Wire `main.swift` with existing `Follower.shouldSetFrame` and the shared monotonic clock. Do not change scheduler source selection, cadence, Follower thresholds, obstacle geometry, alpha thresholds or data/UI behavior.
+8. Update only directly affected README/architecture facts. Record actual test counts after execution; do not duplicate candidate artifact instructions.
+9. The implementation owner applies the `trellis-check` skill/checklist, fixes mechanical/spec issues, runs targeted tests and all hard gates, commits with public identity, freezes the full SHA, and reports diff, commands, actual results, failures and unverified runtime items.
+10. Dispatch a fresh `luna + max` read-only formal Reviewer in a separate clean worktree for the complete diff from `d8538a5`. Batch all P0/P1/P2 findings once to the same implementer. Any substantive finding in the second full Review triggers `trellis-break-loop`; no third Review loop.
+11. Only after Review P0/P1/P2=0, dispatch a fresh `luna + max` QA Agent against the identical SHA. QA reruns hard gates, executes `make app` for the first time in this repair batch, archives a fresh commit-bound candidate, and verifies signature/source without altering TCC or `/Applications`.
+12. The candidate remains pending until exact-app real-device checks separately cover expanded→collapsed, full message/control hide, 60 Hz drag feel, available high-refresh drag feel, TCC/ScreenCaptureKit and available multi-display conditions. Main integrates only an accepted SHA into local `dev`; no push/tag/release.
 
 ## Break-loop replan after second Review
 
@@ -49,6 +53,18 @@ The Review campaign ending at `539009e` is closed and invalid. Before producing 
 5. Preserve reset/empty/TCC false/in-flight/generation hygiene, single Timer source, latest-only coalescing, display-link recovery and capture-rate cap. Do not introduce a clock framework or unrelated timestamp refactor.
 6. Re-run `trellis-check`, all gates and simplicity review; freeze a new SHA and start a new full formal Review campaign. No Review or QA evidence from `539009e` is reusable.
 
+## Third break-loop replan after real-device full-hide failure
+
+The Review/QA-approved candidate `91a8fe6ba915f84e35f232943fd1c1c3a558063d` failed real-device acceptance and is not reusable. Before another candidate:
+
+1. Start from `d8538a5` plus the approved planning commits in a fresh clean v3 implementation worktree. Preflight `luna + max`; do not substitute a model if routing is unavailable, and do not import the interrupted v2 Kimi worktree's uncommitted patch.
+2. Add a red production-chain regression where a bubble remains in the CG candidate set but a successfully fetched SCK window list no longer contains its WID. Prove the old optional-nil contract preserves one obstacle and stale avoided Y. Add the adjacent failure case where SCK list/capture is unavailable and conservative visible remains required.
+3. If and only if the red test distinguishes the observed states, replace the optional capture payload with the smallest typed outcome (`stats`, `targetMissing`, `unavailable` or equivalent). Only `targetMissing` may classify hidden; retain generation, identity, known-candidate and strict single-flight guards before notification/cache writes.
+4. Extend the full `FollowLayoutPass → Geometry → frame sink` harness through hidden notification and assert the final obstacle set is empty and the dock returns to base frame. Repeated full hide/show cycles must not accumulate wakes or stale targets.
+5. Use the user-approved 32ms maximum window for red pure tests at 60 Hz, 120 Hz and irregular beats: latest-target retargeting, no overshoot, no history queue, exact final snap, and immediate safety snap. Then wire the smallest main-thread interpolation owner at the DockPanel/frame boundary.
+6. Do not change alpha thresholds, CG obstacle geometry, permissions, capture cadence, scheduler source architecture, or introduce prediction, spring animation, implicit AppKit animation or continuous SCStream unless the discriminating red test disproves the typed-outcome hypothesis and planning is reopened.
+7. Apply `trellis-check`, rerun every hard gate, freeze a new SHA and begin a new full Review campaign. The prior `d8538a5` Review/QA evidence is invalid after any change.
+
 ## Required validation
 
 ```bash
@@ -57,25 +73,26 @@ make docs-check
 make test-docs
 make test
 git diff --check <base-sha>..<candidate-sha>
-make app
-codesign --verify --deep --strict build/PetDock.app
 ```
 
-Additional targeted tests must cover scheduler coalescing, repeated visibility transitions, time-based stable semantics, permission/capture fallback, generation/single-flight, and candidate disappearance.
+`make app` and `codesign --verify --deep --strict build/PetDock.app` run only in QA after formal Review clears the exact SHA.
+
+Additional targeted tests must cover scheduler coalescing, repeated visibility transitions, time-based stable semantics, typed target-missing versus capture-unavailable behavior, generation/single-flight, candidate disappearance, and bounded interpolation.
 
 ## Review focus
 
 - No timer/display-link retain cycle, duplicate source, post-quit callback, or main-thread backlog.
 - AppKit display link availability is guarded for macOS 14; no deprecated `CVDisplayLink` and release build remains 0 warning.
 - Variable refresh cannot shorten the intended moving→stable elapsed time.
-- Bubble polling cannot start overlapping captures or weaken nil/TCC conservative behavior.
+- Bubble polling cannot start overlapping captures or let generic capture/TCC failure masquerade as authoritative target disappearance.
+- Interpolation cannot overshoot, queue stale targets, delay safety reset, mutate off the main thread, or exceed the approved trailing window.
 - No new permission, private API, screenshot persistence, OCR, content logging, real WID/PID/coordinates, or unrelated refactor.
 
 ## Runtime QA matrix
 
 - Exact candidate executable and commit provenance.
 - Bubble expanded→collapsed with pet stationary; repeat at least three cycles.
-- Bubble candidate disappearance and capture-nil fallback distinguished.
+- Expanded→collapsed and complete message/control hide tested separately; authoritative target missing and generic capture failure distinguished.
 - Drag on a 60 Hz display and, if available, a high-refresh display; record observed smoothness separately from automated cadence tests.
 - Multi-display crossing/negative coordinates if safely available.
 - TCC/ScreenCaptureKit status and Instruments CPU/memory only when actually exercised; otherwise explicitly `未验证`.

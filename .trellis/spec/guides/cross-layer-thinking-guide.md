@@ -108,6 +108,14 @@ Rendering code may format fields, but it must not redefine the payload contract.
 
 **Rule**: For a cadence or deadline crossing layers, map `clock source → stored instant → comparison → retry scheduling`, and test that forward/backward wall-clock changes cannot alter the result.
 
+### Mistake 6: One Optional Value Hides Different Failure Provenance
+
+**Bad**: A capture boundary returns `nil` for both “the target is absent from a successfully fetched source snapshot” and “the source/capture failed.” A conservative downstream fallback then keeps a disappeared target alive forever.
+
+**Good**: Preserve the minimum provenance needed by policy. Model authoritative absence separately from unavailable/failed observation, and only let the authoritative state change lifecycle truth.
+
+**Rule**: For optional or nullable cross-layer results, enumerate every reason the value can be absent. If two reasons require different safety behavior, encode them as distinct typed outcomes and add a discriminating end-to-end test.
+
 ---
 
 ## Checklist for Cross-Layer Features
@@ -130,6 +138,8 @@ After implementation:
       (`seq`, `id`, `version`) instead of inventing a second cursor
 - [ ] Identified the clock domain for every duration/deadline crossing a boundary
 - [ ] Verified wall-clock discontinuities cannot affect monotonic cadence or retry logic
+- [ ] Enumerated every `nil` / missing-result cause crossing the boundary
+- [ ] Kept authoritative absence distinct from unavailable or failed observation
 
 ---
 
