@@ -174,3 +174,24 @@ Hardened Trellis path/runtime boundaries, private diagnostics and logs, child-pr
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: 调整子 Agent 模型选择规则
+
+**Date**: 2026-08-20
+**Task**: 调整子 Agent 模型选择规则
+**Branch**: `dev`
+
+### Summary
+
+允许任务显式指定子 Agent 模型和推理强度，未指定项默认使用 luna 和 max；同步 AGENTS 与 Trellis workflow，并通过文档检查和独立只读复核。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cd38b03` | (see git log) |
+
+### Status
+
+[OK] **Completed**
