@@ -33,27 +33,56 @@ struct BubbleAlphaStats: Equatable, Sendable {
     let bboxRatio: Double             // 非透明 bbox 面积 / 总像素
 }
 
+/// ScreenCaptureKit 观察结果的最小策略相关语义。
+/// - stats：成功取得目标窗口并完成匿名 alpha 统计。
+/// - targetMissing：成功取得窗口清单，但该 generation 的目标 WID 不在清单中。
+/// - unavailable：权限、清单、截图或统计不可用；必须保守避让。
+enum BubbleCaptureOutcome: Equatable, Sendable {
+    case stats(BubbleAlphaStats)
+    case targetMissing
+    case unavailable
+}
+
 /// 纯函数分类（有滞回）。
 /// - stats 有值：按 alpha 阈值判 visible/hidden，中间区滞回（沿用 previous）。
-/// - stats nil（capture 失败 / SC 窗口未进 content / macOS 13 / TCC 抖动）→ `.visible`（保守避让）。
+/// - unavailable（capture 失败 / macOS 13 / TCC 抖动）→ `.visible`（保守避让）。
 ///   README 契约："on macOS 13 or capture failure, it conservatively avoids"。
 ///   当前仍存在的气泡（wid 在候选集内），capture 失败时必须保守当障碍避让，
-///   不能因 capture nil 误判为收起导致底座重叠气泡。
-///   收起态的正确复位由 `BubbleVisibilityProbe.knownWids` 失效机制承担
-///   （wid 从候选集消失 → visibility 立即 hidden），不依赖 capture nil。
+///   不能因 unavailable 误判为收起导致底座重叠气泡。
+///   收起态的正确复位由已观察 WID 的 targetMissing 结果或
+///   `BubbleVisibilityProbe.knownWids` 失效机制承担，不依赖 unavailable。
 enum BubbleVisibilityClassifier {
     static func classify(stats: BubbleAlphaStats?, previous: BubbleVisibility) -> BubbleVisibility {
         guard let s = stats else { return .visible }
-        if s.nonTransparentRatio >= BubbleVisibilityThresholds.openNonTransparent
-            || s.bboxRatio >= BubbleVisibilityThresholds.openBBox { return .visible }
-        if s.nonTransparentRatio <= BubbleVisibilityThresholds.closeNonTransparent
-            && s.bboxRatio <= BubbleVisibilityThresholds.closeBBox { return .hidden }
+        return classify(stats: s, previous: previous)
+    }
+
+    static func classify(stats: BubbleAlphaStats, previous: BubbleVisibility) -> BubbleVisibility {
+        if stats.nonTransparentRatio >= BubbleVisibilityThresholds.openNonTransparent
+            || stats.bboxRatio >= BubbleVisibilityThresholds.openBBox { return .visible }
+        if stats.nonTransparentRatio <= BubbleVisibilityThresholds.closeNonTransparent
+            && stats.bboxRatio <= BubbleVisibilityThresholds.closeBBox { return .hidden }
         return previous   // 中间滞回
+    }
+
+    static func classify(
+        outcome: BubbleCaptureOutcome,
+        previous: BubbleVisibility,
+        hasSuccessfulObservation: Bool
+    ) -> BubbleVisibility {
+        switch outcome {
+        case .stats(let stats):
+            return classify(stats: stats, previous: previous)
+        case .targetMissing:
+            return hasSuccessfulObservation ? .hidden : .visible
+        case .unavailable:
+            return .visible
+        }
     }
 }
 
 /// 像素捕获器接口（@Sendable 闭包，后台 Task 安全传递）。
-typealias BubbleCapturer = @Sendable (WinCandidate) async -> BubbleAlphaStats?
+typealias BubbleCapturer = @Sendable (WinCandidate) async -> BubbleCaptureOutcome
 
 /// 单进程启动期权限请求 gate：已授权不请求，未授权也至多请求一次。
 struct ScreenCapturePermissionRequestGate {
@@ -67,7 +96,7 @@ struct ScreenCapturePermissionRequestGate {
 }
 
 /// 异步探测 obstaclesNear 候选的可见性。`Sendable`（状态由 `OSAllocatedUnfairLock` 保护）。
-/// 最长 0.1s 受控启动等待、single-flight（generation 严格）、保守降级（失败/macOS13/缺失 → visible）。
+/// 最长 0.1s 受控启动等待、single-flight（generation 严格）、保守降级（失败/macOS13 → visible）。
 /// 像素捕获在 `Task.detached` 后台执行（不跑主线程），完成后经 lock + generation 校验更新。
 final class BubbleVisibilityProbe: Sendable {
     static let minInterval: TimeInterval = 0.1
@@ -78,12 +107,15 @@ final class BubbleVisibilityProbe: Sendable {
         var lastCaptureAt: TimeInterval = -.greatestFiniteMagnitude
         var inFlight = false
         var pendingRetryAt: TimeInterval?
-        /// 候选版本：reset 递增。旧 Task 回调 generation 不匹配时丢弃。
+        /// 候选版本：候选集合变化或 reset 递增。旧 Task 回调 generation 不匹配时丢弃。
         var generation = 0
         /// 最近一次 `probe(candidates:)` 传入的 wid 集合（当前帧实际存在的候选）。
         /// `visibility(for:)` 对不在此集合中的 wid 返回 `.hidden`（当前帧失效），
         /// 防止已从 obstaclesNear 消失的候选残留 visible 缓存导致底座不复位（回归 A）。
         var knownWids: Set<CGWindowID> = []
+        /// 当前 generation 内至少一次成功取得 alpha 统计的目标 WID。
+        /// 只有这些 WID 的后续 targetMissing 才是权威 hidden；unavailable 永远保守 visible。
+        var successfullyObservedWids: Set<CGWindowID> = []
     }
 
     internal let lock: OSAllocatedUnfairLock<ProbeState>
@@ -118,43 +150,55 @@ final class BubbleVisibilityProbe: Sendable {
     func probe(candidates: [WinCandidate]) {
         let gen: Int
         let prev: [CGWindowID: BubbleVisibility]
+        let previouslyObserved: Set<CGWindowID>
         let shouldStart: Bool
         let captureAllowed = !candidates.isEmpty && canCapture()
-        (gen, prev, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Bool) in
+        (gen, prev, previouslyObserved, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Set<CGWindowID>, Bool) in
             s.pendingRetryAt = nil
             // 同步刷新 knownWids：当前帧实际存在的候选 wid（每帧事实，立即生效）。
-            s.knownWids = Set(candidates.map { $0.wid })
+            let nextWids = Set(candidates.map { $0.wid })
+            if s.knownWids != nextWids {
+                s.generation += 1
+                s.cached.removeAll()
+                s.successfullyObservedWids.removeAll()
+            }
+            s.knownWids = nextWids
             guard !candidates.isEmpty else {
                 // 完全空闲（无候选 + 无缓存 + 无在途）→ 无意义锁写，直接 return。
                 // 宠物可见但下方无会话气泡时，moving 态会高频调用 probe([])，
                 // 此早退避免每帧递增 generation + 清空字典的无意义锁写。
-                if s.cached.isEmpty && !s.inFlight { return (0, [:], false) }
+                if s.cached.isEmpty && s.successfullyObservedWids.isEmpty && !s.inFlight {
+                    return (0, [:], [], false)
+                }
                 // 仍有缓存或在途：与 reset() 一致递增 generation + 清 cached，使旧结果失效。
                 // 旧 Task 仍持有唯一 token，完成时清 inFlight；期间候选重新出现 probe 被拒。
-                s.generation += 1; s.cached.removeAll()
-                return (0, [:], false)
+                s.generation += 1
+                s.cached.removeAll()
+                s.successfullyObservedWids.removeAll()
+                return (0, [:], [], false)
             }
             guard captureAllowed else {
                 // 权限尚未对本进程生效：不进入 ScreenCaptureKit，并清除旧 hidden 缓存，
                 // 使当前仍存在的候选按默认 `.visible` 保守避让。旧在途结果通过 generation 失效。
-                if !s.cached.isEmpty || s.inFlight {
+                if !s.cached.isEmpty || !s.successfullyObservedWids.isEmpty || s.inFlight {
                     s.generation += 1
                     s.cached.removeAll()
+                    s.successfullyObservedWids.removeAll()
                 }
-                return (0, [:], false)
+                return (0, [:], [], false)
             }
             let time = monotonicNow()
             guard !s.inFlight else {
-                return (0, [:], false)
+                return (0, [:], [], false)
             }
             let elapsed = time - s.lastCaptureAt
             guard elapsed >= Self.minInterval else {
                 s.pendingRetryAt = s.lastCaptureAt + Self.minInterval
-                return (0, [:], false)
+                return (0, [:], [], false)
             }
             s.inFlight = true
             s.lastCaptureAt = time
-            return (s.generation, s.cached, true)
+            return (s.generation, s.cached, s.successfullyObservedWids, true)
         }
         guard shouldStart else { return }
         let cap = capturer
@@ -163,11 +207,18 @@ final class BubbleVisibilityProbe: Sendable {
         // 像素计算（cap → captureStats → computeAlphaStats）在后台线程执行。
         Task.detached { [lock] in
             var r: [CGWindowID: BubbleVisibility] = [:]
+            var observedWids = Set<CGWindowID>()
             for c in candidates {
-                let stats = await cap(c)
-                r[c.wid] = BubbleVisibilityClassifier.classify(stats: stats, previous: prev[c.wid] ?? .visible)
+                let outcome = await cap(c)
+                if case .stats = outcome { observedWids.insert(c.wid) }
+                r[c.wid] = BubbleVisibilityClassifier.classify(
+                    outcome: outcome,
+                    previous: prev[c.wid] ?? .visible,
+                    hasSuccessfulObservation: previouslyObserved.contains(c.wid)
+                )
             }
             let results = r   // var→let：lock 闭包只捕获不可变 Sendable 值
+            let successfulWids = observedWids
             // generation 校验：旧 Task 回调（reset/候选切换后）仅清自己的 inFlight token，绝不写 cached。
             let didChange = lock.withLock { s -> Bool in
                 s.inFlight = false   // 始终清 inFlight（旧 Task 的责任，保证新 probe 能在下一 tick 启动）
@@ -177,6 +228,7 @@ final class BubbleVisibilityProbe: Sendable {
                         && (s.cached[entry.key] ?? .visible) != entry.value
                 }
                 s.cached = results
+                s.successfullyObservedWids.formUnion(successfulWids)
                 return changed
             }
             if didChange { notify() }
@@ -211,31 +263,41 @@ final class BubbleVisibilityProbe: Sendable {
             s.generation += 1
             s.cached.removeAll()
             s.knownWids.removeAll()
+            s.successfullyObservedWids.removeAll()
             s.pendingRetryAt = nil
         }
     }
 
-    // MARK: - 默认捕获器（macOS 14+ ScreenCaptureKit，macOS 13/失败 → nil 保守 visible）
+    // MARK: - 默认捕获器（macOS 14+ ScreenCaptureKit，macOS 13/失败 → unavailable 保守 visible）
 
     private static let defaultCapturer: BubbleCapturer = { candidate in
-        guard #available(macOS 14.0, *) else { return nil }
+        guard #available(macOS 14.0, *) else { return .unavailable }
         return await captureStats(candidate)
     }
 
     // MARK: - ScreenCaptureKit 捕获（static，后台执行）
 
     @available(macOS 14.0, *)
-    private static func captureStats(_ candidate: WinCandidate) async -> BubbleAlphaStats? {
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
-              let win = content.windows.first(where: { $0.windowID == candidate.wid }) else { return nil }
+    private static func captureStats(_ candidate: WinCandidate) async -> BubbleCaptureOutcome {
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        } catch {
+            return .unavailable
+        }
+        guard let win = content.windows.first(where: { $0.windowID == candidate.wid }) else {
+            return .targetMissing
+        }
         let filter = SCContentFilter(desktopIndependentWindow: win)
         let config = SCStreamConfiguration()
         config.width = Int(candidate.bounds.width.rounded())
         config.height = Int(candidate.bounds.height.rounded())
         config.scalesToFit = false
         config.showsCursor = false
-        guard let img = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else { return nil }
-        return computeAlphaStats(image: img)
+        guard let img = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else {
+            return .unavailable
+        }
+        return .stats(computeAlphaStats(image: img))
     }
 
     /// 内存计算 alpha 统计（不保存图/OCR/记录颜色文字）。static → 后台 Task 内执行。

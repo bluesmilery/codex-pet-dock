@@ -33,7 +33,7 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 
 - `selectPet` 通过公开 CGWindowList / AppKit 规则过滤主窗口、辅助控件并选择 Mascot；无合理候选时返回 nil，不误绑主聊天窗口。
 - `Geometry.safeDockFrame` 固定底座宽度，按障碍链式下移，执行水平 clamp；垂直越界返回 nil。避让隐藏与宠物可见性、数据暂停语义分离。
-- `BubbleVisibilityProbe` 使用 ScreenCaptureKit 公开 API，下一次允许启动捕获的受应用控制等待最长 0.1 秒，并保持 strict single-flight 与 generation 失效保护；捕获 cadence、绝对 retry deadline 与 scheduler 共用 `systemUptime` 单调时钟，墙钟校准不参与间隔计算；捕获失败时保守按 visible 避让。
+- `BubbleVisibilityProbe` 使用 ScreenCaptureKit 公开 API，下一次允许启动捕获的受应用控制等待最长 0.1 秒，并保持 strict single-flight 与 generation 失效保护；捕获 cadence、绝对 retry deadline 与 scheduler 共用 `systemUptime` 单调时钟，墙钟校准不参与间隔计算；成功取得窗口清单但目标缺失仅在同 generation 已有成功统计观察时按 hidden 处理，首次 targetMissing 和权限 / 清单 / 截图 / 统计 unavailable 仍按 visible 保守避让。
 - moving 跟随在 macOS 14+ 仅当底座可见且实际 `panel.screen` 非空时使用窗口绑定的 AppKit `CADisplayLink`；screen 暂时为空时使 link 失效并使用 Timer fallback，screen 变化通过 coalesced wake 重新选择。macOS 13 使用按屏幕能力、能力变化时重建且 capped 到 120 Hz 的 repeating Timer。回调 latest-only 合并；stable 以静止锚点、单调 elapsed time 与名义 `4/60s` 判定，0.1 秒探测由每次完整 tick 的起点派生，气泡 probe 因 cadence 尚未 due 而跳过时在 tick 完成处按绝对 due deadline 重算剩余 delay；若工作已经跨过 deadline，仅立即合并一次 follow-up，不补错过的节拍；不使用 `CVDisplayLink`。
 - 数据层通过 codex app-server stdio JSON-RPC 和本机日志数值聚合提供 WEEK LEFT / WEEK TOKENS，不复制 `auth.json` 或凭证。
 - 日志、诊断与 token cache 只写入 Application Support/PetDock 私有目录（0700/0600）；默认诊断脱敏，不落盘标题、owner、WID/PID 或精确坐标。helper 环境为严格白名单，resolver 拒绝不可信可执行文件。
@@ -49,13 +49,13 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 3. 拖动宠物到另一位置，含副屏或负坐标区域，确认底座跟随且不越出可见区。
 4. 在 Codex 内隐藏宠物，确认底座与详情隐藏；再次显示后确认重新捕获并跟随。
 5. 退出并重新打开 Codex，确认底座隐藏、重开后重新发现宠物。
-6. 展开和收起会话气泡，确认展开时底座下移、收起时回到宠物下方；控制按钮出现 / 消失不改变避让分类结论。
+6. 分别测试消息卡片收起与全部消息 / 控制 UI 隐藏：确认展开时底座下移、收起或成功观察到目标缺失时回到宠物下方；控制按钮出现 / 消失不改变避让分类结论。
 7. 在真实屏幕录制授权下验证 BubbleVisibility 的展开→收起→展开可逆性，以及捕获失败时的保守避让。
 8. 使用状态栏菜单验证主题、显示 / 隐藏底座、退出和登录自启等 Accessibility / SMAppService 交互。
 9. 验证底座与详情卡的透明渲染、字段布局和详情卡点击展开 / 收起。
 10. 验证三种内置主题切换，以及外部 JSON 主题文件的安全解析和热加载。
 11. 在已登录的真实 Codex 环境中验证 WEEK LEFT / WEEK TOKENS 刷新、窗口边界和独立退避；不输出账户或会话内容。
-12. 分别在 60 Hz 和可用的高刷屏观察 moving 跟随、stable 降频、隐藏与重捕的实际性能和体感；若有 macOS 13 环境，单独验证 repeating Timer fallback。
+12. 分别在 60 Hz 和可用的高刷屏观察 moving 跟随、最长 32ms 线性跟随、stable 降频、隐藏与重捕的实际性能和体感；若有 macOS 13 环境，单独验证 repeating Timer fallback。
 
 这些项目依赖 TCC、ScreenCaptureKit、Accessibility、真实多显示器和 `.app` 运行环境，不能由 `make test` 代替。`make app` 属于发布 / 真机阶段命令，本页不把其执行状态写成当前候选结论。
 

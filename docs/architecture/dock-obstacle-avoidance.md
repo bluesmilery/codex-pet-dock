@@ -25,7 +25,7 @@
 4. 水平越界使用 `clampDockX` 贴合屏幕左右边缘；可见宽小于 dock 宽时返回 nil。
 5. Quartz 与 AppKit 之间只做边界检查和最终 frame 设置所需的转换，统一支持负坐标副屏。
 
-`DockPanel.placeBelow(petQuartzRect:avoiding:visibleScreen:)` 在 frame 为 nil 时隐藏底座并返回 false；成功则设置 frame 并返回 true。默认 `avoiding=[] / visibleScreen=nil` 仍是宠物正下方的兼容行为。
+`DockPanel.placeBelow(petQuartzRect:avoiding:visibleScreen:movementChanged:monotonicNow:)` 在 frame 为 nil 时隐藏底座并返回 false；成功则设置 frame 并返回 true。移动状态只对最新目标做最长 32ms 的显式线性插值，不排队历史 frame；首次显示、障碍 / 屏幕变化、隐藏和其他安全复位路径立即 snap。默认 `avoiding=[] / visibleScreen=nil` 仍是宠物正下方的兼容行为。
 
 主循环的语义是：宠物可见时展示底座并对齐详情，避让失败只隐藏底座；宠物可见性仍由跟随逻辑决定，数据 `pause()` / `resume()` 不与避让隐藏耦合。
 
@@ -35,13 +35,13 @@
 
 - open：`nonTransparentRatio >= 0.6%` 或 `bboxRatio >= 1.0%`；
 - close：`nonTransparentRatio <= 0.3%` 且 `bboxRatio <= 0.5%`；
-- 中间区间保持上一次状态；捕获失败、macOS 版本不支持或 SC 窗口缺失时保守判定为 visible。
+- 中间区间保持上一次状态；成功取得 SCK 窗口清单但找不到此前同 generation 已成功观察过的 WID 时判定为 hidden；首次观察即 targetMissing 仍判 visible。权限、清单、截图、像素统计失败或 macOS 版本不支持时保守判定为 visible。
 
 像素只在内存中统计，不 OCR、不保存图像、不记录颜色、文字或窗口内容。
 
 应用启动时，`ScreenCapturePermissionRequestGate` 保证每个进程最多主动调用一次权限请求。每次 `probe` 都先同步刷新 `knownWids`；preflight 尚未通过时不进入 capturer 或 ScreenCaptureKit，并清除旧 hidden 缓存，使当前候选继续按 visible 保守避让。权限在重启后的进程中生效时，后续 probe 自动恢复捕获，不持久化权限副本。
 
-macOS 14+ 下一次允许启动捕获的受应用控制等待最长 0.1 秒，且始终 strict single-flight；捕获未完成时的新 probe 直接合并，不堆积截图任务。捕获 cadence、绝对 retry deadline 与 follow scheduler 共用 `systemUptime` 单调时钟，墙钟前跳或后跳不会改变探测频率和等待。异步任务只有在 generation 仍有效时才能写入缓存；候选消失立即按当前帧失效，`reset()` 或仍有缓存 / 在途任务的空候选会递增 generation，使旧任务不能写回缓存或发出通知。完全空闲（无候选、无缓存、无在途）直接早退，不递增 generation。
+macOS 14+ 下一次允许启动捕获的受应用控制等待最长 0.1 秒，且始终 strict single-flight；捕获未完成时的新 probe 直接合并，不堆积截图任务。捕获 cadence、绝对 retry deadline 与 follow scheduler 共用 `systemUptime` 单调时钟，墙钟前跳或后跳不会改变探测频率和等待。异步任务只有在 generation 仍有效时才能写入缓存；候选集合变化、候选消失或 `reset()` 都会清理该 generation 的成功观察资格，旧任务不能写回缓存或发出通知。完全空闲（无候选、无缓存、无在途）直接早退，不递增 generation。
 
 成功结果写入缓存后，只有当前 `knownWids` 中候选的可见性实际变化才发出一次 `onVisibilityChange`；结果不变、空候选、reset 与旧 generation 均不通知。运行时由 `FollowTickScheduler` 把后台通知合并为最多一个待执行主线程 tick；若通知在 tick 执行中到达，只保留一次 follow-up。该 tick 的生产 `FollowLayoutPass` 走候选分类、probe/cache 重读、可见障碍筛选与 frame sink，再由 sink 执行 `safeDockFrame` 和面板 frame 回写。因此即使宠物 rect 未变化，气泡从 visible 变为 hidden 后，底座也会在该完整 tick 中回到宠物正下方。
 
@@ -60,4 +60,4 @@ moving 状态在 macOS 14+ 且底座可见、实际 `panel.screen` 非空时使�
 make test-ui
 ```
 
-`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、固定宽度、水平 clamp、屏幕边界、权限门控、可见性变化通知、候选消失复位、elapsed-time stable 语义和调度合并。当前公开口径为 **BubbleVisibility 85 项**（`test-ui` 套件的一部分）；细分用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、macOS 13 Timer、实际 display-link cadence、多屏硬件与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
+`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、固定宽度、水平 clamp、屏幕边界、权限门控、三态捕获结果、可见性变化通知、候选消失复位、elapsed-time stable 语义、调度合并和 32ms bounded interpolation。具体用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、macOS 13 Timer、实际 display-link cadence、多屏硬件与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。

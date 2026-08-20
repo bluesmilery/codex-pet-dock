@@ -379,6 +379,127 @@ check("T17b DockPanel dockWidth=200", DockPanel().dockWidth == 200, "")
 check("T17c DockPanel dockHeight=48", DockPanel().dockHeight == 48, "")
 print("\n[Dock 几何/reset/placeBelow] \(pass - dkPass) passed, \(fail - dkBase) failed")
 
+// ---- T-interp: latest-only 32ms 线性底座跟随（纯值状态，不依赖真实 display link）----
+let ipBase = fail, ipPass = pass
+let interpA = NSRect(x: 0, y: 10, width: 200, height: 48)
+let interpB = NSRect(x: 100, y: 70, width: 200, height: 48)
+let interpC = NSRect(x: 240, y: 30, width: 200, height: 48)
+func rectNear(_ lhs: NSRect?, _ rhs: NSRect, tolerance: CGFloat = 0.000_001) -> Bool {
+    guard let lhs else { return false }
+    return abs(lhs.origin.x - rhs.origin.x) < tolerance
+        && abs(lhs.origin.y - rhs.origin.y) < tolerance
+        && abs(lhs.width - rhs.width) < tolerance
+        && abs(lhs.height - rhs.height) < tolerance
+}
+func between(_ value: CGFloat, _ a: CGFloat, _ b: CGFloat) -> Bool {
+    value >= min(a, b) - 0.000_001 && value <= max(a, b) + 0.000_001
+}
+
+var baseInterpolator = DockFrameInterpolator()
+_ = baseInterpolator.update(to: interpA, at: 0, movementChanged: false)
+let interpStart = baseInterpolator.update(to: interpB, at: 0, movementChanged: true)
+let interp16 = baseInterpolator.frame(at: 0.016)
+let interp32 = baseInterpolator.frame(at: DockFrameInterpolator.maximumDuration)
+check("T-ip1 0ms从起点开始且16ms在线段中点", rectNear(interpStart, interpA) && rectNear(interp16, NSRect(x: 50, y: 40, width: 200, height: 48)),
+      "start=\(String(describing: interpStart)) mid=\(String(describing: interp16))")
+check("T-ip2 32ms精确到终点且segment结束", rectNear(interp32, interpB) && baseInterpolator.segmentStartedAt == nil,
+      "frame=\(String(describing: interp32)) started=\(String(describing: baseInterpolator.segmentStartedAt))")
+
+func interpolationSamples(at times: [TimeInterval]) -> [NSRect] {
+    var interpolator = DockFrameInterpolator()
+    _ = interpolator.update(to: interpA, at: 0, movementChanged: false)
+    _ = interpolator.update(to: interpB, at: 0, movementChanged: true)
+    return times.compactMap { interpolator.frame(at: $0) }
+}
+let samples60 = interpolationSamples(at: [0, 1.0 / 60.0, 2.0 / 60.0])
+let samples120 = interpolationSamples(at: [0, 1.0 / 120.0, 2.0 / 120.0, 3.0 / 120.0, 4.0 / 120.0])
+let samplesIrregular = interpolationSamples(at: [0, 0.007, 0.021, 0.032])
+let allSamplesBounded = (samples60 + samples120 + samplesIrregular).allSatisfy {
+    between($0.origin.x, interpA.origin.x, interpB.origin.x)
+        && between($0.origin.y, interpA.origin.y, interpB.origin.y)
+}
+check("T-ip3 60/120Hz与不规则节拍均单调且无过冲", allSamplesBounded
+        && rectNear(samples60.last, interpB)
+        && rectNear(samples120.last, interpB)
+        && rectNear(samplesIrregular.last, interpB),
+      "60=\(samples60) 120=\(samples120) irregular=\(samplesIrregular)")
+
+var retargetInterpolator = DockFrameInterpolator()
+_ = retargetInterpolator.update(to: interpA, at: 0, movementChanged: false)
+_ = retargetInterpolator.update(to: interpB, at: 0, movementChanged: true)
+let retargetSource = retargetInterpolator.frame(at: 0.016)
+let retargetStart = retargetInterpolator.update(to: interpC, at: 0.016, movementChanged: true)
+let retargetMid = retargetInterpolator.frame(at: 0.032)
+let retargetEnd = retargetInterpolator.frame(at: 0.048)
+let expectedRetargetMid = NSRect(x: ((retargetSource?.origin.x ?? interpA.origin.x) + interpC.origin.x) / 2,
+                                 y: ((retargetSource?.origin.y ?? interpA.origin.y) + interpC.origin.y) / 2,
+                                 width: 200, height: 48)
+check("T-ip4 retarget从当前采样值开始且只追最新目标",
+      rectNear(retargetStart, retargetSource ?? interpA)
+        && rectNear(retargetMid, expectedRetargetMid)
+        && rectNear(retargetEnd, interpC),
+      "source=\(String(describing: retargetSource)) mid=\(String(describing: retargetMid)) end=\(String(describing: retargetEnd))")
+
+var safetyInterpolator = DockFrameInterpolator()
+_ = safetyInterpolator.update(to: interpA, at: 0, movementChanged: false)
+_ = safetyInterpolator.update(to: interpB, at: 0, movementChanged: true)
+let safetySnap = safetyInterpolator.update(to: interpC, at: 0.008, movementChanged: false)
+check("T-ip5 障碍/安全目标变化立即snap且不留segment",
+      rectNear(safetySnap, interpC) && safetyInterpolator.segmentStartedAt == nil,
+      "snap=\(safetySnap) started=\(String(describing: safetyInterpolator.segmentStartedAt))")
+safetyInterpolator.reset()
+check("T-ip6 reset用于隐藏/无screen/首次显示路径", safetyInterpolator.renderedFrame == nil
+        && safetyInterpolator.targetFrame == nil && safetyInterpolator.segmentStartedAt == nil, "")
+
+var stableInterpolator = DockFrameInterpolator()
+_ = stableInterpolator.update(to: interpA, at: 0, movementChanged: false)
+_ = stableInterpolator.update(to: interpB, at: 0, movementChanged: true)
+let stableFinal = stableInterpolator.frame(at: Follower.stationaryDuration)
+check("T-ip7 stable阈值前最终插值段已精确到位", rectNear(stableFinal, interpB),
+      "stableDuration=\(Follower.stationaryDuration) final=\(String(describing: stableFinal))")
+
+let panelInterpolator = DockPanel()
+let panelPetA = CGRect(x: 100, y: 100, width: 172, height: 179)
+let panelPetB = panelPetA.offsetBy(dx: 100, dy: 0)
+_ = panelInterpolator.placeBelow(petQuartzRect: panelPetA, movementChanged: false, monotonicNow: 0)
+let panelStart = panelInterpolator.frame
+_ = panelInterpolator.placeBelow(petQuartzRect: panelPetB, movementChanged: true, monotonicNow: 0)
+let panelMovingStart = panelInterpolator.frame
+_ = panelInterpolator.placeBelow(petQuartzRect: panelPetB, movementChanged: false, monotonicNow: 0.016)
+let panelMovingMid = panelInterpolator.frame
+let panelTargetB = Geometry.appKitRectFromQuartz(CGRect(
+    x: panelPetB.origin.x + (panelPetB.width - panelInterpolator.dockWidth) / 2,
+    y: panelPetB.origin.y + panelPetB.height + panelInterpolator.gap,
+    width: panelInterpolator.dockWidth,
+    height: panelInterpolator.dockHeight
+))
+check("T-ip8 DockPanel frame sink沿用32ms插值", abs(panelMovingStart.origin.x - panelStart.origin.x) < 1.0
+        && panelMovingMid.origin.x > min(panelStart.origin.x, panelTargetB.origin.x)
+        && panelMovingMid.origin.x < max(panelStart.origin.x, panelTargetB.origin.x),
+      "start=\(panelStart) mid=\(panelMovingMid) target=\(panelTargetB)")
+let panelObstacle = CGRect(x: panelPetB.minX, y: panelPetB.maxY, width: panelPetB.width, height: 54)
+_ = panelInterpolator.placeBelow(
+    petQuartzRect: panelPetB,
+    avoiding: [panelObstacle],
+    movementChanged: true,
+    monotonicNow: 0.016
+)
+let panelSafetyTarget = Geometry.appKitRectFromQuartz(
+    Geometry.safeDockFrame(
+        pet: panelPetB,
+        avoiding: [panelObstacle],
+        dockSize: CGSize(width: panelInterpolator.dockWidth, height: panelInterpolator.dockHeight),
+        gap: panelInterpolator.gap,
+        screen: nil
+    ).frame!
+)
+check("T-ip9 DockPanel障碍变化立即snap", abs(panelInterpolator.frame.origin.y - panelSafetyTarget.origin.y) < 1.0,
+      "actual=\(panelInterpolator.frame) target=\(panelSafetyTarget)")
+panelInterpolator.hideIfNeeded()
+_ = panelInterpolator.placeBelow(petQuartzRect: panelPetB, movementChanged: true, monotonicNow: 0.016)
+check("T-ip10 DockPanel隐藏后重现首帧snap", abs(panelInterpolator.frame.origin.x - panelTargetB.origin.x) < 1.0, "frame=\(panelInterpolator.frame)")
+print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) failed")
+
 // ---- T-avoid: 会话气泡避让（obstaclesNear + safeDockFrame + placeBelow）----
 let avBase = fail, avPass = pass
 let petRect = CGRect(x: 100, y: 100, width: 172, height: 179)   // Mascot 几何（示例）
@@ -614,8 +735,8 @@ check("T-bv12 wid不在当前候选集→hidden(当前帧失效)", probe.visibil
 
 // 异步集成（fake capturer + RunLoop pump）：pending capture 完成 → cached 更新
 var fakeTime: TimeInterval = 2000
-let fakeCollapsed: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
-    BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080)
+let fakeCollapsed: BubbleCapturer = { _ in
+    .stats(BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080))
 }
 let asyncProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: fakeCollapsed)
 let c1 = mkw(100, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
@@ -629,9 +750,9 @@ check("T-bv14 pending完成→cached(hidden)+inFlight=false",
       asyncProbe.visibility(for: CGWindowID(100)) == .hidden && !asyncProbe.lock.withLock { $0.inFlight }, "")
 
 // strict single-flight：reset 期间新 probe 不启动（inFlight 由旧 Task 清）
-let slowCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
+let slowCap: BubbleCapturer = { _ in
     try? await Task.sleep(nanoseconds: 300_000_000)  // 300ms（async-safe，无 semaphore）
-    return BubbleAlphaStats(nonTransparentRatio: 0.001, bboxRatio: 0.001)
+    return .stats(BubbleAlphaStats(nonTransparentRatio: 0.001, bboxRatio: 0.001))
 }
 fakeTime = 3000
 let concProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: slowCap)
@@ -713,8 +834,8 @@ check("T-bv32 cached非空时probe([])→递增generation+清cached",
 // 该 wid 的 cached visibility 必须立即失效（不再返回 visible）。
 // 真机语义：消息框收起后窗口可能从 obstaclesNear 消失，底座必须复位到宠物下方，
 // 而非沿用上一帧偏移。当前帧候选消失 = 状态立即失效，禁止残留 visible 缓存。
-let vanishCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
-    BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // expanded → visible
+let vanishCap: BubbleCapturer = { _ in
+    .stats(BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080))   // expanded → visible
 }
 let vanishProbe = BubbleVisibilityProbe(
     monotonicNow: { 7000 }, canCapture: { true }, capturer: vanishCap
@@ -737,8 +858,10 @@ check("T-bv33b 候选消失→旧wid状态立即失效(非visible)",
 // capture 失败时底座必须继续避让，不能重叠气泡。
 // 收起态的正确复位由 wid 从候选集消失驱动（见 T-bv33），不由 capture nil 驱动。
 var vanishTime: TimeInterval = 8000
-var vanishStats: BubbleAlphaStats? = BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
-let nilCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in vanishStats }
+let vanishStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(
+    BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
+))
+let nilCap: BubbleCapturer = { _ in vanishStats.withLock { $0 } }
 let nilProbe = BubbleVisibilityProbe(monotonicNow: { vanishTime }, canCapture: { true }, capturer: nilCap)
 let nilCand = mkw(310, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 nilProbe.probe(candidates: [nilCand])
@@ -748,7 +871,7 @@ while nilProbe.lock.withLock({ $0.inFlight }) && Date() < nilPump0 {
 }
 check("T-bv34a 前置: expanded→visible", nilProbe.visibility(for: CGWindowID(310)) == .visible, "")
 // SC 捕获该窗口失败（stats nil）——但 wid 仍在当前候选集 → 保守 visible（不当收起）
-vanishStats = nil
+vanishStats.withLock { $0 = .unavailable }
 vanishTime = 8001
 nilProbe.probe(candidates: [nilCand])
 let nilPump1 = Date().addingTimeInterval(5)
@@ -800,8 +923,8 @@ check("T-bv35b 收起→visibleObstacles空→dock复位到281(禁用上帧偏�
 // 帧2 候选 A 从集合消失（knownWids 不含 A）→ visibility(A) 必须立即 hidden，
 // 即使 cached[A] 仍残留 visible，也不能继续作为障碍（回归A复位由候选消失驱动）。
 let p1capTime: TimeInterval = 9000
-let p1Expanded: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
-    BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // expanded → visible
+let p1Expanded: BubbleCapturer = { _ in
+    .stats(BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080))   // expanded → visible
 }
 let p1Probe = BubbleVisibilityProbe(monotonicNow: { p1capTime }, canCapture: { true }, capturer: p1Expanded)
 let p1Cand = mkw(400, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
@@ -826,9 +949,9 @@ check("T-bv36c 候选A消失→visibility立即hidden(旧cache不继续成为障
 // 此时 in-flight Task 完成（generation 仍匹配）写入 cached[A]=visible；
 // visibility(A) 仍必须 hidden —— knownWids 失效优先于 cached 写入。
 let p1Time2: TimeInterval = 9100
-let p1SlowCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
+let p1SlowCap: BubbleCapturer = { _ in
     try? await Task.sleep(nanoseconds: 200_000_000)
-    return BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // visible
+    return .stats(BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080))   // visible
 }
 let p1Probe2 = BubbleVisibilityProbe(monotonicNow: { p1Time2 }, canCapture: { true }, capturer: p1SlowCap)
 let p1Cand2 = mkw(401, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
@@ -857,7 +980,7 @@ check("T-bv37d 已消失候选→visibility保持hidden(in-flight写入不能复
 let blockedCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
 let blockedCap: BubbleCapturer = { _ in
     blockedCaptureCalls.withLock { $0 += 1 }
-    return collapsedS
+    return .stats(collapsedS)
 }
 let blockedProbe = BubbleVisibilityProbe(
     monotonicNow: { 10_000 },
@@ -1213,7 +1336,7 @@ func productionProbeCadence(
                 try? await Task.sleep(nanoseconds: 1_000_000)
             }
         }
-        return expandedS
+        return .stats(expandedS)
     }
     var probe: BubbleVisibilityProbe!
     let scheduler = FollowTickScheduler(
@@ -1347,7 +1470,7 @@ let hintCanCapture = OSAllocatedUnfairLock(initialState: true)
 let hintProbe = BubbleVisibilityProbe(
     monotonicNow: { hintClock.withLock { $0 } },
     canCapture: { hintCanCapture.withLock { $0 } },
-    capturer: { _ in expandedS }
+    capturer: { _ in .stats(expandedS) }
 )
 let hintCandidate = mkw(701, layer: 3, bubbleForCollapse)
 hintProbe.probe(candidates: [hintCandidate])
@@ -1382,7 +1505,7 @@ check("T-sch4e reset/空候选/权限false均不残留retry hint",
 // 已有 stable one-shot 尚未触发时，visible→hidden wake 应提前执行且只执行一次完整 tick。
 var transitionTime: TimeInterval = 11_000
 var transitionClock: TimeInterval = 0
-let transitionStats = OSAllocatedUnfairLock<BubbleAlphaStats?>(initialState: expandedS)
+let transitionStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(expandedS))
 let transitionTicks = OSAllocatedUnfairLock(initialState: 0)
 let transitionOnMain = OSAllocatedUnfairLock(initialState: false)
 let transitionLayoutY = OSAllocatedUnfairLock<CGFloat?>(initialState: nil)
@@ -1444,7 +1567,7 @@ check("T-bv39b 生产布局链初始visible→sink收到1个障碍并避让",
         && stableTimerBeforeWake?.repeats == false,
       "y=\(transitionLayoutY.withLock { $0 } ?? -1) obstacles=\(transitionObstacleCounts.withLock { $0 })")
 
-transitionStats.withLock { $0 = collapsedS }
+transitionStats.withLock { $0 = .stats(collapsedS) }
 transitionTime = 11_001
 transitionProbe.probe(candidates: [transitionCandidate])
 let transitionPump1 = Date().addingTimeInterval(5)
@@ -1472,11 +1595,112 @@ while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump2
 check("T-bv39e hidden不变不重复调度", transitionTicks.withLock { $0 } == 2, "")
 transitionScheduler.stop()
 
+// T-bv39f (v4 regression): CG 候选仍短暂残留，但一次成功取得的 SCK 清单已明确
+// 不含目标 wid。typed outcome 必须把它和 generic unavailable 分开传到布局策略。
+let redCaptureOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(expandedS))
+let redCapture: BubbleCapturer = { _ in redCaptureOutcome.withLock { $0 } }
+var redTime: TimeInterval = 12_100
+let redProbe = BubbleVisibilityProbe(
+    monotonicNow: { redTime }, canCapture: { true }, capturer: redCapture
+)
+let redMascot = mkw(513, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
+let redCandidate = mkw(511, layer: 3, bubbleForCollapse)
+func redLayoutY() -> (obstacles: Int, y: CGFloat?) {
+    var result: (Int, CGFloat?) = (0, nil)
+    _ = FollowLayoutPass.placeDock(
+        mascot: redMascot,
+        candidates: [redMascot, redCandidate],
+        bubbleProbe: redProbe,
+        frameSink: { pet, obstacles in
+            result.0 = obstacles.count
+            result.1 = Geometry.safeDockFrame(
+                pet: pet, avoiding: obstacles,
+                dockSize: dockSizeBV, gap: gapBV, screen: nil
+            ).frame?.origin.y
+            return result.1 != nil
+        }
+    )
+    return result
+}
+redProbe.probe(candidates: [redCandidate])
+_ = waitPumpingMain { !redProbe.lock.withLock { $0.inFlight } }
+let redExpandedLayout = redLayoutY()
+check("T-bv39f1 red前置: same-WID expanded仍是障碍",
+      redProbe.visibility(for: redCandidate.wid) == .visible
+        && redExpandedLayout.obstacles == 1
+        && redExpandedLayout.y == avoidY,
+      "visibility=\(redProbe.visibility(for: redCandidate.wid)) obstacles=\(redExpandedLayout.obstacles) y=\(String(describing: redExpandedLayout.y))")
+
+redCaptureOutcome.withLock { $0 = .targetMissing }
+redTime += 1
+redProbe.probe(candidates: [redCandidate])
+_ = waitPumpingMain { !redProbe.lock.withLock { $0.inFlight } }
+let redMissingLayout = redLayoutY()
+check("T-bv39f2 RED targetMissing→same-WID obstacle失效并回基础位",
+      redProbe.visibility(for: redCandidate.wid) == .hidden
+        && redMissingLayout.obstacles == 0
+        && redMissingLayout.y == baseY,
+      "visibility=\(redProbe.visibility(for: redCandidate.wid)) obstacles=\(redMissingLayout.obstacles) y=\(String(describing: redMissingLayout.y))")
+
+// 相邻安全态：首次观察即 targetMissing，以及已有观察后的 generic unavailable，
+// 都必须继续 conservative visible。
+redProbe.reset()
+redCaptureOutcome.withLock { $0 = .targetMissing }
+redTime += 1
+redProbe.probe(candidates: [redCandidate])
+_ = waitPumpingMain { !redProbe.lock.withLock { $0.inFlight } }
+check("T-bv39f3 未成功观察过的 targetMissing→保守visible",
+      redProbe.visibility(for: redCandidate.wid) == .visible, "")
+
+redProbe.reset()
+redCaptureOutcome.withLock { $0 = .stats(expandedS) }
+redTime += 1
+redProbe.probe(candidates: [redCandidate])
+_ = waitPumpingMain { !redProbe.lock.withLock { $0.inFlight } }
+redCaptureOutcome.withLock { $0 = .unavailable }
+redTime += 1
+redProbe.probe(candidates: [redCandidate])
+_ = waitPumpingMain { !redProbe.lock.withLock { $0.inFlight } }
+check("T-bv39f4 已观察后 generic unavailable→保守visible",
+      redProbe.visibility(for: redCandidate.wid) == .visible, "")
+
+// 候选消失必须结束成功观察生命周期；同一 WID 重现后的首次 targetMissing
+// 不能继承旧 generation 的 hidden 资格。重复 full hide/show 也必须收敛。
+redProbe.probe(candidates: [])
+redTime += 1
+redCaptureOutcome.withLock { $0 = .targetMissing }
+redProbe.probe(candidates: [redCandidate])
+_ = waitPumpingMain { !redProbe.lock.withLock { $0.inFlight } }
+let reappearedMissing = redLayoutY()
+check("T-bv39f5a 候选消失后同WID首次targetMissing仍保守visible",
+      redProbe.visibility(for: redCandidate.wid) == .visible
+        && reappearedMissing.obstacles == 1
+        && reappearedMissing.y == avoidY, "")
+
+var repeatedTransitionsOK = true
+for cycle in 0..<3 {
+    redCaptureOutcome.withLock { $0 = .stats(expandedS) }
+    redTime += 1
+    redProbe.probe(candidates: [redCandidate])
+    _ = waitPumpingMain { !redProbe.lock.withLock { $0.inFlight } }
+    let shown = redLayoutY()
+    redCaptureOutcome.withLock { $0 = .targetMissing }
+    redTime += 1
+    redProbe.probe(candidates: [redCandidate])
+    _ = waitPumpingMain { !redProbe.lock.withLock { $0.inFlight } }
+    let hidden = redLayoutY()
+    repeatedTransitionsOK = repeatedTransitionsOK
+        && shown.obstacles == 1 && shown.y == avoidY
+        && hidden.obstacles == 0 && hidden.y == baseY
+    if cycle < 2 { redProbe.probe(candidates: []) }
+}
+check("T-bv39f5b repeated full hide/show无stale obstacle且回基础位", repeatedTransitionsOK, "")
+
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)
 let staleCap: BubbleCapturer = { _ in
     try? await Task.sleep(nanoseconds: 100_000_000)
-    return collapsedS
+    return .stats(collapsedS)
 }
 let staleProbe = BubbleVisibilityProbe(
     monotonicNow: { 12_000 },

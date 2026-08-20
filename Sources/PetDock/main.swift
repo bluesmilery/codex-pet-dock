@@ -270,7 +270,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         candidates: wins,
                         bubbleProbe: bubbleProbe,
                         frameSink: { [dock] pet, obstacles in
-                            dock.placeBelow(petQuartzRect: pet, avoiding: obstacles, visibleScreen: scr)
+                            dock.placeBelow(
+                                petQuartzRect: pet,
+                                avoiding: obstacles,
+                                visibleScreen: scr,
+                                movementChanged: d.shouldSetFrame,
+                                monotonicNow: followMonotonicNow()
+                            )
                         }
                     )
                     if shown {
