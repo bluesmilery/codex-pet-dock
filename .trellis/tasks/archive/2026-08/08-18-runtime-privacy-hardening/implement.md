@@ -56,7 +56,7 @@
 - [ ] `PYTHONDONTWRITEBYTECODE=1 make PYTHON=<worktree>/miniconda3/bin/python test-privacy`。
 - [ ] `swift build -c release`，0 warning。
 - [ ] `PYTHONDONTWRITEBYTECODE=1 make PYTHON=<worktree>/miniconda3/bin/python test`，全绿。
-- [ ] `trellis update --dry-run`，仅允许已解释结果；无 `.claude/`、workspace/runtime/task 被 tracked。
+- [ ] `trellis update --dry-run`，仅允许已解释结果；按当时基线，无 `.claude/`、workspace/runtime/task 被 tracked。
 - [ ] `git diff --check`、新增行与 base..HEAD 隐私扫描通过。
 - [ ] 使用公开 Git 身份提交，无 `Co-Authored-By`，回报完整 SHA 和未验证项。
 

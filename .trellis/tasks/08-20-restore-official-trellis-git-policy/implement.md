@@ -30,21 +30,21 @@
 - [ ] 搜索其他直接矛盾表述，只做必要的最小同步。
 - [x] 对 base 中被删除的复合规则关键词做清单核对；确认只移除 `.claude/` / workspace 旧边界，保留私有 refs / bundle id 分叉等独立约束。
 - [x] 检查新纳入 Git 的历史 task 中与 `.claude/`、workspace 和 Git 策略相关的现在时表述；已失效策略只补充“当时基线”等时间限定，不改写历史结论。
-- [ ] 将全部 `.trellis/tasks/**`、`.trellis/workspace/**` 纳入候选；确认无 `?? .trellis/tasks/...`，且无关 `design/` 未暂存。
+- [x] 将全部 `.trellis/tasks/**`、`.trellis/workspace/**` 纳入候选；确认无 `?? .trellis/tasks/...`，且无关 `design/` 未暂存。
 
 ## Phase 4：实现负责人自检
 
-- [x] 使用 `trellis-check` skill/checklist 做可写自检和机械修复。
-- [ ] 核对官方模板差异、`git check-ignore` 正反例、有效 config 和 `trellis update --dry-run`。
-- [ ] 执行候选内容隐私扫描，仅报告文件名和计数。
+- [x] 使用 `trellis-check` skill/checklist 做可写自检和机械修复；campaign-reset Review round 1 修复后已再次应用。
+- [x] 核对官方模板差异、`git check-ignore` 正反例、有效 config 和 `trellis update --dry-run`。
+- [x] 执行候选内容隐私扫描，仅报告文件名和计数。
 - [x] 执行 `git diff --check`、`make docs-check`、`make test-docs`。
 - [x] 执行 `swift build -c release`，确认 0 warning。
-- [x] 执行 `make test`，确认 test-ui、test-data、test-shell 全绿。系统 Python 缺 pytest；已用 `make PYTHON=/Users/<user>/miniconda3/bin/python test` 复验全绿。
+- [x] 执行 `make test`，确认 test-ui、test-data、test-shell 全绿。系统 Python 缺 pytest；已用 `make PYTHON=<conda-base>/bin/python test` 复验全绿。
 - [x] 使用 `bluesmilery <19263500+bluesmilery@users.noreply.github.com>` 提交，commit body 不含 `Co-Authored-By`；报告完整 SHA、修改文件、关键 diff、命令结果、失败项和未验证项。
 
 ## Phase 5：正式 Review、修复熔断与 QA
 
-- [ ] 冻结完整候选 SHA，由全新只读 Review Agent 完整检查 P0/P1/P2。
+- [x] 冻结完整候选 SHA，由全新只读 Review Agent 完整检查 P0/P1/P2。
 - [ ] 首轮有 findings 时由原实现负责人集中修复并提交新 SHA，旧 Review/测试/QA 结论全部失效。
 - [ ] 第二轮仍有实质 finding 时执行 `trellis-break-loop`，重新分析和规划后再继续。
 - [ ] `87d78212761da2d6baac16fadac39d43cf906f78` 的第二轮 Review 已触发 break-loop；更新 PRD/design/spec 和根因记录后，从新候选重新计为 Review round 1，不复用此前 Review 结论。
