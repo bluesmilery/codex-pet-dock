@@ -45,6 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let dock = DockPanel()
     private let detail = DetailPanel()
     private let provider: LiveDockProvider
+    private let followMonotonicNow: @Sendable () -> TimeInterval = {
+        ProcessInfo.processInfo.systemUptime
+    }
     private lazy var followScheduler: FollowTickScheduler = {
         FollowTickScheduler(
             runTick: { [weak self] in self?.tick() ?? .hidden },
@@ -54,10 +57,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             canUseDisplayLink: { [dock] in dock.isDisplayLinkEligible },
             maximumFramesPerSecond: { [dock] in dock.maximumFramesPerSecond },
+            monotonicNow: followMonotonicNow,
             stableDelayHint: { [weak self] in self?.bubbleProbe.takePendingRetryDelay() }
         )
     }()
     private lazy var bubbleProbe = BubbleVisibilityProbe(
+        monotonicNow: followMonotonicNow,
         onVisibilityChange: followScheduler.visibilityChangeCallback
     )
     private let settings = Settings()
@@ -221,7 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pet: pet,
             stationaryAnchor: stationaryAnchor,
             lastMaterialChangeAt: lastMaterialChangeAt,
-            now: ProcessInfo.processInfo.systemUptime
+            now: followMonotonicNow()
         )
 
         // TCC 缺失降级提示：连续无候选 + 屏幕录制权限未授予 → 状态栏提示（避免静默失败）。

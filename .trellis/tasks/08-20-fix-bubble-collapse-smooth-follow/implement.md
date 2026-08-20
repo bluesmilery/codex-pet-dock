@@ -38,6 +38,17 @@ The review campaign for `ee759ca` → `6e3536a` is closed and invalid. Before pr
 5. Expose only the minimum DockPanel state/event needed: real `panel.screen != nil` eligibility plus screen-change callback. Do not add a general notification abstraction.
 6. Re-run `trellis-check`, all gates and simplicity review; freeze a new SHA and start a fresh full formal Review campaign. Any findings follow the normal new-campaign workflow; no old Review approval or QA evidence is reusable.
 
+## Second break-loop replan after wall-clock Review finding
+
+The Review campaign ending at `539009e` is closed and invalid. Before producing another candidate, the same implementation owner must:
+
+1. Cherry-pick the main-session second break-loop/spec commit into the implementation branch.
+2. Add red regressions proving the existing `Date()` cadence changes when wall time jumps forward/backward while a separate monotonic clock advances normally; include both premature recapture and delayed retry counterexamples.
+3. Convert BubbleVisibility cadence state (`lastCapture`, pending retry deadline and comparisons) to the same injected monotonic clock domain used by the scheduler, with production default `ProcessInfo.systemUptime`. Do not bridge wall `Date` into elapsed-time arithmetic.
+4. Keep the absolute due-instant retry contract and dynamic consumption from the prior fix; verify `.020 → .110 → .120` and post-probe overrun `.130` regressions still pass under the unified monotonic clock.
+5. Preserve reset/empty/TCC false/in-flight/generation hygiene, single Timer source, latest-only coalescing, display-link recovery and capture-rate cap. Do not introduce a clock framework or unrelated timestamp refactor.
+6. Re-run `trellis-check`, all gates and simplicity review; freeze a new SHA and start a new full formal Review campaign. No Review or QA evidence from `539009e` is reusable.
+
 ## Required validation
 
 ```bash

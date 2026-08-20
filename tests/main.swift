@@ -590,13 +590,13 @@ check("T-bv5c nil stats(previous visible)→visible(保守避让)",
       BubbleVisibilityClassifier.classify(stats: nil, previous: .visible) == .visible, "")
 
 // 调度（isDue + single-flight + reset）—— 经 lock 访问
-let probe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 1000) })
-check("T-bv6 初始isDue=true", probe.isDue(Date(timeIntervalSince1970: 1000)), "")
-probe.lock.withLock { $0.lastCapture = Date(timeIntervalSince1970: 1000); $0.inFlight = false }
-check("T-bv7 <0.1s→false", !probe.isDue(Date(timeIntervalSince1970: 1000.09)), "")
-check("T-bv8 >=0.1s→true", probe.isDue(Date(timeIntervalSince1970: 1000.1)), "")
+let probe = BubbleVisibilityProbe(monotonicNow: { 1000 })
+check("T-bv6 初始isDue=true", probe.isDue(1000), "")
+probe.lock.withLock { $0.lastCaptureAt = 1000; $0.inFlight = false }
+check("T-bv7 <0.1s→false", !probe.isDue(1000.09), "")
+check("T-bv8 >=0.1s→true", probe.isDue(1000.1), "")
 probe.lock.withLock { $0.inFlight = true }
-check("T-bv9 single-flight→false", !probe.isDue(Date(timeIntervalSince1970: 1001)), "")
+check("T-bv9 single-flight→false", !probe.isDue(1001), "")
 probe.reset()
 check("T-bv10 reset不清inFlight(旧Task负责)", probe.lock.withLock { $0.inFlight }, "")
 probe.lock.withLock { $0.inFlight = false; $0.cached = [CGWindowID(1): .visible] }
@@ -606,11 +606,11 @@ probe.lock.withLock { $0.inFlight = false }
 check("T-bv12 wid不在当前候选集→hidden(当前帧失效)", probe.visibility(for: CGWindowID(99)) == .hidden, "")
 
 // 异步集成（fake capturer + RunLoop pump）：pending capture 完成 → cached 更新
-var fakeTime = Date(timeIntervalSince1970: 2000)
+var fakeTime: TimeInterval = 2000
 let fakeCollapsed: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080)
 }
-let asyncProbe = BubbleVisibilityProbe(now: { fakeTime }, canCapture: { true }, capturer: fakeCollapsed)
+let asyncProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: fakeCollapsed)
 let c1 = mkw(100, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 asyncProbe.probe(candidates: [c1])
 check("T-bv13 probe后inFlight=true", asyncProbe.lock.withLock { $0.inFlight }, "")
@@ -626,8 +626,8 @@ let slowCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     try? await Task.sleep(nanoseconds: 300_000_000)  // 300ms（async-safe，无 semaphore）
     return BubbleAlphaStats(nonTransparentRatio: 0.001, bboxRatio: 0.001)
 }
-fakeTime = Date(timeIntervalSince1970: 3000)
-let concProbe = BubbleVisibilityProbe(now: { fakeTime }, canCapture: { true }, capturer: slowCap)
+fakeTime = 3000
+let concProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: slowCap)
 concProbe.probe(candidates: [c1])
 check("T-bv15 首次probe→inFlight=true", concProbe.lock.withLock { $0.inFlight }, "")
 concProbe.probe(candidates: [c1])
@@ -645,7 +645,7 @@ check("T-bv19 旧Task完成→inFlight=false", !concProbe.lock.withLock { $0.inF
 check("T-bv20 旧Task回调generation过期→cached仍空", concProbe.lock.withLock { $0.cached.isEmpty }, "")
 
 // 新 probe 启动（旧完成后）→ 新结果生效
-fakeTime = Date(timeIntervalSince1970: 3001)
+fakeTime = 3001
 let c2 = mkw(200, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 concProbe.probe(candidates: [c2])
 check("T-bv21 旧完成后新probe启动→inFlight=true", concProbe.lock.withLock { $0.inFlight }, "")
@@ -657,8 +657,8 @@ check("T-bv22 新probe完成→cached更新(hidden)", concProbe.visibility(for: 
 check("T-bv23 旧wid从候选消失→hidden(当前帧失效,非污染)", concProbe.visibility(for: CGWindowID(100)) == .hidden, "")
 
 // strict single-flight：在途 Task 中 probe(empty) → 候选重新出现 probe 仍被拒（inFlight 不清）
-fakeTime = Date(timeIntervalSince1970: 4000)
-let concProbe2 = BubbleVisibilityProbe(now: { fakeTime }, canCapture: { true }, capturer: slowCap)  // 300ms capturer
+fakeTime = 4000
+let concProbe2 = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: slowCap)  // 300ms capturer
 concProbe2.probe(candidates: [c1])
 check("T-bv24 首次probe→inFlight=true", concProbe2.lock.withLock { $0.inFlight }, "")
 // 在途时 probe(empty) → 与 reset 一致：不清 inFlight
@@ -675,7 +675,7 @@ while concProbe2.lock.withLock({ $0.inFlight }) && Date() < pumpDeadline3 {
 check("T-bv27 旧Task完成→inFlight=false", !concProbe2.lock.withLock { $0.inFlight }, "")
 check("T-bv28 旧结果不写cached(generation过期)", concProbe2.lock.withLock { $0.cached.isEmpty }, "")
 // 新 probe 可启动 → 结果生效
-fakeTime = Date(timeIntervalSince1970: 4001)
+fakeTime = 4001
 concProbe2.probe(candidates: [c2])
 check("T-bv29 旧完成后新probe启动→inFlight=true", concProbe2.lock.withLock { $0.inFlight }, "")
 let pumpDeadline4 = Date().addingTimeInterval(5)
@@ -685,7 +685,7 @@ while concProbe2.lock.withLock({ $0.inFlight }) && Date() < pumpDeadline4 {
 check("T-bv30 新probe完成→cached(hidden)", concProbe2.visibility(for: CGWindowID(200)) == .hidden, "")
 
 // T-bv31: 完全空闲态（candidates 空 + cached 空 + !inFlight）probe 不递增 generation（避免无意义锁写）
-let idleProbe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 5000) })
+let idleProbe = BubbleVisibilityProbe(monotonicNow: { 5000 })
 let genBefore = idleProbe.lock.withLock { $0.generation }
 idleProbe.probe(candidates: [])
 idleProbe.probe(candidates: [])
@@ -694,7 +694,7 @@ let genAfter = idleProbe.lock.withLock { $0.generation }
 check("T-bv31 空闲态空probe不递增generation", genAfter == genBefore, "before=\(genBefore) after=\(genAfter)")
 
 // T-bv32: cached 有值时 probe([]) → 仍清 cached + 递增 generation（旧结果失效）
-let cacheProbe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 6000) })
+let cacheProbe = BubbleVisibilityProbe(monotonicNow: { 6000 })
 cacheProbe.lock.withLock { $0.cached = [CGWindowID(7): .visible]; $0.inFlight = false }
 let genCB = cacheProbe.lock.withLock { $0.generation }
 cacheProbe.probe(candidates: [])
@@ -710,7 +710,7 @@ let vanishCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // expanded → visible
 }
 let vanishProbe = BubbleVisibilityProbe(
-    now: { Date(timeIntervalSince1970: 7000) }, canCapture: { true }, capturer: vanishCap
+    monotonicNow: { 7000 }, canCapture: { true }, capturer: vanishCap
 )
 vanishProbe.probe(candidates: [mkw(300, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))])
 let vanishPump0 = Date().addingTimeInterval(5)
@@ -729,10 +729,10 @@ check("T-bv33b 候选消失→旧wid状态立即失效(非visible)",
 // 这是 README "capture failure conservatively avoids" 契约：当前仍存在的气泡，
 // capture 失败时底座必须继续避让，不能重叠气泡。
 // 收起态的正确复位由 wid 从候选集消失驱动（见 T-bv33），不由 capture nil 驱动。
-var vanishTime = Date(timeIntervalSince1970: 8000)
+var vanishTime: TimeInterval = 8000
 var vanishStats: BubbleAlphaStats? = BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
 let nilCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in vanishStats }
-let nilProbe = BubbleVisibilityProbe(now: { vanishTime }, canCapture: { true }, capturer: nilCap)
+let nilProbe = BubbleVisibilityProbe(monotonicNow: { vanishTime }, canCapture: { true }, capturer: nilCap)
 let nilCand = mkw(310, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 nilProbe.probe(candidates: [nilCand])
 let nilPump0 = Date().addingTimeInterval(5)
@@ -742,7 +742,7 @@ while nilProbe.lock.withLock({ $0.inFlight }) && Date() < nilPump0 {
 check("T-bv34a 前置: expanded→visible", nilProbe.visibility(for: CGWindowID(310)) == .visible, "")
 // SC 捕获该窗口失败（stats nil）——但 wid 仍在当前候选集 → 保守 visible（不当收起）
 vanishStats = nil
-vanishTime = Date(timeIntervalSince1970: 8001)
+vanishTime = 8001
 nilProbe.probe(candidates: [nilCand])
 let nilPump1 = Date().addingTimeInterval(5)
 while nilProbe.lock.withLock({ $0.inFlight }) && Date() < nilPump1 {
@@ -754,12 +754,12 @@ check("T-bv34b 候选仍存在+capture nil→保守visible(不误判收起,READM
 
 // T-bv34c (P1 场景3·nil 后无 hidden-visible 错误转换)：收起(候选消失→hidden)
 // 后若再出现(候选重现)，capture 仍 nil 时必须回到 visible，不能因缓存/异步滞留 hidden。
-vanishTime = Date(timeIntervalSince1970: 8002)
+vanishTime = 8002
 nilProbe.probe(candidates: [])   // 候选全部消失 → wid 310 失效为 hidden
 check("T-bv34c1 候选消失→旧wid立即hidden",
       nilProbe.visibility(for: CGWindowID(310)) == .hidden, "")
 // 候选重新出现 + capture nil → 保守 visible（不能滞留 hidden）
-vanishTime = Date(timeIntervalSince1970: 8003)
+vanishTime = 8003
 nilProbe.probe(candidates: [nilCand])
 let nilPump2 = Date().addingTimeInterval(5)
 while nilProbe.lock.withLock({ $0.inFlight }) && Date() < nilPump2 {
@@ -792,11 +792,11 @@ check("T-bv35b 收起→visibleObstacles空→dock复位到281(禁用上帧偏�
 // 帧1 候选 A 被 capture 为 visible 并写入 cached[A]=visible；
 // 帧2 候选 A 从集合消失（knownWids 不含 A）→ visibility(A) 必须立即 hidden，
 // 即使 cached[A] 仍残留 visible，也不能继续作为障碍（回归A复位由候选消失驱动）。
-let p1capTime = Date(timeIntervalSince1970: 9000)
+let p1capTime: TimeInterval = 9000
 let p1Expanded: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // expanded → visible
 }
-let p1Probe = BubbleVisibilityProbe(now: { p1capTime }, canCapture: { true }, capturer: p1Expanded)
+let p1Probe = BubbleVisibilityProbe(monotonicNow: { p1capTime }, canCapture: { true }, capturer: p1Expanded)
 let p1Cand = mkw(400, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 p1Probe.probe(candidates: [p1Cand])
 let p1Pump0 = Date().addingTimeInterval(5)
@@ -818,12 +818,12 @@ check("T-bv36c 候选A消失→visibility立即hidden(旧cache不继续成为障
 // 帧1 候选 A probe（in-flight 未完成）；帧2 候选 A 消失（knownWids 不含 A），
 // 此时 in-flight Task 完成（generation 仍匹配）写入 cached[A]=visible；
 // visibility(A) 仍必须 hidden —— knownWids 失效优先于 cached 写入。
-let p1Time2 = Date(timeIntervalSince1970: 9100)
+let p1Time2: TimeInterval = 9100
 let p1SlowCap: @Sendable (WinCandidate) async -> BubbleAlphaStats? = { _ in
     try? await Task.sleep(nanoseconds: 200_000_000)
     return BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)   // visible
 }
-let p1Probe2 = BubbleVisibilityProbe(now: { p1Time2 }, canCapture: { true }, capturer: p1SlowCap)
+let p1Probe2 = BubbleVisibilityProbe(monotonicNow: { p1Time2 }, canCapture: { true }, capturer: p1SlowCap)
 let p1Cand2 = mkw(401, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 p1Probe2.probe(candidates: [p1Cand2])   // 启动 in-flight
 check("T-bv37a in-flight启动", p1Probe2.lock.withLock { $0.inFlight }, "")
@@ -853,7 +853,7 @@ let blockedCap: BubbleCapturer = { _ in
     return collapsedS
 }
 let blockedProbe = BubbleVisibilityProbe(
-    now: { Date(timeIntervalSince1970: 10_000) },
+    monotonicNow: { 10_000 },
     canCapture: { false },
     capturer: blockedCap
 )
@@ -1185,11 +1185,10 @@ func productionProbeCadence(
     postProbeOffsets: [TimeInterval] = [],
     keepFirstCaptureInFlight: Bool = false
 ) -> ProductionProbeCadenceResult {
-    let baseDate = Date(timeIntervalSince1970: 12_000)
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(0))
     var probeAttempts: [TimeInterval] = []
     var captureStarts: [TimeInterval] = []
-    var lastObservedCapture = Date.distantPast
+    var lastObservedCapture = -TimeInterval.greatestFiniteMagnitude
     var timers: [TestFollowTickTimer] = []
     var firedIntervals: [TimeInterval] = []
     var ticks = 0
@@ -1226,10 +1225,10 @@ func productionProbeCadence(
                 bubbleProbe: probe,
                 frameSink: { _, _ in true }
             )
-            let capturedAt = probe.lock.withLock { $0.lastCapture }
+            let capturedAt = probe.lock.withLock { $0.lastCaptureAt }
             if capturedAt != lastObservedCapture {
                 lastObservedCapture = capturedAt
-                captureStarts.append(capturedAt.timeIntervalSince(baseDate))
+                captureStarts.append(capturedAt)
             }
             if tickIndex < postProbeOffsets.count {
                 let postProbeOffset = postProbeOffsets[tickIndex]
@@ -1249,7 +1248,7 @@ func productionProbeCadence(
         }
     )
     probe = BubbleVisibilityProbe(
-        now: { baseDate.addingTimeInterval(clock.withLock { $0 }) },
+        monotonicNow: { clock.withLock { $0 } },
         canCapture: { true },
         capturer: capturer
     )
@@ -1336,33 +1335,33 @@ check("T-sch4d in-flight不留hint、不加retry source且无queued backlog",
         + "calls=\(inFlightProbeCadence.captureCallCount) ticks=\(inFlightProbeCadence.tickCount) "
         + "active=\(inFlightProbeCadence.remainingActiveTimerIntervals)")
 
-let hintClock = OSAllocatedUnfairLock(initialState: Date(timeIntervalSince1970: 13_000))
+let hintClock = OSAllocatedUnfairLock(initialState: TimeInterval(13_000))
 let hintCanCapture = OSAllocatedUnfairLock(initialState: true)
 let hintProbe = BubbleVisibilityProbe(
-    now: { hintClock.withLock { $0 } },
+    monotonicNow: { hintClock.withLock { $0 } },
     canCapture: { hintCanCapture.withLock { $0 } },
     capturer: { _ in expandedS }
 )
 let hintCandidate = mkw(701, layer: 3, bubbleForCollapse)
 hintProbe.probe(candidates: [hintCandidate])
 _ = waitPumpingMain { !hintProbe.lock.withLock { $0.inFlight } }
-hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.05) }
+hintClock.withLock { $0 = 13_000.05 }
 hintProbe.probe(candidates: [hintCandidate])
 hintProbe.reset()
 let hintAfterReset = hintProbe.takePendingRetryDelay()
 
-hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.11) }
+hintClock.withLock { $0 = 13_000.11 }
 hintProbe.probe(candidates: [hintCandidate])
 _ = waitPumpingMain { !hintProbe.lock.withLock { $0.inFlight } }
-hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.15) }
+hintClock.withLock { $0 = 13_000.15 }
 hintProbe.probe(candidates: [hintCandidate])
 hintProbe.probe(candidates: [])
 let hintAfterEmpty = hintProbe.takePendingRetryDelay()
 
-hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.22) }
+hintClock.withLock { $0 = 13_000.22 }
 hintProbe.probe(candidates: [hintCandidate])
 _ = waitPumpingMain { !hintProbe.lock.withLock { $0.inFlight } }
-hintClock.withLock { $0 = Date(timeIntervalSince1970: 13_000.26) }
+hintClock.withLock { $0 = 13_000.26 }
 hintProbe.probe(candidates: [hintCandidate])
 hintCanCapture.withLock { $0 = false }
 hintProbe.probe(candidates: [hintCandidate])
@@ -1372,9 +1371,124 @@ check("T-sch4e reset/空候选/权限false均不残留retry hint",
       "reset=\(String(describing: hintAfterReset)) empty=\(String(describing: hintAfterEmpty)) "
         + "permission=\(String(describing: hintAfterPermissionLoss))")
 
+// T-sch4f/g: scheduler 的单调时钟与无关墙钟独立变化时，生产 probe cadence 不得改变。
+// 前跳不能在一个 120Hz display cadence 后提前重抓；后跳不能压住已经满足 0.1s 的重抓。
+let mascotForCadence = mkw(704, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
+let bubbleForCadence = mkw(705, layer: 3, bubbleForCollapse)
+let forwardMonotonic = OSAllocatedUnfairLock(initialState: TimeInterval(0))
+let forwardWallStart = Date(timeIntervalSince1970: 14_000)
+let forwardWall = OSAllocatedUnfairLock(initialState: forwardWallStart)
+let forwardCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+var forwardTicks = 0
+var forwardTimers: [TestFollowTickTimer] = []
+var forwardProbe: BubbleVisibilityProbe!
+let forwardScheduler = FollowTickScheduler(
+    runTick: {
+        forwardTicks += 1
+        _ = FollowLayoutPass.placeDock(
+            mascot: mascotForCadence,
+            candidates: [mascotForCadence, bubbleForCadence],
+            bubbleProbe: forwardProbe,
+            frameSink: { _, _ in true }
+        )
+        return .moving
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 120 },
+    monotonicNow: { forwardMonotonic.withLock { $0 } },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        forwardTimers.append(timer)
+        return timer
+    }
+)
+forwardProbe = BubbleVisibilityProbe(
+    monotonicNow: { forwardMonotonic.withLock { $0 } },
+    canCapture: { true },
+    capturer: { _ in
+        forwardCaptureCalls.withLock { $0 += 1 }
+        return expandedS
+    }
+)
+forwardScheduler.start()
+forwardScheduler.requestWake()
+_ = waitPumpingMain { forwardTicks == 1 && !forwardProbe.lock.withLock { $0.inFlight } }
+forwardMonotonic.withLock { $0 += 1.0 / 120.0 }
+forwardWall.withLock { $0 = $0.addingTimeInterval(1) }
+forwardTimers.last(where: { $0.repeats && !$0.invalidated })?.fire()
+_ = waitPumpingMain { forwardTicks == 2 && !forwardProbe.lock.withLock { $0.inFlight } }
+let forwardActiveSources = forwardTimers.filter { !$0.invalidated }
+let forwardWallJump = forwardWall.withLock { $0.timeIntervalSince(forwardWallStart) }
+check("T-sch4f 墙钟前跳不在8ms display cadence提前capture",
+      forwardCaptureCalls.withLock { $0 } == 1
+        && forwardTicks == 2
+        && forwardWallJump > BubbleVisibilityProbe.minInterval
+        && forwardActiveSources.count == 1
+        && forwardActiveSources[0].repeats,
+      "calls=\(forwardCaptureCalls.withLock { $0 }) ticks=\(forwardTicks) "
+        + "wallJump=\(forwardWallJump) active=\(forwardActiveSources.count)")
+forwardScheduler.stop()
+
+let backwardMonotonic = OSAllocatedUnfairLock(initialState: TimeInterval(0))
+let backwardWallStart = Date(timeIntervalSince1970: 15_000)
+let backwardWall = OSAllocatedUnfairLock(initialState: backwardWallStart)
+let backwardCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+var backwardTicks = 0
+var backwardTimers: [TestFollowTickTimer] = []
+var backwardProbe: BubbleVisibilityProbe!
+let backwardScheduler = FollowTickScheduler(
+    runTick: {
+        backwardTicks += 1
+        _ = FollowLayoutPass.placeDock(
+            mascot: mascotForCadence,
+            candidates: [mascotForCadence, bubbleForCadence],
+            bubbleProbe: backwardProbe,
+            frameSink: { _, _ in true }
+        )
+        return .stable
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { backwardMonotonic.withLock { $0 } },
+    stableDelayHint: { backwardProbe.takePendingRetryDelay() },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        backwardTimers.append(timer)
+        return timer
+    }
+)
+backwardProbe = BubbleVisibilityProbe(
+    monotonicNow: { backwardMonotonic.withLock { $0 } },
+    canCapture: { true },
+    capturer: { _ in
+        backwardCaptureCalls.withLock { $0 += 1 }
+        return expandedS
+    }
+)
+backwardScheduler.start()
+backwardScheduler.requestWake()
+_ = waitPumpingMain { backwardTicks == 1 && !backwardProbe.lock.withLock { $0.inFlight } }
+backwardMonotonic.withLock { $0 = 0.1 }
+backwardWall.withLock { $0 = $0.addingTimeInterval(-1) }
+backwardTimers.last(where: { !$0.invalidated })?.fire()
+_ = waitPumpingMain { backwardTicks == 2 && !backwardProbe.lock.withLock { $0.inFlight } }
+let backwardActiveSources = backwardTimers.filter { !$0.invalidated }
+let backwardWallJump = backwardWall.withLock { $0.timeIntervalSince(backwardWallStart) }
+check("T-sch4g 墙钟后跳不压住monotonic 0.1s到期capture",
+      backwardCaptureCalls.withLock { $0 } == 2
+        && backwardTicks == 2
+        && backwardWallJump < -BubbleVisibilityProbe.minInterval
+        && backwardActiveSources.count == 1
+        && !backwardActiveSources[0].repeats,
+      "calls=\(backwardCaptureCalls.withLock { $0 }) ticks=\(backwardTicks) "
+        + "wallJump=\(backwardWallJump) active=\(backwardActiveSources.count)")
+backwardScheduler.stop()
+
 // T-bv39: 生产 FollowLayoutPass 必须贯穿候选分类→probe cache→可见障碍→frame sink。
 // 已有 stable one-shot 尚未触发时，visible→hidden wake 应提前执行且只执行一次完整 tick。
-var transitionTime = Date(timeIntervalSince1970: 11_000)
+var transitionTime: TimeInterval = 11_000
 var transitionClock: TimeInterval = 0
 let transitionStats = OSAllocatedUnfairLock<BubbleAlphaStats?>(initialState: expandedS)
 let transitionTicks = OSAllocatedUnfairLock(initialState: 0)
@@ -1417,7 +1531,7 @@ let transitionScheduler = FollowTickScheduler(
     }
 )
 transitionProbe = BubbleVisibilityProbe(
-    now: { transitionTime },
+    monotonicNow: { transitionTime },
     canCapture: { true },
     capturer: transitionCap,
     onVisibilityChange: transitionScheduler.visibilityChangeCallback
@@ -1439,7 +1553,7 @@ check("T-bv39b 生产布局链初始visible→sink收到1个障碍并避让",
       "y=\(transitionLayoutY.withLock { $0 } ?? -1) obstacles=\(transitionObstacleCounts.withLock { $0 })")
 
 transitionStats.withLock { $0 = collapsedS }
-transitionTime = Date(timeIntervalSince1970: 11_001)
+transitionTime = 11_001
 transitionProbe.probe(candidates: [transitionCandidate])
 let transitionPump1 = Date().addingTimeInterval(5)
 while (transitionProbe.lock.withLock({ $0.inFlight })
@@ -1457,7 +1571,7 @@ check("T-bv39d pet不变+生产链hidden cache→sink无障碍并复位",
         && transitionObstacleCounts.withLock { $0 } == [1, 0],
       "y=\(transitionLayoutY.withLock { $0 } ?? -1) obstacles=\(transitionObstacleCounts.withLock { $0 })")
 
-transitionTime = Date(timeIntervalSince1970: 11_002)
+transitionTime = 11_002
 transitionProbe.probe(candidates: [transitionCandidate])
 let transitionPump2 = Date().addingTimeInterval(5)
 while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump2 {
@@ -1473,7 +1587,7 @@ let staleCap: BubbleCapturer = { _ in
     return collapsedS
 }
 let staleProbe = BubbleVisibilityProbe(
-    now: { Date(timeIntervalSince1970: 12_000) },
+    monotonicNow: { 12_000 },
     canCapture: { true },
     capturer: staleCap,
     onVisibilityChange: { staleNotifications.withLock { $0 += 1 } }

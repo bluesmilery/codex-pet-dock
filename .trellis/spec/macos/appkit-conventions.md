@@ -38,6 +38,7 @@ appKitOriginY = mainScreenHeight - quartzOriginY - height
 ## 显示节拍与调度源存活性
 
 - 有最大启动间隔契约的 tick 必须从本次 tick 的单调开始时间计算下一 deadline；外部 wake 会重置相位，不能继续沿用旧 stable phase。下一次 tick 应在 `max(deadline, workCompletedAt)` 前启动；若串行主线程工作已经跨过 deadline，只保留一个在工作完成后立即执行的 latest-only tick，不补发历史帧，也不再额外等待一个完整 interval。启动间隔验收须区分调度器新增等待、当前串行工作时间与异步 single-flight 在途时间。
+- cadence、throttle、retry hint 与 deadline 必须端到端使用同一可注入的单调时钟（生产默认 `ProcessInfo.systemUptime`）；不得用 `Date()` 墙上时间参与间隔判定。测试须证明系统时间前跳/后跳不改变捕获频率或最大等待。
 - 测试必须覆盖 `wake phase × tick work duration`：相位起点、off-grid wake、工作跨 deadline、工作超过一个或多个 interval；只测 interval 常量或 phase-aligned 情况不构成 cadence 证明。
 - `NSWindow.isVisible` 不代表窗口属于某个 display，也不保证 window-bound display link 仍会回调。display-link eligibility 必须检查 `window.screen != nil`，并由 window-screen / screen-parameters 变化通知或等价恢复源触发重新评估。
 - display-link 生命周期测试必须覆盖 active → no-screen fallback → screen restored，而不仅是创建失败时的 Timer fallback；任一 source 停止发 beat 后仍须存在可证明的恢复路径。

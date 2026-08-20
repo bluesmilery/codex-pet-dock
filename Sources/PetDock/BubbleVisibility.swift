@@ -75,9 +75,9 @@ final class BubbleVisibilityProbe: Sendable {
     /// 受锁保护的可变状态（同 module 测试可经 lock 访问）。
     internal struct ProbeState: Sendable {
         var cached: [CGWindowID: BubbleVisibility] = [:]
-        var lastCapture: Date = .distantPast
+        var lastCaptureAt: TimeInterval = -.greatestFiniteMagnitude
         var inFlight = false
-        var pendingRetryDeadline: Date?
+        var pendingRetryAt: TimeInterval?
         /// 候选版本：reset 递增。旧 Task 回调 generation 不匹配时丢弃。
         var generation = 0
         /// 最近一次 `probe(candidates:)` 传入的 wid 集合（当前帧实际存在的候选）。
@@ -87,17 +87,17 @@ final class BubbleVisibilityProbe: Sendable {
     }
 
     internal let lock: OSAllocatedUnfairLock<ProbeState>
-    private let now: @Sendable () -> Date
+    private let monotonicNow: @Sendable () -> TimeInterval
     private let canCapture: @Sendable () -> Bool
     private let capturer: BubbleCapturer
     private let onVisibilityChange: @Sendable () -> Void
 
-    init(now: @escaping @Sendable () -> Date = { Date() },
+    init(monotonicNow: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          canCapture: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
          capturer: BubbleCapturer? = nil,
          onVisibilityChange: @escaping @Sendable () -> Void = {}) {
         self.lock = OSAllocatedUnfairLock(initialState: ProbeState())
-        self.now = now
+        self.monotonicNow = monotonicNow
         self.canCapture = canCapture
         self.capturer = capturer ?? Self.defaultCapturer
         self.onVisibilityChange = onVisibilityChange
@@ -106,9 +106,9 @@ final class BubbleVisibilityProbe: Sendable {
     // MARK: - 主线程接口（tick 同步调用）
 
     /// 是否可触发探测（0.1s cadence + single-flight）。
-    func isDue(_ time: Date) -> Bool {
+    func isDue(_ time: TimeInterval) -> Bool {
         lock.withLock { s in
-            !s.inFlight && time.timeIntervalSince(s.lastCapture) >= Self.minInterval
+            !s.inFlight && time - s.lastCaptureAt >= Self.minInterval
         }
     }
 
@@ -121,7 +121,7 @@ final class BubbleVisibilityProbe: Sendable {
         let shouldStart: Bool
         let captureAllowed = !candidates.isEmpty && canCapture()
         (gen, prev, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Bool) in
-            s.pendingRetryDeadline = nil
+            s.pendingRetryAt = nil
             // 同步刷新 knownWids：当前帧实际存在的候选 wid（每帧事实，立即生效）。
             s.knownWids = Set(candidates.map { $0.wid })
             guard !candidates.isEmpty else {
@@ -143,17 +143,17 @@ final class BubbleVisibilityProbe: Sendable {
                 }
                 return (0, [:], false)
             }
-            let time = now()
+            let time = monotonicNow()
             guard !s.inFlight else {
                 return (0, [:], false)
             }
-            let elapsed = time.timeIntervalSince(s.lastCapture)
+            let elapsed = time - s.lastCaptureAt
             guard elapsed >= Self.minInterval else {
-                s.pendingRetryDeadline = s.lastCapture.addingTimeInterval(Self.minInterval)
+                s.pendingRetryAt = s.lastCaptureAt + Self.minInterval
                 return (0, [:], false)
             }
             s.inFlight = true
-            s.lastCapture = time
+            s.lastCaptureAt = time
             return (s.generation, s.cached, true)
         }
         guard shouldStart else { return }
@@ -186,12 +186,12 @@ final class BubbleVisibilityProbe: Sendable {
     /// 当前完整布局 tick 因 cadence 尚未 due 时，取走距下次允许捕获的剩余等待。
     /// in-flight、无候选或无权限不产生该 hint，继续沿用 scheduler 原 cadence。
     func takePendingRetryDelay() -> TimeInterval? {
-        let deadline = lock.withLock { state -> Date? in
-            defer { state.pendingRetryDeadline = nil }
-            return state.pendingRetryDeadline
+        let deadline = lock.withLock { state -> TimeInterval? in
+            defer { state.pendingRetryAt = nil }
+            return state.pendingRetryAt
         }
         guard let deadline else { return nil }
-        return max(0, deadline.timeIntervalSince(now()))
+        return max(0, deadline - monotonicNow())
     }
 
     /// 同步读缓存（tick 主线程，非阻塞）。
@@ -211,7 +211,7 @@ final class BubbleVisibilityProbe: Sendable {
             s.generation += 1
             s.cached.removeAll()
             s.knownWids.removeAll()
-            s.pendingRetryDeadline = nil
+            s.pendingRetryAt = nil
         }
     }
 
