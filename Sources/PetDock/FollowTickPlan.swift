@@ -80,11 +80,18 @@ final class FollowTickCoalescer: @unchecked Sendable {
     }
 }
 
+protocol FollowTickTimer: AnyObject {
+    func invalidate()
+}
+
+extension Timer: FollowTickTimer {}
+
 /// 运行时跟随调度器：moving 用 window-bound display link（macOS 14+），
 /// macOS 13 用屏幕能力决定的 repeating Timer；stable/hidden 用低频 one-shot Timer。
 /// 所有 source callback 只请求 coalesced tick，实际 tick 始终在主线程执行。
 final class FollowTickScheduler: NSObject {
     typealias DisplayLinkFactory = (NSObject, Selector) -> AnyObject?
+    typealias TimerFactory = (TimeInterval, Bool, @escaping () -> Void) -> FollowTickTimer
 
     private enum ActiveSource {
         case none
@@ -97,22 +104,30 @@ final class FollowTickScheduler: NSObject {
     private let makeDisplayLink: DisplayLinkFactory
     private let canUseDisplayLink: () -> Bool
     private let maximumFramesPerSecond: () -> Int
+    private let monotonicNow: () -> TimeInterval
+    private let makeTimer: TimerFactory
     private var coalescer: FollowTickCoalescer!
-    private var timer: Timer?
+    private var timer: FollowTickTimer?
     private var displayLink: AnyObject?
     private var activeSource: ActiveSource = .none
+    private var activeRepeatingFPS: Int?
+    private var stableDeadline: TimeInterval?
     private var stopped = false
 
     init(
         runTick: @escaping () -> FollowState,
         makeDisplayLink: @escaping DisplayLinkFactory,
         canUseDisplayLink: @escaping () -> Bool,
-        maximumFramesPerSecond: @escaping () -> Int
+        maximumFramesPerSecond: @escaping () -> Int,
+        monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        makeTimer: @escaping TimerFactory = FollowTickScheduler.makeRunLoopTimer
     ) {
         self.runTick = runTick
         self.makeDisplayLink = makeDisplayLink
         self.canUseDisplayLink = canUseDisplayLink
         self.maximumFramesPerSecond = maximumFramesPerSecond
+        self.monotonicNow = monotonicNow
+        self.makeTimer = makeTimer
         super.init()
         self.coalescer = FollowTickCoalescer { [weak self] in self?.performTick() }
     }
@@ -126,7 +141,7 @@ final class FollowTickScheduler: NSObject {
 
     func start() {
         precondition(Thread.isMainThread)
-        configure(for: .hidden)
+        configure(for: .hidden, tickStartedAt: nil)
     }
 
     func stop() {
@@ -145,17 +160,19 @@ final class FollowTickScheduler: NSObject {
     private func performTick() {
         precondition(Thread.isMainThread)
         guard !stopped else { return }
+        let tickStartedAt = monotonicNow()
         let nextState = runTick()
         guard !stopped else { return }
-        configure(for: nextState)
+        configure(for: nextState, tickStartedAt: tickStartedAt)
     }
 
-    private func configure(for state: FollowState) {
+    private func configure(for state: FollowState, tickStartedAt: TimeInterval?) {
+        if state != .stable { stableDeadline = nil }
         switch state {
         case .moving:
             startMovingSourceIfNeeded()
         case .stable:
-            scheduleOneShot(after: Follower.stableInterval)
+            scheduleStableTick(firstAnchor: tickStartedAt)
         case .hidden:
             scheduleOneShot(after: Follower.hiddenInterval)
         }
@@ -168,12 +185,11 @@ final class FollowTickScheduler: NSObject {
         } else {
             wantsDisplayLink = false
         }
-        if (activeSource == .displayLink && wantsDisplayLink)
-            || (activeSource == .repeatingTimer && !wantsDisplayLink) { return }
-        invalidateSources()
+        if activeSource == .displayLink && wantsDisplayLink { return }
 
         if #available(macOS 14.0, *), wantsDisplayLink,
            let link = makeDisplayLink(self, #selector(displayLinkDidFire(_:))) as? CADisplayLink {
+            invalidateSources()
             link.add(to: .main, forMode: .common)
             displayLink = link
             activeSource = .displayLink
@@ -181,22 +197,33 @@ final class FollowTickScheduler: NSObject {
         }
 
         let fps = Self.fallbackFramesPerSecond(screenMaximum: maximumFramesPerSecond())
-        let movingTimer = Timer(timeInterval: 1.0 / Double(fps), repeats: true) { [weak self] _ in
+        if activeSource == .repeatingTimer, activeRepeatingFPS == fps { return }
+        invalidateSources()
+        timer = makeTimer(1.0 / Double(fps), true) { [weak self] in
             self?.coalescer.requestBeat()
         }
-        movingTimer.tolerance = 0
-        RunLoop.main.add(movingTimer, forMode: .common)
-        timer = movingTimer
         activeSource = .repeatingTimer
+        activeRepeatingFPS = fps
+    }
+
+    private func scheduleStableTick(firstAnchor: TimeInterval?) {
+        let now = monotonicNow()
+        if stableDeadline == nil {
+            stableDeadline = (firstAnchor ?? now) + Follower.stableInterval
+        }
+        var deadline = stableDeadline ?? now + Follower.stableInterval
+        while deadline <= now {
+            deadline += Follower.stableInterval
+        }
+        stableDeadline = deadline
+        scheduleOneShot(after: deadline - now)
     }
 
     private func scheduleOneShot(after interval: TimeInterval) {
         invalidateSources()
-        let nextTimer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
+        timer = makeTimer(interval, false) { [weak self] in
             self?.coalescer.requestBeat()
         }
-        RunLoop.main.add(nextTimer, forMode: .common)
-        timer = nextTimer
         activeSource = .oneShotTimer
     }
 
@@ -208,11 +235,48 @@ final class FollowTickScheduler: NSObject {
         }
         displayLink = nil
         activeSource = .none
+        activeRepeatingFPS = nil
+    }
+
+    private static func makeRunLoopTimer(
+        interval: TimeInterval,
+        repeats: Bool,
+        callback: @escaping () -> Void
+    ) -> FollowTickTimer {
+        let timer = Timer(timeInterval: interval, repeats: repeats) { _ in callback() }
+        timer.tolerance = 0
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
     }
 
     @available(macOS 14.0, *)
     @objc private func displayLinkDidFire(_ link: CADisplayLink) {
         coalescer.requestBeat()
+    }
+}
+
+/// 单次生产布局链：当前候选分类 → 气泡探测/cache → 可见障碍 → frame sink。
+/// 几何与 AppKit 副作用留给 sink；此处只保证 main 与测试走同一编排路径。
+enum FollowLayoutPass {
+    typealias FrameSink = (CGRect, [CGRect]) -> Bool
+
+    static func placeDock(
+        mascot: WinCandidate,
+        candidates: [WinCandidate],
+        bubbleProbe: BubbleVisibilityProbe,
+        frameSink: FrameSink
+    ) -> Bool {
+        let obstacles = PetTracker.obstaclesNear(mascot: mascot, candidates: candidates)
+        let petMaxY = mascot.bounds.maxY
+        let classified = obstacles.map { ($0, PetTracker.obstacleKind($0, petMaxY: petMaxY)) }
+        bubbleProbe.probe(candidates: classified.compactMap { pair in
+            pair.1 == .bubble ? pair.0 : nil
+        })
+        let visibleBounds = classified.compactMap { pair -> CGRect? in
+            if pair.1 == .control { return pair.0.bounds }
+            return bubbleProbe.visibility(for: pair.0.wid) == .visible ? pair.0.bounds : nil
+        }
+        return frameSink(mascot.bounds, visibleBounds)
     }
 }
 
@@ -242,7 +306,7 @@ struct FollowTickPlan: Equatable {
     let showUI: Bool
     /// UI 需隐藏（宠物不可见 或 用户隐藏）。执行层据此隐藏底座 + 关详情。
     let hideUI: Bool
-    /// 宠物消失（petVisible==false）：执行层据此清 lastPet/lastWID/bubbleProbe。
+    /// 宠物消失（petVisible==false）：执行层据此清静止锚点/lastWID/bubbleProbe。
     let petDisappeared: Bool
 }
 

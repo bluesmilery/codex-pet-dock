@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var themeStore: ThemeStore?
     private var externalThemes: [ThemeSpec] = []
     private var statusBar: StatusBar?
-    private var lastPet: CGRect?
+    private var stationaryAnchor: CGRect?
     private var lastWID: CGWindowID?
     private var lastMaterialChangeAt: TimeInterval?
     private var dataTimer: Timer?           // 数据刷新（低频：退避间隔）
@@ -217,7 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pet = sel.selected?.bounds
         let d = Follower.decide(
             pet: pet,
-            lastPet: lastPet,
+            stationaryAnchor: stationaryAnchor,
             lastMaterialChangeAt: lastMaterialChangeAt,
             now: ProcessInfo.processInfo.systemUptime
         )
@@ -249,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wasPetVisible = petVisible
 
         if petVisible {
-            lastPet = pet
+            stationaryAnchor = d.stationaryAnchor
             lastWID = sel.selected?.wid
             if plan.showUI {
                 renderSnapshot()
@@ -257,22 +257,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // 障碍避让（每 tick 基于当前帧宠物+可见辅助窗几何重算唯一期望 frame，不复用上帧偏移）：
                     // - 会话气泡（消息框）：像素 alpha 可见性（bubbleProbe）决定是否占位；
                     // - 控制按钮：窗口存在性即占位（obstaclesNear 已过滤 isOnscreen/alpha>0）。
-                    // 两类分别基于当前帧计算，再合并成唯一障碍集交 safeDockFrame 链式避让。
-                    let obstacles = PetTracker.obstaclesNear(mascot: mascot, candidates: wins)
-                    let petMaxY = mascot.bounds.maxY
-                    // 每个 obstacle 的种类只分类一次（obstaclesNear 已用 isBubble/isControl 过滤，
-                    // 这里仅区分气泡 vs 控制按钮以决定可见性判定路径），避免对同一候选重复调用 obstacleKind。
-                    let classified = obstacles.map { ($0, PetTracker.obstacleKind($0, petMaxY: petMaxY)) }
-                    // 只对气泡类候选做像素可见性探测（控制按钮不经 SC，避免小窗捕获失败被误判收起）。
-                    let bubbleCandidates = classified.filter { $0.1 == .bubble }.map { $0.0 }
-                    bubbleProbe.probe(candidates: bubbleCandidates)
-                    // 合并：气泡(visible) + 控制按钮(全部)，各自当前帧可见性。顺序与 obstacles 一致。
-                    let visibleObstacles = classified.filter { pair in
-                        pair.1 == .control ? true : bubbleProbe.visibility(for: pair.0.wid) == .visible
-                    }.map { $0.0 }
                     let scr = Geometry.screenContaining(quartzCenterX: mascot.bounds.midX, mascot.bounds.midY)
-                    let shown = dock.placeBelow(petQuartzRect: mascot.bounds,
-                                                avoiding: visibleObstacles.map { $0.bounds }, visibleScreen: scr)
+                    let shown = FollowLayoutPass.placeDock(
+                        mascot: mascot,
+                        candidates: wins,
+                        bubbleProbe: bubbleProbe,
+                        frameSink: { [dock] pet, obstacles in
+                            dock.placeBelow(petQuartzRect: pet, avoiding: obstacles, visibleScreen: scr)
+                        }
+                    )
                     if shown {
                         dock.showIfNeeded()
                         if detail.isVisible { detail.placeBelow(dockFrame: dock.frame, visibleScreen: scr) }
@@ -282,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             } else {
-                // plan.hideUI：宠物可见但用户隐藏 → 只关 UI，仍跟踪宠物（lastPet/lastWID 已更新）。
+                // plan.hideUI：宠物可见但用户隐藏 → 只关 UI，仍跟踪宠物（静止锚点/lastWID 已更新）。
                 dock.hideIfNeeded()
                 detail.close()
             }
@@ -290,7 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // plan.petDisappeared：宠物消失 → 隐藏 UI + 详情，清状态，等待重现重捕。
             dock.hideIfNeeded()
             detail.close()
-            lastPet = nil
+            stationaryAnchor = nil
             lastWID = nil
             bubbleProbe.reset()
         }

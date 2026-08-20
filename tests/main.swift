@@ -210,30 +210,30 @@ let fBase = fail, fPass = pass
 let petA = CGRect(x: 100, y: 100, width: 172, height: 179)
 let petB = CGRect(x: 200, y: 100, width: 172, height: 179)  // 移动后位置
 
-let d1 = Follower.decide(pet: nil, lastPet: petA,
+let d1 = Follower.decide(pet: nil, stationaryAnchor: petA,
                          lastMaterialChangeAt: 1, now: 10)
 check("F1 无宠物→hidden/show=false/setFrame=false", d1.state == .hidden && d1.showDock == false && d1.shouldSetFrame == false)
 
-let d2 = Follower.decide(pet: petA, lastPet: nil,
+let d2 = Follower.decide(pet: petA, stationaryAnchor: nil,
                          lastMaterialChangeAt: nil, now: 0)
 check("F2 首次捕获→moving/setFrame=true/记录变化时刻",
       d2.state == .moving && d2.shouldSetFrame == true && d2.lastMaterialChangeAt == 0)
 
-let d3 = Follower.decide(pet: petA, lastPet: petA,
+let d3 = Follower.decide(pet: petA, stationaryAnchor: petA,
                          lastMaterialChangeAt: 0, now: 1.0 / 60.0)
 check("F3 静止时长未达阈值→moving/setFrame=false",
       d3.state == .moving && d3.shouldSetFrame == false && d3.lastMaterialChangeAt == 0)
 
-let d4 = Follower.decide(pet: petA, lastPet: petA,
+let d4 = Follower.decide(pet: petA, stationaryAnchor: petA,
                          lastMaterialChangeAt: 0, now: Follower.stationaryDuration)
 check("F4 达阈值→stable/setFrame=false", d4.state == .stable && d4.shouldSetFrame == false)
 
-let d5 = Follower.decide(pet: petB, lastPet: petA,
+let d5 = Follower.decide(pet: petB, stationaryAnchor: petA,
                          lastMaterialChangeAt: 0, now: 1)
 check("F5 stable后移动→moving/setFrame=true/重置变化时刻",
       d5.state == .moving && d5.shouldSetFrame == true && d5.lastMaterialChangeAt == 1)
 
-let d6 = Follower.decide(pet: petA, lastPet: nil,
+let d6 = Follower.decide(pet: petA, stationaryAnchor: nil,
                          lastMaterialChangeAt: nil, now: 2)
 check("F6 隐藏后重现→moving/setFrame=true(重捕)", d6.state == .moving && d6.shouldSetFrame == true)
 
@@ -248,28 +248,28 @@ check("F11 隐藏时showDock=false(底座+详情隐藏)", d1.showDock == false)
 // Electron 渲染微抖动 0.x px 会使精确 != 永真 → Follower 永不进 stable）。
 // 容差：origin 位移 ≤ positionTolerance 视为位置不变（尺寸变化仍判为变化）。
 let petJitter = CGRect(x: 100.4, y: 100.3, width: 172, height: 179)   // 位移 0.5px < 阈值
-let d12 = Follower.decide(pet: petJitter, lastPet: petA,
+let d12 = Follower.decide(pet: petJitter, stationaryAnchor: petA,
                           lastMaterialChangeAt: 0, now: 1.0 / 60.0)
 check("F12 亚像素抖动0.5px→判不变(过渡moving/setFrame=false)",
       d12.state == .moving && d12.shouldSetFrame == false && d12.lastMaterialChangeAt == 0,
       "state=\(d12.state) setFrame=\(d12.shouldSetFrame)")
 
 let petMove = CGRect(x: 102, y: 100, width: 172, height: 179)   // 位移 2px > 阈值
-let d13 = Follower.decide(pet: petMove, lastPet: petA,
+let d13 = Follower.decide(pet: petMove, stationaryAnchor: petA,
                           lastMaterialChangeAt: 0, now: 3)
 check("F13 位移2px→判变化(moving/setFrame=true)",
       d13.state == .moving && d13.shouldSetFrame == true && d13.lastMaterialChangeAt == 3, "")
 
 // 边界：位移恰等于阈值 → 视为不变（≤ 而非 <）
 let petEdge = CGRect(x: 100 + PetHeuristics.positionTolerance, y: 100, width: 172, height: 179)
-let d14 = Follower.decide(pet: petEdge, lastPet: petA,
+let d14 = Follower.decide(pet: petEdge, stationaryAnchor: petA,
                           lastMaterialChangeAt: 0, now: 1.0 / 60.0)
 check("F14 位移恰=阈值→判不变(边界≤)",
       d14.state == .moving && d14.shouldSetFrame == false && d14.lastMaterialChangeAt == 0, "")
 
 // 尺寸变化（即使 origin 不变）仍判为变化——宠物形变需重定位
 let petResize = CGRect(x: 100, y: 100, width: 173, height: 179)   // width +1
-let d15 = Follower.decide(pet: petResize, lastPet: petA,
+let d15 = Follower.decide(pet: petResize, stationaryAnchor: petA,
                           lastMaterialChangeAt: 0, now: 4)
 check("F15 尺寸变化→判变化(setFrame=true)",
       d15.state == .moving && d15.shouldSetFrame == true && d15.lastMaterialChangeAt == 4,
@@ -288,7 +288,7 @@ func elapsedUntilStable(step: TimeInterval) -> TimeInterval {
     var changedAt: TimeInterval? = 0
     while currentState != .stable && elapsed < 1 {
         elapsed += step
-        let d = Follower.decide(pet: petA, lastPet: petA,
+        let d = Follower.decide(pet: petA, stationaryAnchor: petA,
                                 lastMaterialChangeAt: changedAt, now: elapsed)
         currentState = d.state
         changedAt = d.lastMaterialChangeAt
@@ -304,7 +304,7 @@ let irregularTimes: [TimeInterval] = [0.011, 0.029, 0.051, 4.0 / 60.0]
 var irregularState: FollowState = .moving
 var irregularChangedAt: TimeInterval? = 0
 for time in irregularTimes {
-    let d = Follower.decide(pet: petA, lastPet: petA,
+    let d = Follower.decide(pet: petA, stationaryAnchor: petA,
                             lastMaterialChangeAt: irregularChangedAt, now: time)
     irregularState = d.state
     irregularChangedAt = d.lastMaterialChangeAt
@@ -315,6 +315,39 @@ check("F20 macOS13 fallback按屏幕能力且上限120Hz",
         && FollowTickScheduler.fallbackFramesPerSecond(screenMaximum: 120) == 120
         && FollowTickScheduler.fallbackFramesPerSecond(screenMaximum: 144) == 120
         && FollowTickScheduler.fallbackFramesPerSecond(screenMaximum: 0) == 60)
+
+// F21-F23: 每帧位移都低于容差，但相对静止起点持续累积时仍属于移动。
+// 若只与上一帧比较，changedAt 永不更新，约 4/60s 后会错误进入 stable。
+func staysMovingDuringCumulativeSubthresholdMotion(times: [TimeInterval]) -> Bool {
+    var previous = petA
+    var anchor: CGRect? = petA
+    var changedAt: TimeInterval? = 0
+    var materialChanges = 0
+    for time in times {
+        let current = previous.offsetBy(dx: 0.5, dy: 0)
+        let decision = Follower.decide(
+            pet: current,
+            stationaryAnchor: anchor,
+            lastMaterialChangeAt: changedAt,
+            now: time
+        )
+        if decision.state == .stable { return false }
+        if decision.shouldSetFrame { materialChanges += 1 }
+        previous = current
+        anchor = decision.stationaryAnchor
+        changedAt = decision.lastMaterialChangeAt
+    }
+    return materialChanges > 0
+}
+let cumulative60Times = (1...12).map { Double($0) / 60.0 }
+let cumulative120Times = (1...24).map { Double($0) / 120.0 }
+let cumulativeIrregularTimes: [TimeInterval] = [0.009, 0.022, 0.041, 0.068, 0.079, 0.113, 0.151]
+check("F21 60Hz连续0.5px移动不误入stable",
+      staysMovingDuringCumulativeSubthresholdMotion(times: cumulative60Times))
+check("F22 120Hz连续0.5px移动不误入stable",
+      staysMovingDuringCumulativeSubthresholdMotion(times: cumulative120Times))
+check("F23 不规则cadence连续0.5px移动不误入stable",
+      staysMovingDuringCumulativeSubthresholdMotion(times: cumulativeIrregularTimes))
 
 print("\n[Follower] \(pass - fPass) passed, \(fail - fBase) failed")
 
@@ -899,31 +932,176 @@ queuedTickItems.removeFirst().perform()
 check("T-bv38f3 重复转换最终状态不丢且无过期tick", coalescedStates == [1, 2] && queuedTickItems.isEmpty,
       "states=\(coalescedStates) queued=\(queuedTickItems.count)")
 
-// T-bv39: 同一候选 expanded→collapsed 的成功结果只通知一次；通知后即使 pet rect 不变，
-// 复用现有 safeDockFrame 布局路径也会从避让 frame 回到基础 frame。
-var transitionTime = Date(timeIntervalSince1970: 11_000)
-let transitionStats = OSAllocatedUnfairLock<BubbleAlphaStats?>(initialState: expandedS)
-let transitionTicks = OSAllocatedUnfairLock(initialState: 0)
-let transitionOnMain = OSAllocatedUnfairLock(initialState: false)
-let transitionLayoutY = OSAllocatedUnfairLock<CGFloat?>(initialState: nil)
-let transitionCap: BubbleCapturer = { _ in transitionStats.withLock { $0 } }
-var transitionProbe: BubbleVisibilityProbe!
-let transitionScheduler = FollowTickScheduler(
+// T-sch1: stable one-shot 应锚定既定节拍。注入 30ms tick 工作后，连续 tick 启动间隔
+// 仍应接近 100ms；若每次在工作完成后再排 100ms，会累积为约 130ms。
+final class TestFollowTickTimer: FollowTickTimer {
+    let interval: TimeInterval
+    let repeats: Bool
+    private let callback: () -> Void
+    private(set) var invalidated = false
+
+    init(interval: TimeInterval, repeats: Bool, callback: @escaping () -> Void) {
+        self.interval = interval
+        self.repeats = repeats
+        self.callback = callback
+    }
+
+    func fire() {
+        guard !invalidated else { return }
+        callback()
+    }
+
+    func invalidate() { invalidated = true }
+}
+
+var stableClock: TimeInterval = 0
+var stableStarts: [TimeInterval] = []
+var stableTimers: [TestFollowTickTimer] = []
+let stableCadenceScheduler = FollowTickScheduler(
     runTick: {
-        transitionTicks.withLock { $0 += 1 }
-        transitionOnMain.withLock { $0 = Thread.isMainThread }
-        let visibleObstacles = transitionProbe.visibility(for: CGWindowID(501)) == .visible
-            ? [bubbleForCollapse] : []
-        let y = Geometry.safeDockFrame(
-            pet: petForCollapse, avoiding: visibleObstacles,
-            dockSize: dockSizeBV, gap: gapBV, screen: nil
-        ).frame?.origin.y
-        transitionLayoutY.withLock { $0 = y }
+        stableStarts.append(stableClock)
+        stableClock += 0.03
         return .stable
     },
     makeDisplayLink: { _, _ in nil },
     canUseDisplayLink: { false },
-    maximumFramesPerSecond: { 60 }
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { stableClock },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        stableTimers.append(timer)
+        return timer
+    }
+)
+stableCadenceScheduler.start()
+stableCadenceScheduler.requestWake()
+_ = waitPumpingMain { stableStarts.count == 1 }
+for expectedCount in 2...4 {
+    let timer = stableTimers.last!
+    stableClock += timer.interval
+    timer.fire()
+    _ = waitPumpingMain { stableStarts.count == expectedCount }
+}
+stableCadenceScheduler.stop()
+let stableIntervals = zip(stableStarts.dropFirst(), stableStarts).map { $0.0 - $0.1 }
+check("T-sch1 stable节拍不累积tick工作耗时",
+      stableIntervals.count == 3 && stableIntervals.allSatisfy { abs($0 - 0.1) < 0.000_001 },
+      "intervals=\(stableIntervals)")
+
+var overrunClock: TimeInterval = 0
+var overrunTicks = 0
+var overrunTimers: [TestFollowTickTimer] = []
+let overrunScheduler = FollowTickScheduler(
+    runTick: {
+        overrunTicks += 1
+        overrunClock += 0.25
+        return .stable
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { overrunClock },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        overrunTimers.append(timer)
+        return timer
+    }
+)
+overrunScheduler.start()
+overrunScheduler.requestWake()
+_ = waitPumpingMain { overrunTicks == 1 }
+let overrunActiveTimers = overrunTimers.filter { !$0.invalidated }
+check("T-sch1b stable错过多个deadline只排下一次latest tick",
+      overrunTicks == 1 && overrunActiveTimers.count == 1
+        && abs(overrunActiveTimers[0].interval - 0.05) < 0.000_001,
+      "ticks=\(overrunTicks) intervals=\(overrunActiveTimers.map { $0.interval })")
+overrunScheduler.stop()
+
+// T-sch2: repeating fallback 在 moving tick 时必须重读当前屏幕能力；60→120→60
+// 均需观察并重配，不能因 activeSource 已是 repeatingTimer 就提前返回。
+var fallbackFPS = 60
+var fallbackTicks = 0
+var fallbackTimers: [TestFollowTickTimer] = []
+let fallbackScheduler = FollowTickScheduler(
+    runTick: {
+        fallbackTicks += 1
+        return .moving
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { fallbackFPS },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        fallbackTimers.append(timer)
+        return timer
+    }
+)
+fallbackScheduler.start()
+fallbackScheduler.requestWake()
+_ = waitPumpingMain { fallbackTicks == 1 }
+fallbackFPS = 120
+fallbackScheduler.requestWake()
+_ = waitPumpingMain { fallbackTicks == 2 }
+fallbackFPS = 60
+fallbackScheduler.requestWake()
+_ = waitPumpingMain { fallbackTicks == 3 }
+let repeatingFallbackTimers = fallbackTimers.filter { $0.repeats }
+check("T-sch2a fallback moving跨屏60→120重建",
+      repeatingFallbackTimers.count == 3
+        && abs(repeatingFallbackTimers[0].interval - 1.0 / 60.0) < 0.000_001
+        && abs(repeatingFallbackTimers[1].interval - 1.0 / 120.0) < 0.000_001
+        && repeatingFallbackTimers[0].invalidated,
+      "intervals=\(repeatingFallbackTimers.map { $0.interval })")
+check("T-sch2b fallback moving跨屏120→60重读能力",
+      repeatingFallbackTimers.count == 3
+        && abs(repeatingFallbackTimers[2].interval - 1.0 / 60.0) < 0.000_001
+        && repeatingFallbackTimers[1].invalidated,
+      "intervals=\(repeatingFallbackTimers.map { $0.interval })")
+fallbackScheduler.stop()
+
+// T-bv39: 生产 FollowLayoutPass 必须贯穿候选分类→probe cache→可见障碍→frame sink。
+// 已有 stable one-shot 尚未触发时，visible→hidden wake 应提前执行且只执行一次完整 tick。
+var transitionTime = Date(timeIntervalSince1970: 11_000)
+var transitionClock: TimeInterval = 0
+let transitionStats = OSAllocatedUnfairLock<BubbleAlphaStats?>(initialState: expandedS)
+let transitionTicks = OSAllocatedUnfairLock(initialState: 0)
+let transitionOnMain = OSAllocatedUnfairLock(initialState: false)
+let transitionLayoutY = OSAllocatedUnfairLock<CGFloat?>(initialState: nil)
+let transitionObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+var transitionTimers: [TestFollowTickTimer] = []
+let transitionCap: BubbleCapturer = { _ in transitionStats.withLock { $0 } }
+var transitionProbe: BubbleVisibilityProbe!
+let transitionMascot = mkw(503, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
+let transitionCandidate = mkw(501, layer: 3, bubbleForCollapse)
+let transitionScheduler = FollowTickScheduler(
+    runTick: {
+        transitionTicks.withLock { $0 += 1 }
+        transitionOnMain.withLock { $0 = Thread.isMainThread }
+        let placed = FollowLayoutPass.placeDock(
+            mascot: transitionMascot,
+            candidates: [transitionMascot, transitionCandidate],
+            bubbleProbe: transitionProbe,
+            frameSink: { pet, obstacles in
+                transitionObstacleCounts.withLock { $0.append(obstacles.count) }
+                let y = Geometry.safeDockFrame(
+                    pet: pet, avoiding: obstacles,
+                    dockSize: dockSizeBV, gap: gapBV, screen: nil
+                ).frame?.origin.y
+                transitionLayoutY.withLock { $0 = y }
+                return y != nil
+            }
+        )
+        return placed ? .stable : .hidden
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { transitionClock },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        transitionTimers.append(timer)
+        return timer
+    }
 )
 transitionProbe = BubbleVisibilityProbe(
     now: { transitionTime },
@@ -931,34 +1109,40 @@ transitionProbe = BubbleVisibilityProbe(
     capturer: transitionCap,
     onVisibilityChange: transitionScheduler.visibilityChangeCallback
 )
-let transitionCandidate = mkw(501, layer: 3, bubbleForCollapse)
 transitionProbe.probe(candidates: [transitionCandidate])
 let transitionPump0 = Date().addingTimeInterval(5)
 while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump0 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
 check("T-bv39a 初始visible结果不调度", transitionTicks.withLock { $0 } == 0, "")
-let transitionVisibleObstacles = transitionProbe.visibility(for: CGWindowID(501)) == .visible
-    ? [bubbleForCollapse] : []
-let transitionExpandedY = Geometry.safeDockFrame(
-    pet: petForCollapse, avoiding: transitionVisibleObstacles,
-    dockSize: dockSizeBV, gap: gapBV, screen: nil
-).frame?.origin.y
-check("T-bv39b 初始visible仍避让", transitionExpandedY == avoidY, "y=\(transitionExpandedY ?? -1)")
+transitionScheduler.start()
+transitionScheduler.requestWake()
+_ = waitPumpingMain { transitionTicks.withLock { $0 } == 1 }
+let stableTimerBeforeWake = transitionTimers.last
+check("T-bv39b 生产布局链初始visible→sink收到1个障碍并避让",
+      transitionLayoutY.withLock { $0 } == avoidY
+        && transitionObstacleCounts.withLock { $0 } == [1]
+        && stableTimerBeforeWake?.repeats == false,
+      "y=\(transitionLayoutY.withLock { $0 } ?? -1) obstacles=\(transitionObstacleCounts.withLock { $0 })")
 
 transitionStats.withLock { $0 = collapsedS }
 transitionTime = Date(timeIntervalSince1970: 11_001)
 transitionProbe.probe(candidates: [transitionCandidate])
 let transitionPump1 = Date().addingTimeInterval(5)
 while (transitionProbe.lock.withLock({ $0.inFlight })
-       || transitionTicks.withLock({ $0 }) < 1) && Date() < transitionPump1 {
+       || transitionTicks.withLock({ $0 }) < 2) && Date() < transitionPump1 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
-transitionScheduler.stop()
-check("T-bv39c visible→hidden经scheduler主线程执行一次完整layout tick",
-      transitionTicks.withLock { $0 } == 1 && transitionOnMain.withLock { $0 }, "")
-check("T-bv39d pet不变+通知后完整tick→回基础位置", transitionLayoutY.withLock { $0 } == baseY,
-      "y=\(transitionLayoutY.withLock { $0 } ?? -1)")
+RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+check("T-bv39c stable source未到期时wake仅提前执行一次生产tick",
+      transitionTicks.withLock { $0 } == 2
+        && transitionOnMain.withLock { $0 }
+        && stableTimerBeforeWake?.invalidated == true,
+      "ticks=\(transitionTicks.withLock { $0 })")
+check("T-bv39d pet不变+生产链hidden cache→sink无障碍并复位",
+      transitionLayoutY.withLock { $0 } == baseY
+        && transitionObstacleCounts.withLock { $0 } == [1, 0],
+      "y=\(transitionLayoutY.withLock { $0 } ?? -1) obstacles=\(transitionObstacleCounts.withLock { $0 })")
 
 transitionTime = Date(timeIntervalSince1970: 11_002)
 transitionProbe.probe(candidates: [transitionCandidate])
@@ -966,7 +1150,8 @@ let transitionPump2 = Date().addingTimeInterval(5)
 while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump2 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
-check("T-bv39e hidden不变不重复调度", transitionTicks.withLock { $0 } == 1, "")
+check("T-bv39e hidden不变不重复调度", transitionTicks.withLock { $0 } == 2, "")
+transitionScheduler.stop()
 
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)

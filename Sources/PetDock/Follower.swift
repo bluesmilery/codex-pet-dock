@@ -12,6 +12,7 @@ struct FollowDecision: Equatable {
     let state: FollowState
     let showDock: Bool          // 底座可见
     let shouldSetFrame: Bool    // 仅位置变化时 true，避免重复 setFrame
+    let stationaryAnchor: CGRect? // 吸收抖动的本轮静止参考位置
     let lastMaterialChangeAt: TimeInterval?
 }
 
@@ -30,19 +31,22 @@ enum Follower {
     /// stable 以连续静止时长判定，不受 60/120Hz 或可变刷新 callback 次数影响。
     static func decide(
         pet: CGRect?,
-        lastPet: CGRect?,
+        stationaryAnchor: CGRect?,
         lastMaterialChangeAt: TimeInterval?,
         now: TimeInterval
     ) -> FollowDecision {
         // 无宠物 → 隐藏，低频检测重现
         guard let pet = pet else {
             return FollowDecision(state: .hidden, showDock: false, shouldSetFrame: false,
+                                  stationaryAnchor: nil,
                                   lastMaterialChangeAt: nil)
         }
         // 实质变化（含首次捕获 / 重现）→ moving，升频，setFrame。
-        // 位置变化用容差比较（吸收亚像素抖动）；尺寸变化不耐受，直接判变。
-        if lastPet == nil || hasMaterialChange(pet, lastPet!) {
+        // 始终相对本轮静止锚点比较：锚点附近抖动被吸收，但连续小位移累计越过容差后
+        // 会更新锚点与变化时刻，不能因每帧增量都很小而误入 stable。
+        if stationaryAnchor == nil || hasMaterialChange(pet, stationaryAnchor!) {
             return FollowDecision(state: .moving, showDock: true, shouldSetFrame: true,
+                                  stationaryAnchor: pet,
                                   lastMaterialChangeAt: now)
         }
         // 位置不变：沿用最近一次实质变化时刻，按 elapsed time 判定稳定。
@@ -50,10 +54,12 @@ enum Follower {
         if now - changedAt >= stationaryDuration {
             // 已稳定 → 降频，不重复 setFrame
             return FollowDecision(state: .stable, showDock: true, shouldSetFrame: false,
+                                  stationaryAnchor: stationaryAnchor,
                                   lastMaterialChangeAt: changedAt)
         }
         // 过渡期：仍 moving，但不 setFrame
         return FollowDecision(state: .moving, showDock: true, shouldSetFrame: false,
+                              stationaryAnchor: stationaryAnchor,
                               lastMaterialChangeAt: changedAt)
     }
 
