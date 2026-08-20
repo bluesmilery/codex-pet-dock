@@ -2,7 +2,7 @@
 
 ## Phase 0：派发前预检
 
-- [ ] 确认任务仍为 L2，实施、正式 Review、QA 分别使用全新 `gpt-5.6-luna`、`max` Agent。
+- [ ] 确认任务仍为 L2；按用户本轮明确覆盖，后续实施、正式 Review、QA 分别使用全新 `xai/grok-4.6`、`high` Agent。
 - [ ] 以当前 `dev` 完整 SHA 为 base，创建唯一实现分支和干净独立 worktree；记录任务名、角色、worktree、分支、base、文件范围、验收标准和目标 commit。
 - [ ] 确认没有其他 Agent 负责同一任务，且不超过并发上限。
 - [ ] 清点源工作区未跟踪 `.trellis/tasks/**`、`.trellis/workspace/**` 和精确 `.claude/` 文件；保留无关 `design/`，不得纳入任务或复制到实现 worktree。
@@ -28,6 +28,8 @@
 - [ ] 更新 `.trellis/spec/macos/privacy-guidelines.md`，将隐私规则表达为内容级扫描/脱敏。
 - [ ] 更新 `docs/development/trellis.md`，统一 task、workspace journal、runtime identity 和当前平台说明。
 - [ ] 搜索其他直接矛盾表述，只做必要的最小同步。
+- [ ] 对 base 中被删除的复合规则关键词做清单核对；确认只移除 `.claude/` / workspace 旧边界，保留私有 refs / bundle id 分叉等独立约束。
+- [ ] 检查新纳入 Git 的历史 task 中与 `.claude/`、workspace 和 Git 策略相关的现在时表述；已失效策略只补充“当时基线”等时间限定，不改写历史结论。
 - [ ] 将全部 `.trellis/tasks/**`、`.trellis/workspace/**` 纳入候选；确认无 `?? .trellis/tasks/...`，且无关 `design/` 未暂存。
 
 ## Phase 4：实现负责人自检
@@ -45,6 +47,7 @@
 - [ ] 冻结完整候选 SHA，由全新只读 Review Agent 完整检查 P0/P1/P2。
 - [ ] 首轮有 findings 时由原实现负责人集中修复并提交新 SHA，旧 Review/测试/QA 结论全部失效。
 - [ ] 第二轮仍有实质 finding 时执行 `trellis-break-loop`，重新分析和规划后再继续。
+- [ ] `87d78212761da2d6baac16fadac39d43cf906f78` 的第二轮 Review 已触发 break-loop；更新 PRD/design/spec 和根因记录后，从新候选重新计为 Review round 1，不复用此前 Review 结论。
 - [ ] Review 清零后，由全新 QA Agent 对同一完整 SHA 复验配置、Git 边界、隐私、文档、release build 和 `make test`。
 - [ ] 只有 Review P0/P1/P2=0 且 QA 全绿的 SHA 可标记 accepted。
 

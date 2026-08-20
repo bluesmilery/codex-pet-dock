@@ -14,6 +14,7 @@ Delivery Path: L2
 - 基线清点时 `.trellis/workspace/` 有 2 个本地文件，均未被 Git 跟踪。
 - 只报文件名、不回显匹配原值的初筛发现：6 个未跟踪 task 文件含真实本机路径或本机用户名模式；workspace 文件未命中路径、邮箱或凭据模式。
 - 项目公开 Git 身份 `bluesmilery` 及其 GitHub noreply 邮箱属于项目公开身份，不视为本机隐私；本机账户名和由其构成的绝对路径必须使用占位符。
+- 第二轮正式 Review 对 `87d78212761da2d6baac16fadac39d43cf906f78` 报告 P1=1、P2=1：移除 `.claude/` 规则时误删同一复合句中的私有 refs / bundle id 分叉边界；新纳入 Git 的历史研究仍用现在时描述已失效的 `.claude/` 忽略策略。按项目规则已执行 `trellis-break-loop` 并重新规划。
 
 ## Requirements
 
@@ -27,6 +28,8 @@ Delivery Path: L2
 8. 保留项目既有 L0/L1/L2、worktree、Review、QA、候选交付和发布授权规则；本任务不修改应用业务行为。
 9. 所有已有 task 状态和内容必须保留；不得为了得到干净状态而删除或归档不属于本任务的活动 task。
 10. 删除当前未使用的项目根目录 `.claude/`，并移除根 `.gitignore` 对整个 `.claude/` 的忽略规则以及文档中的“`.claude/` 永不上传”表述；未来只有实际启用 Claude 平台时才重新生成对应平台文件。
+11. 编辑包含多个独立约束的复合规则时，只移除本任务明确废止的子句；私有 refs 和 bundle id 分叉不得上传 GitHub 的既有边界必须保留。
+12. 历史 task 内容继续保留原结论；若新纳入 Git 的资料以现在时描述已失效的仓库策略，只添加“当时基线”等时间限定，不把历史描述伪装成当前规则。
 
 Docs Impact: update
 
@@ -40,6 +43,8 @@ Docs Impact: update
 - [ ] task 文件中的路径脱敏不改变 task 状态、需求、验收标准、研究结论或引用关系。
 - [ ] `AGENTS.md`、privacy spec、Trellis 开发文档和实际 ignore/config 行为一致。
 - [ ] 项目根目录 `.claude/` 不再存在，根 `.gitignore` 不再整体忽略 `.claude/`，文档不再将该目录描述为本项目的常驻本机资产。
+- [ ] `AGENTS.md` 仍明确禁止将私有 refs 和 bundle id 分叉上传 GitHub；删除 `.claude/` 子句没有删除其他独立隐私/发布边界。
+- [ ] 新纳入 Git 的历史 task 资料中，不存在把已失效 `.claude/` 忽略策略写成当前事实的现在时表述；修订仅增加时间限定并保留历史结论。
 - [ ] `trellis update --dry-run` 不会静默覆盖项目本地 workflow 定制，并且官方 `.trellis/.gitignore` 边界核对通过。
 - [ ] `make docs-check`、`make test-docs`、`swift build -c release` 和 `make test` 全部通过且 release build 0 warning。
 - [ ] 完整候选 SHA 经独立只读 Review 达到 P0/P1/P2=0，并由全新 QA Agent 对同一 SHA 验证。

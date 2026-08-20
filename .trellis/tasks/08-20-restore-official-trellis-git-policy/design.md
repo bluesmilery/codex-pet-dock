@@ -33,10 +33,12 @@
 
 ### 文档同步
 
-- `AGENTS.md`：将 workspace/journal 改为官方 Git 管理边界；移除 `.claude/` 永不上传表述；保留内容级隐私与平台本机身份不得入库的规则。
+- `AGENTS.md`：将 workspace/journal 改为官方 Git 管理边界；只移除 `.claude/` 永不上传子句；保留私有 refs / bundle id 分叉、内容级隐私与平台本机身份不得入库的独立规则。
 - `.trellis/spec/macos/privacy-guidelines.md`：从目录排除策略改为内容级治理和官方 runtime 排除策略。
 - `docs/development/trellis.md`：说明 task、workspace journal、spec 均由 Git 管理，runtime/identity 保持本机；删除当前 Claude 平台相关常驻说明。
 - 其他文档只有在直接矛盾时才做最小同步。
+- 对被编辑的复合规则执行删除词项检查：搜索 base 中被删除的独立政策关键词，逐项确认属于明确废止范围或已在候选中保留。
+- 对本次新纳入 Git 的历史 task 资料执行时间语义检查：已失效策略只能作为“当时基线”保留，不得继续以现在时充当当前规则。
 
 ### `.claude/` 清理
 
@@ -62,11 +64,12 @@
 2. 在实现 worktree 导入未跟踪输入，并复核完整性。
 3. 逐文件脱敏命中的 task/workspace 内容，先复扫为零再暂存。
 4. 恢复 `.trellis/.gitignore` 和 `session_auto_commit` 官方行为。
-5. 从候选配置和文档中移除 `.claude/` 常驻规则，同步根 `.gitignore`、`AGENTS.md`、privacy spec 和 Trellis 文档。
-6. 暂存全部 task/workspace 和直接受影响文件，确认无关 `design/` 未进入 diff。
-7. 执行静态、文档、构建和测试门禁；由实现负责人使用 `trellis-check` 做可写自检。
-8. 使用项目公开 Git 身份提交候选；冻结完整 SHA 后进入全新只读 Review 和全新 QA。
-9. 候选 accepted 后，将源工作区中会与提交冲突的未跟踪 task/workspace 输入先备份到任务专属临时目录，以校验值确认候选内容已完整保留，再集成到 `dev`；随后精确清理当前项目根目录 `.claude/`。
+5. 从候选配置和文档中移除 `.claude/` 常驻规则，同步根 `.gitignore`、`AGENTS.md`、privacy spec 和 Trellis 文档；用 base/HEAD 关键词对照确认未误删同句中的独立政策。
+6. 检查所有新纳入 Git 的历史 task 中与本次策略相关的现在时描述；仅为已失效策略补充时间限定，保留原结论和证据结构。
+7. 暂存全部 task/workspace 和直接受影响文件，确认无关 `design/` 未进入 diff。
+8. 执行静态、文档、构建和测试门禁；由实现负责人使用 `trellis-check` 做可写自检。
+9. 使用项目公开 Git 身份提交候选；冻结完整 SHA 后进入全新只读 Review 和全新 QA。
+10. 候选 accepted 后，将源工作区中会与提交冲突的未跟踪 task/workspace 输入先备份到任务专属临时目录，以校验值确认候选内容已完整保留，再集成到 `dev`；随后精确清理当前项目根目录 `.claude/`。
 
 ## 6. 失败与回滚
 
