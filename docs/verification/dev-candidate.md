@@ -33,7 +33,8 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 
 - `selectPet` 通过公开 CGWindowList / AppKit 规则过滤主窗口、辅助控件并选择 Mascot；无合理候选时返回 nil，不误绑主聊天窗口。
 - `Geometry.safeDockFrame` 固定底座宽度，按障碍链式下移，执行水平 clamp；垂直越界返回 nil。避让隐藏与宠物可见性、数据暂停语义分离。
-- `BubbleVisibilityProbe` 使用 ScreenCaptureKit 公开 API、最多 2Hz、single-flight 和 generation 失效保护；捕获失败时保守按 visible 避让。
+- `BubbleVisibilityProbe` 使用 ScreenCaptureKit 公开 API，下一次允许启动捕获的受应用控制等待最长 0.1 秒，并保持 strict single-flight 与 generation 失效保护；捕获失败时保守按 visible 避让。
+- moving 跟随在 macOS 14+ 使用底座窗口绑定的 AppKit `CADisplayLink`；macOS 13 使用按屏幕能力且 capped 到 120 Hz 的 repeating Timer。回调 latest-only 合并，stable 以单调 elapsed time 与名义 `4/60s` 判定，不使用 `CVDisplayLink`。
 - 数据层通过 codex app-server stdio JSON-RPC 和本机日志数值聚合提供 WEEK LEFT / WEEK TOKENS，不复制 `auth.json` 或凭证。
 - 日志、诊断与 token cache 只写入 Application Support/PetDock 私有目录（0700/0600）；默认诊断脱敏，不落盘标题、owner、WID/PID 或精确坐标。helper 环境为严格白名单，resolver 拒绝不可信可执行文件。
 - Trellis context 路径执行 canonical containment，runtime 只保存 opaque context key 和最小元数据；原始 session/conversation/transcript 值不落盘。
@@ -54,7 +55,7 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 9. 验证底座与详情卡的透明渲染、字段布局和详情卡点击展开 / 收起。
 10. 验证三种内置主题切换，以及外部 JSON 主题文件的安全解析和热加载。
 11. 在已登录的真实 Codex 环境中验证 WEEK LEFT / WEEK TOKENS 刷新、窗口边界和独立退避；不输出账户或会话内容。
-12. 观察 Follower 移动升频、稳定降频、隐藏与重捕的实际性能和体感。
+12. 分别在 60 Hz 和可用的高刷屏观察 moving 跟随、stable 降频、隐藏与重捕的实际性能和体感；若有 macOS 13 环境，单独验证 repeating Timer fallback。
 
 这些项目依赖 TCC、ScreenCaptureKit、Accessibility、真实多显示器和 `.app` 运行环境，不能由 `make test` 代替。`make app` 属于发布 / 真机阶段命令，本页不把其执行状态写成当前候选结论。
 

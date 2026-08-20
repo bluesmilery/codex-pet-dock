@@ -1,4 +1,5 @@
 import Cocoa
+import QuartzCore
 
 /// 透明底座 NSPanel：承载 DockView（WEEK LEFT / WEEK TOKENS），紧贴宠物下方、不重叠。
 /// 跨应用窗口相对 z-order 无法用公开 API 精确控制（P0 SC7 降级），
@@ -46,6 +47,14 @@ final class DockPanel {
 
     var frame: NSRect { panel.frame }
     var isVisible: Bool { panel.isVisible }
+    var maximumFramesPerSecond: Int {
+        panel.screen?.maximumFramesPerSecond ?? NSScreen.main?.maximumFramesPerSecond ?? 60
+    }
+
+    @available(macOS 14.0, *)
+    func makeDisplayLink(target: Any, selector: Selector) -> CADisplayLink {
+        panel.displayLink(target: target, selector: selector)
+    }
 
     func showIfNeeded() {
         guard !didShow else { return }

@@ -210,29 +210,37 @@ let fBase = fail, fPass = pass
 let petA = CGRect(x: 100, y: 100, width: 172, height: 179)
 let petB = CGRect(x: 200, y: 100, width: 172, height: 179)  // 移动后位置
 
-let d1 = Follower.decide(pet: nil, lastPet: petA, state: .stable, stableCount: 10)
+let d1 = Follower.decide(pet: nil, lastPet: petA,
+                         lastMaterialChangeAt: 1, now: 10)
 check("F1 无宠物→hidden/show=false/setFrame=false", d1.state == .hidden && d1.showDock == false && d1.shouldSetFrame == false)
 
-let d2 = Follower.decide(pet: petA, lastPet: nil, state: .hidden, stableCount: 0)
-check("F2 首次捕获→moving/setFrame=true/count=0", d2.state == .moving && d2.shouldSetFrame == true && d2.stableCount == 0)
+let d2 = Follower.decide(pet: petA, lastPet: nil,
+                         lastMaterialChangeAt: nil, now: 0)
+check("F2 首次捕获→moving/setFrame=true/记录变化时刻",
+      d2.state == .moving && d2.shouldSetFrame == true && d2.lastMaterialChangeAt == 0)
 
-let d3 = Follower.decide(pet: petA, lastPet: petA, state: .moving, stableCount: 0)
-check("F3 位置不变(过渡)→moving/setFrame=false/count=1", d3.state == .moving && d3.shouldSetFrame == false && d3.stableCount == 1)
+let d3 = Follower.decide(pet: petA, lastPet: petA,
+                         lastMaterialChangeAt: 0, now: 1.0 / 60.0)
+check("F3 静止时长未达阈值→moving/setFrame=false",
+      d3.state == .moving && d3.shouldSetFrame == false && d3.lastMaterialChangeAt == 0)
 
-let d4 = Follower.decide(pet: petA, lastPet: petA, state: .moving, stableCount: Follower.stableThreshold)
+let d4 = Follower.decide(pet: petA, lastPet: petA,
+                         lastMaterialChangeAt: 0, now: Follower.stationaryDuration)
 check("F4 达阈值→stable/setFrame=false", d4.state == .stable && d4.shouldSetFrame == false)
 
-let d5 = Follower.decide(pet: petB, lastPet: petA, state: .stable, stableCount: 100)
-check("F5 stable后移动→moving/setFrame=true/count=0", d5.state == .moving && d5.shouldSetFrame == true && d5.stableCount == 0)
+let d5 = Follower.decide(pet: petB, lastPet: petA,
+                         lastMaterialChangeAt: 0, now: 1)
+check("F5 stable后移动→moving/setFrame=true/重置变化时刻",
+      d5.state == .moving && d5.shouldSetFrame == true && d5.lastMaterialChangeAt == 1)
 
-let d6 = Follower.decide(pet: petA, lastPet: nil, state: .hidden, stableCount: 0)
+let d6 = Follower.decide(pet: petA, lastPet: nil,
+                         lastMaterialChangeAt: nil, now: 2)
 check("F6 隐藏后重现→moving/setFrame=true(重捕)", d6.state == .moving && d6.shouldSetFrame == true)
 
-check("F7 频率阶 moving<stable<hidden",
-      Follower.movingInterval < Follower.stableInterval && Follower.stableInterval < Follower.hiddenInterval)
-check("F8 hidden间隔=hiddenInterval", d1.nextInterval == Follower.hiddenInterval)
-check("F9 moving间隔=movingInterval", d2.nextInterval == Follower.movingInterval)
-check("F10 stable间隔=stableInterval", d4.nextInterval == Follower.stableInterval)
+check("F7 stable探测间隔<hidden探测间隔", Follower.stableInterval < Follower.hiddenInterval)
+check("F8 hidden清空变化时刻", d1.lastMaterialChangeAt == nil)
+check("F9 moving保留最近变化时刻", d3.lastMaterialChangeAt == 0)
+check("F10 stable保留最近变化时刻", d4.lastMaterialChangeAt == 0)
 // 隐藏决策应同步隐藏底座（详情由调用方跟随 showDock 关闭）
 check("F11 隐藏时showDock=false(底座+详情隐藏)", d1.showDock == false)
 
@@ -240,31 +248,73 @@ check("F11 隐藏时showDock=false(底座+详情隐藏)", d1.showDock == false)
 // Electron 渲染微抖动 0.x px 会使精确 != 永真 → Follower 永不进 stable）。
 // 容差：origin 位移 ≤ positionTolerance 视为位置不变（尺寸变化仍判为变化）。
 let petJitter = CGRect(x: 100.4, y: 100.3, width: 172, height: 179)   // 位移 0.5px < 阈值
-let d12 = Follower.decide(pet: petJitter, lastPet: petA, state: .moving, stableCount: 0)
-check("F12 亚像素抖动0.5px→判不变(过渡moving/setFrame=false/count=1)",
-      d12.state == .moving && d12.shouldSetFrame == false && d12.stableCount == 1, "state=\(d12.state) setFrame=\(d12.shouldSetFrame) count=\(d12.stableCount)")
+let d12 = Follower.decide(pet: petJitter, lastPet: petA,
+                          lastMaterialChangeAt: 0, now: 1.0 / 60.0)
+check("F12 亚像素抖动0.5px→判不变(过渡moving/setFrame=false)",
+      d12.state == .moving && d12.shouldSetFrame == false && d12.lastMaterialChangeAt == 0,
+      "state=\(d12.state) setFrame=\(d12.shouldSetFrame)")
 
 let petMove = CGRect(x: 102, y: 100, width: 172, height: 179)   // 位移 2px > 阈值
-let d13 = Follower.decide(pet: petMove, lastPet: petA, state: .stable, stableCount: 100)
-check("F13 位移2px→判变化(moving/setFrame=true/count=0)",
-      d13.state == .moving && d13.shouldSetFrame == true && d13.stableCount == 0, "")
+let d13 = Follower.decide(pet: petMove, lastPet: petA,
+                          lastMaterialChangeAt: 0, now: 3)
+check("F13 位移2px→判变化(moving/setFrame=true)",
+      d13.state == .moving && d13.shouldSetFrame == true && d13.lastMaterialChangeAt == 3, "")
 
 // 边界：位移恰等于阈值 → 视为不变（≤ 而非 <）
 let petEdge = CGRect(x: 100 + PetHeuristics.positionTolerance, y: 100, width: 172, height: 179)
-let d14 = Follower.decide(pet: petEdge, lastPet: petA, state: .moving, stableCount: 0)
+let d14 = Follower.decide(pet: petEdge, lastPet: petA,
+                          lastMaterialChangeAt: 0, now: 1.0 / 60.0)
 check("F14 位移恰=阈值→判不变(边界≤)",
-      d14.state == .moving && d14.shouldSetFrame == false && d14.stableCount == 1, "")
+      d14.state == .moving && d14.shouldSetFrame == false && d14.lastMaterialChangeAt == 0, "")
 
 // 尺寸变化（即使 origin 不变）仍判为变化——宠物形变需重定位
 let petResize = CGRect(x: 100, y: 100, width: 173, height: 179)   // width +1
-let d15 = Follower.decide(pet: petResize, lastPet: petA, state: .stable, stableCount: 100)
+let d15 = Follower.decide(pet: petResize, lastPet: petA,
+                          lastMaterialChangeAt: 0, now: 4)
 check("F15 尺寸变化→判变化(setFrame=true)",
-      d15.state == .moving && d15.shouldSetFrame == true, "state=\(d15.state) setFrame=\(d15.shouldSetFrame)")
+      d15.state == .moving && d15.shouldSetFrame == true && d15.lastMaterialChangeAt == 4,
+      "state=\(d15.state) setFrame=\(d15.shouldSetFrame)")
 
-check("F16 moving约60Hz", abs(Follower.movingInterval - 1.0 / 60.0) < 0.001,
-      "interval=\(Follower.movingInterval)")
+check("F16 stable时长保留名义4/60s", abs(Follower.stationaryDuration - 4.0 / 60.0) < 0.000_001,
+      "duration=\(Follower.stationaryDuration)")
 check("F17 stable探测延迟不超过0.1s", Follower.stableInterval <= 0.1,
       "interval=\(Follower.stableInterval)")
+
+// F18: stable 语义必须由单调 elapsed time 决定，不能由 callback 次数决定。
+// 当前 stableCount 实现在 120Hz 下会比 60Hz 提前一半进入 stable，此断言在修复前必须失败。
+func elapsedUntilStable(step: TimeInterval) -> TimeInterval {
+    var elapsed: TimeInterval = 0
+    var currentState: FollowState = .moving
+    var changedAt: TimeInterval? = 0
+    while currentState != .stable && elapsed < 1 {
+        elapsed += step
+        let d = Follower.decide(pet: petA, lastPet: petA,
+                                lastMaterialChangeAt: changedAt, now: elapsed)
+        currentState = d.state
+        changedAt = d.lastMaterialChangeAt
+    }
+    return elapsed
+}
+let stableAt60 = elapsedUntilStable(step: 1.0 / 60.0)
+let stableAt120 = elapsedUntilStable(step: 1.0 / 120.0)
+check("F18 60/120Hz进入stable的elapsed语义一致",
+      abs(stableAt60 - stableAt120) < 0.001,
+      "60Hz=\(stableAt60) 120Hz=\(stableAt120)")
+let irregularTimes: [TimeInterval] = [0.011, 0.029, 0.051, 4.0 / 60.0]
+var irregularState: FollowState = .moving
+var irregularChangedAt: TimeInterval? = 0
+for time in irregularTimes {
+    let d = Follower.decide(pet: petA, lastPet: petA,
+                            lastMaterialChangeAt: irregularChangedAt, now: time)
+    irregularState = d.state
+    irregularChangedAt = d.lastMaterialChangeAt
+}
+check("F19 不规则cadence在同一elapsed阈值进入stable", irregularState == .stable, "state=\(irregularState)")
+check("F20 macOS13 fallback按屏幕能力且上限120Hz",
+      FollowTickScheduler.fallbackFramesPerSecond(screenMaximum: 60) == 60
+        && FollowTickScheduler.fallbackFramesPerSecond(screenMaximum: 120) == 120
+        && FollowTickScheduler.fallbackFramesPerSecond(screenMaximum: 144) == 120
+        && FollowTickScheduler.fallbackFramesPerSecond(screenMaximum: 0) == 60)
 
 print("\n[Follower] \(pass - fPass) passed, \(fail - fBase) failed")
 
@@ -479,7 +529,7 @@ check("T-ctrl10c 控制按钮分类.control(btn2)",
 print("\n[控制按钮避让] \(pass - ctPass) passed, \(fail - ctBase) failed")
 print("\n[会话气泡避让] \(pass - avPass) passed, \(fail - avBase) failed")
 
-// ---- T-bv: BubbleVisibility 分类（纯函数滞回）+ 调度（max2Hz/single-flight/reset）+ 异步集成（generation/strict single-flight）----
+// ---- T-bv: BubbleVisibility 分类（纯函数滞回）+ 调度（0.1s/single-flight/reset）+ 异步集成（generation/strict single-flight）----
 let bvBase = fail, bvPass = pass
 // 进程内权限请求 gate：preflight=false 只请求一次；preflight=true 不请求。
 var requestGate = ScreenCapturePermissionRequestGate()
@@ -510,8 +560,8 @@ check("T-bv5c nil stats(previous visible)→visible(保守避让)",
 let probe = BubbleVisibilityProbe(now: { Date(timeIntervalSince1970: 1000) })
 check("T-bv6 初始isDue=true", probe.isDue(Date(timeIntervalSince1970: 1000)), "")
 probe.lock.withLock { $0.lastCapture = Date(timeIntervalSince1970: 1000); $0.inFlight = false }
-check("T-bv7 <0.5s→false", !probe.isDue(Date(timeIntervalSince1970: 1000.3)), "")
-check("T-bv8 >=0.5s→true", probe.isDue(Date(timeIntervalSince1970: 1000.5)), "")
+check("T-bv7 <0.1s→false", !probe.isDue(Date(timeIntervalSince1970: 1000.09)), "")
+check("T-bv8 >=0.1s→true", probe.isDue(Date(timeIntervalSince1970: 1000.1)), "")
 probe.lock.withLock { $0.inFlight = true }
 check("T-bv9 single-flight→false", !probe.isDue(Date(timeIntervalSince1970: 1001)), "")
 probe.reset()
@@ -782,46 +832,104 @@ check("T-bv38b preflight=false无inFlight", !blockedProbe.lock.withLock { $0.inF
 check("T-bv38c preflight=false候选保守visible",
       blockedProbe.visibility(for: CGWindowID(500)) == .visible, "")
 
-// T-bv38d: production wake bridge 可从后台调用，但 scheduler 必须在主线程以零延迟执行。
+// T-bv38d: production wake bridge 可从后台调用，coalescer 必须在主线程执行 tick。
 let bridgeCount = OSAllocatedUnfairLock(initialState: 0)
-let bridgeDelay = OSAllocatedUnfairLock<TimeInterval?>(initialState: nil)
 let bridgeOnMain = OSAllocatedUnfairLock(initialState: false)
 let bridgeCalledOffMain = OSAllocatedUnfairLock(initialState: false)
-let bridgeCallback = FollowTickWake.visibilityChangeCallback { delay in
+let bridgeGate = FollowTickCoalescer {
     bridgeCount.withLock { $0 += 1 }
-    bridgeDelay.withLock { $0 = delay }
     bridgeOnMain.withLock { $0 = Thread.isMainThread }
 }
+let bridgeCallback: @Sendable () -> Void = { bridgeGate.requestWake() }
 DispatchQueue.global().async {
     bridgeCalledOffMain.withLock { $0 = !Thread.isMainThread }
     bridgeCallback()
 }
 let bridgeCompleted = waitPumpingMain { bridgeCount.withLock { $0 } == 1 }
-check("T-bv38d wake bridge后台→主线程zero-delay scheduler一次",
+check("T-bv38d wake bridge后台→主线程coalesced tick一次",
       bridgeCompleted
         && bridgeCalledOffMain.withLock { $0 }
         && bridgeCount.withLock { $0 } == 1
-        && bridgeDelay.withLock { $0 } == 0
         && bridgeOnMain.withLock { $0 }, "")
+
+// T-bv38e: 同一主线程忙周期内的密集 wake 应合并为最多一个 pending tick，
+// 不能为每次可见性通知各排队一次过期布局。
+let denseWakeCount = OSAllocatedUnfairLock(initialState: 0)
+let denseWakeGate = FollowTickCoalescer {
+    denseWakeCount.withLock { $0 += 1 }
+}
+let denseWake: @Sendable () -> Void = { denseWakeGate.requestWake() }
+let denseWakeSubmitted = DispatchSemaphore(value: 0)
+DispatchQueue.global().async {
+    for _ in 0..<20 { denseWake() }
+    denseWakeSubmitted.signal()
+}
+_ = denseWakeSubmitted.wait(timeout: .now() + 2)
+let denseWakeCompleted = waitPumpingMain { denseWakeCount.withLock { $0 } > 0 }
+RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+check("T-bv38e 密集wake最多一个pending tick",
+      denseWakeCompleted
+        && denseWakeCount.withLock { $0 } == 1,
+      "ticks=\(denseWakeCount.withLock { $0 })")
+
+// T-bv38f: tick 正在执行时可见性再变化，仅保留一次 follow-up；
+// 普通 display beat 在忙期丢弃，最终可见性状态不丢。
+var queuedTickItems: [DispatchWorkItem] = []
+var coalescedStates: [Int] = []
+var latestVisibilityState = 1
+var busyGate: FollowTickCoalescer!
+busyGate = FollowTickCoalescer(
+    enqueue: { queuedTickItems.append($0) },
+    tick: {
+        coalescedStates.append(latestVisibilityState)
+        if coalescedStates.count == 1 {
+            latestVisibilityState = 2
+            busyGate.requestWake()
+            for _ in 0..<20 { busyGate.requestBeat() }
+        }
+    }
+)
+busyGate.requestWake()
+check("T-bv38f1 首次wake只排队一个tick", queuedTickItems.count == 1, "queued=\(queuedTickItems.count)")
+queuedTickItems.removeFirst().perform()
+check("T-bv38f2 running期最终wake只保留一次follow-up",
+      queuedTickItems.count == 1,
+      "queued=\(queuedTickItems.count)")
+queuedTickItems.removeFirst().perform()
+check("T-bv38f3 重复转换最终状态不丢且无过期tick", coalescedStates == [1, 2] && queuedTickItems.isEmpty,
+      "states=\(coalescedStates) queued=\(queuedTickItems.count)")
 
 // T-bv39: 同一候选 expanded→collapsed 的成功结果只通知一次；通知后即使 pet rect 不变，
 // 复用现有 safeDockFrame 布局路径也会从避让 frame 回到基础 frame。
 var transitionTime = Date(timeIntervalSince1970: 11_000)
 let transitionStats = OSAllocatedUnfairLock<BubbleAlphaStats?>(initialState: expandedS)
-let transitionSchedules = OSAllocatedUnfairLock(initialState: 0)
-let transitionDelay = OSAllocatedUnfairLock<TimeInterval?>(initialState: nil)
+let transitionTicks = OSAllocatedUnfairLock(initialState: 0)
 let transitionOnMain = OSAllocatedUnfairLock(initialState: false)
+let transitionLayoutY = OSAllocatedUnfairLock<CGFloat?>(initialState: nil)
 let transitionCap: BubbleCapturer = { _ in transitionStats.withLock { $0 } }
-let transitionWake = FollowTickWake.visibilityChangeCallback { delay in
-    transitionSchedules.withLock { $0 += 1 }
-    transitionDelay.withLock { $0 = delay }
-    transitionOnMain.withLock { $0 = Thread.isMainThread }
-}
-let transitionProbe = BubbleVisibilityProbe(
+var transitionProbe: BubbleVisibilityProbe!
+let transitionScheduler = FollowTickScheduler(
+    runTick: {
+        transitionTicks.withLock { $0 += 1 }
+        transitionOnMain.withLock { $0 = Thread.isMainThread }
+        let visibleObstacles = transitionProbe.visibility(for: CGWindowID(501)) == .visible
+            ? [bubbleForCollapse] : []
+        let y = Geometry.safeDockFrame(
+            pet: petForCollapse, avoiding: visibleObstacles,
+            dockSize: dockSizeBV, gap: gapBV, screen: nil
+        ).frame?.origin.y
+        transitionLayoutY.withLock { $0 = y }
+        return .stable
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 }
+)
+transitionProbe = BubbleVisibilityProbe(
     now: { transitionTime },
     canCapture: { true },
     capturer: transitionCap,
-    onVisibilityChange: transitionWake
+    onVisibilityChange: transitionScheduler.visibilityChangeCallback
 )
 let transitionCandidate = mkw(501, layer: 3, bubbleForCollapse)
 transitionProbe.probe(candidates: [transitionCandidate])
@@ -829,7 +937,7 @@ let transitionPump0 = Date().addingTimeInterval(5)
 while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump0 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
-check("T-bv39a 初始visible结果不调度", transitionSchedules.withLock { $0 } == 0, "")
+check("T-bv39a 初始visible结果不调度", transitionTicks.withLock { $0 } == 0, "")
 let transitionVisibleObstacles = transitionProbe.visibility(for: CGWindowID(501)) == .visible
     ? [bubbleForCollapse] : []
 let transitionExpandedY = Geometry.safeDockFrame(
@@ -843,21 +951,14 @@ transitionTime = Date(timeIntervalSince1970: 11_001)
 transitionProbe.probe(candidates: [transitionCandidate])
 let transitionPump1 = Date().addingTimeInterval(5)
 while (transitionProbe.lock.withLock({ $0.inFlight })
-       || transitionSchedules.withLock({ $0 }) < 1) && Date() < transitionPump1 {
+       || transitionTicks.withLock({ $0 }) < 1) && Date() < transitionPump1 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
-check("T-bv39c visible→hidden经production bridge主线程zero-delay调度一次",
-      transitionSchedules.withLock { $0 } == 1
-        && transitionDelay.withLock { $0 } == 0
-        && transitionOnMain.withLock { $0 }, "")
-let transitionHiddenObstacles = transitionProbe.visibility(for: CGWindowID(501)) == .visible
-    ? [bubbleForCollapse] : []
-let transitionCollapsedY = Geometry.safeDockFrame(
-    pet: petForCollapse, avoiding: transitionHiddenObstacles,
-    dockSize: dockSizeBV, gap: gapBV, screen: nil
-).frame?.origin.y
-check("T-bv39d pet不变+通知后重排→回基础位置", transitionCollapsedY == baseY,
-      "y=\(transitionCollapsedY ?? -1)")
+transitionScheduler.stop()
+check("T-bv39c visible→hidden经scheduler主线程执行一次完整layout tick",
+      transitionTicks.withLock { $0 } == 1 && transitionOnMain.withLock { $0 }, "")
+check("T-bv39d pet不变+通知后完整tick→回基础位置", transitionLayoutY.withLock { $0 } == baseY,
+      "y=\(transitionLayoutY.withLock { $0 } ?? -1)")
 
 transitionTime = Date(timeIntervalSince1970: 11_002)
 transitionProbe.probe(candidates: [transitionCandidate])
@@ -865,7 +966,7 @@ let transitionPump2 = Date().addingTimeInterval(5)
 while transitionProbe.lock.withLock({ $0.inFlight }) && Date() < transitionPump2 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
 }
-check("T-bv39e hidden不变不重复调度", transitionSchedules.withLock { $0 } == 1, "")
+check("T-bv39e hidden不变不重复调度", transitionTicks.withLock { $0 } == 1, "")
 
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)

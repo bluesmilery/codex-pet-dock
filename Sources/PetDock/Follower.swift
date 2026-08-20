@@ -12,8 +12,7 @@ struct FollowDecision: Equatable {
     let state: FollowState
     let showDock: Bool          // 底座可见
     let shouldSetFrame: Bool    // 仅位置变化时 true，避免重复 setFrame
-    let nextInterval: TimeInterval
-    let stableCount: Int
+    let lastMaterialChangeAt: TimeInterval?
 }
 
 /// 可解释自适应跟随：纯函数 decide 驱动状态转换。
@@ -23,34 +22,39 @@ struct FollowDecision: Equatable {
 /// - 隐藏：底座 + 详情隐藏，低频检测重现
 /// - 重现：重捕，回到 moving
 enum Follower {
-    static let movingInterval: TimeInterval = 1.0 / 60.0   // 移动约 60Hz
-    static let stableInterval: TimeInterval = 0.1          // 静止降频且 0.1s 内探测移动
-    static let hiddenInterval: TimeInterval = 1.0    // 隐藏检测重现
-    static let stableThreshold: Int = 4              // 连续 N 次位置不变 → stable
+    static let stableInterval: TimeInterval = 0.1       // 静止降频且 0.1s 内探测移动
+    static let hiddenInterval: TimeInterval = 1.0       // 隐藏检测重现
+    static let stationaryDuration: TimeInterval = 4.0 / 60.0
 
-    /// 纯函数：根据当前宠物窗口（Quartz 全局 rect，nil=不可见）、上次位置、状态、稳定计数，决策下一步。
-    static func decide(pet: CGRect?, lastPet: CGRect?, state: FollowState, stableCount: Int) -> FollowDecision {
+    /// 纯函数：`now` 与 `lastMaterialChangeAt` 均为同一单调时钟的秒数。
+    /// stable 以连续静止时长判定，不受 60/120Hz 或可变刷新 callback 次数影响。
+    static func decide(
+        pet: CGRect?,
+        lastPet: CGRect?,
+        lastMaterialChangeAt: TimeInterval?,
+        now: TimeInterval
+    ) -> FollowDecision {
         // 无宠物 → 隐藏，低频检测重现
         guard let pet = pet else {
             return FollowDecision(state: .hidden, showDock: false, shouldSetFrame: false,
-                                  nextInterval: hiddenInterval, stableCount: 0)
+                                  lastMaterialChangeAt: nil)
         }
         // 实质变化（含首次捕获 / 重现）→ moving，升频，setFrame。
         // 位置变化用容差比较（吸收亚像素抖动）；尺寸变化不耐受，直接判变。
         if lastPet == nil || hasMaterialChange(pet, lastPet!) {
             return FollowDecision(state: .moving, showDock: true, shouldSetFrame: true,
-                                  nextInterval: movingInterval, stableCount: 0)
+                                  lastMaterialChangeAt: now)
         }
-        // 位置不变：累加稳定计数
-        let count = stableCount + 1
-        if count >= stableThreshold {
+        // 位置不变：沿用最近一次实质变化时刻，按 elapsed time 判定稳定。
+        let changedAt = lastMaterialChangeAt ?? now
+        if now - changedAt >= stationaryDuration {
             // 已稳定 → 降频，不重复 setFrame
             return FollowDecision(state: .stable, showDock: true, shouldSetFrame: false,
-                                  nextInterval: stableInterval, stableCount: count)
+                                  lastMaterialChangeAt: changedAt)
         }
         // 过渡期：仍 moving，但不 setFrame
         return FollowDecision(state: .moving, showDock: true, shouldSetFrame: false,
-                              nextInterval: movingInterval, stableCount: count)
+                              lastMaterialChangeAt: changedAt)
     }
 
     /// 是否发生实质变化：尺寸不同，或 origin 位移超过 `PetHeuristics.positionTolerance`。

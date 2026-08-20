@@ -67,10 +67,10 @@ struct ScreenCapturePermissionRequestGate {
 }
 
 /// 异步探测 obstaclesNear 候选的可见性。`Sendable`（状态由 `OSAllocatedUnfairLock` 保护）。
-/// max 2Hz、single-flight（generation 严格）、保守降级（失败/macOS13/缺失 → visible）。
+/// 最长 0.1s 受控启动等待、single-flight（generation 严格）、保守降级（失败/macOS13/缺失 → visible）。
 /// 像素捕获在 `Task.detached` 后台执行（不跑主线程），完成后经 lock + generation 校验更新。
 final class BubbleVisibilityProbe: Sendable {
-    static let minInterval: TimeInterval = 0.5   // 2Hz
+    static let minInterval: TimeInterval = 0.1
 
     /// 受锁保护的可变状态（同 module 测试可经 lock 访问）。
     internal struct ProbeState: Sendable {
@@ -104,7 +104,7 @@ final class BubbleVisibilityProbe: Sendable {
 
     // MARK: - 主线程接口（tick 同步调用）
 
-    /// 是否可触发探测（max 2Hz + single-flight）。
+    /// 是否可触发探测（0.1s cadence + single-flight）。
     func isDue(_ time: Date) -> Bool {
         lock.withLock { s in
             !s.inFlight && time.timeIntervalSince(s.lastCapture) >= Self.minInterval

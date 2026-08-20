@@ -45,10 +45,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let dock = DockPanel()
     private let detail = DetailPanel()
     private let provider: LiveDockProvider
+    private lazy var followScheduler: FollowTickScheduler = {
+        FollowTickScheduler(
+            runTick: { [weak self] in self?.tick() ?? .hidden },
+            makeDisplayLink: { [dock] target, selector in
+                guard #available(macOS 14.0, *) else { return nil }
+                return dock.makeDisplayLink(target: target, selector: selector)
+            },
+            canUseDisplayLink: { [dock] in dock.isVisible },
+            maximumFramesPerSecond: { [dock] in dock.maximumFramesPerSecond }
+        )
+    }()
     private lazy var bubbleProbe = BubbleVisibilityProbe(
-        onVisibilityChange: FollowTickWake.visibilityChangeCallback { [weak self] interval in
-            self?.schedule(after: interval)
-        }
+        onVisibilityChange: followScheduler.visibilityChangeCallback
     )
     private let settings = Settings()
     private var themeStore: ThemeStore?
@@ -56,9 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBar: StatusBar?
     private var lastPet: CGRect?
     private var lastWID: CGWindowID?
-    private var state: FollowState = .hidden
-    private var stableCount = 0
-    private var timer: Timer?               // 跟随（高频：窗口枚举 + 位置）
+    private var lastMaterialChangeAt: TimeInterval?
     private var dataTimer: Timer?           // 数据刷新（低频：退避间隔）
     private var wasPetVisible = false       // 数据 pause/resume 的边沿触发（跟随宠物可见性）
     private var consecutiveEmptyTicks = 0   // 连续无候选 tick 计数（TCC 缺失降级提示用）
@@ -87,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         provider.onUpdated = { [weak self] _ in self?.renderSnapshot() }
         setupShell()                  // 主题 / 状态栏 / 自启 / 外部主题热加载
         renderSnapshot()
-        schedule(after: Follower.hiddenInterval)
+        followScheduler.start()
     }
 
     // MARK: - 产品外壳（主题 / 状态栏 / 自启）
@@ -139,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.dockVisible = v
         if !v { dock.hideIfNeeded(); detail.close() }
         statusBar?.updateDockVisible(v)
+        followScheduler.requestWake()
         log("dockVisible=\(v)")
     }
 
@@ -154,10 +162,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 退出：停止热加载、取消数据调度、停止数据探测（拒绝后续刷新 / 在途任务无 UI 副作用）后终止进程。
     private func quit() {
         themeStore?.stop()
+        followScheduler.stop()
         stopDataRefresh()
         provider.stop()
         log("quit")
         NSApplication.shared.terminate(nil)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        followScheduler.stop()
     }
 
     // MARK: - 详情 / 渲染
@@ -174,15 +187,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let s = provider.currentSnapshot()
         dock.render(s)
         detail.render(s)
-    }
-
-    /// 跟随 timer 动态重新调度（频率随 Follower 决策变化）。加入 .common 模式，
-    /// 使事件跟踪 / 模态等非 default 模式下仍能触发，避免跟随卡顿。
-    private func schedule(after interval: TimeInterval) {
-        timer?.invalidate()
-        let t = Timer(timeInterval: interval, repeats: false) { [weak self] _ in self?.tick() }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
     }
 
     /// 数据刷新：后台抓取两源（不阻塞主线程），完成后按退避间隔重排。
@@ -207,11 +211,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 一次跟随 tick：枚举 → 识别 → Follower 决策（频率/setFrame）→ FollowTickPlan 纯编排
     /// （数据 pause/resume、UI show/hide）→ 执行计划输出（应用位置/可见性）→ 重排。
     /// tick 只执行纯计划输出；编排判断（边沿/dockVisible/候选为空）集中在 FollowTickPlanner。
-    private func tick() {
+    private func tick() -> FollowState {
         let wins = PetTracker.unionCandidates()
         let sel = PetTracker.selectPet(candidates: wins, lastWID: lastWID)
         let pet = sel.selected?.bounds
-        let d = Follower.decide(pet: pet, lastPet: lastPet, state: state, stableCount: stableCount)
+        let d = Follower.decide(
+            pet: pet,
+            lastPet: lastPet,
+            lastMaterialChangeAt: lastMaterialChangeAt,
+            now: ProcessInfo.processInfo.systemUptime
+        )
 
         // TCC 缺失降级提示：连续无候选 + 屏幕录制权限未授予 → 状态栏提示（避免静默失败）。
         // 权限授予后 CGWindowList 返候选，或 preflight 转 true → 提示自动消失。
@@ -285,13 +294,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lastWID = nil
             bubbleProbe.reset()
         }
-        state = d.state
-        stableCount = d.stableCount
+        lastMaterialChangeAt = d.lastMaterialChangeAt
 
         log("follow state=\(d.state.rawValue) pet=\(petVisible) show=\(plan.showUI) setFrame=\(d.shouldSetFrame) "
-            + "interval=\(d.nextInterval) stable=\(d.stableCount) selected=\(sel.selected != nil)")
-
-        schedule(after: d.nextInterval)
+            + "selected=\(sel.selected != nil)")
+        return d.state
     }
 
     private func log(_ s: String) {
