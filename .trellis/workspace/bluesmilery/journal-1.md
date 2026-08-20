@@ -150,3 +150,27 @@ Hardened Trellis path/runtime boundaries, private diagnostics and logs, child-pr
 ### Next Steps
 
 - 真实 TCC、ScreenCaptureKit、拖动体感、多屏、macOS 13 与 Instruments 仍需真机验证
+
+
+## Session 6: 恢复 Trellis 官方 Git 管理策略
+
+**Date**: 2026-08-20
+**Task**: 恢复 Trellis 官方 Git 管理策略
+**Branch**: `dev`
+
+### Summary
+
+恢复官方 ignore 和自动提交边界，纳入并脱敏 task/workspace 资料，经 Grok Review 与 QA 通过后集成到 dev，并清理未使用的 .claude 本机文件。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `09991023f5e75e873f6c7957834f99145c9b72e3` | (see git log) |
+| `566c1921a34f1e021a989f55786034bec29755b1` | (see git log) |
+| `d82f6b28e149348fef56a05963390d9e7c11dd1c` | (see git log) |
+| `3fa834980db46cb00c20d0dc8182234cb6aadfff` | (see git log) |
+
+### Status
+
+[OK] **Completed**
