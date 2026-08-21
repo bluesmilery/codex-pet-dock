@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let dock = DockPanel()
     private let detail = DetailPanel()
     private let provider: LiveDockProvider
+    private let runtimeEvidence: RuntimeEvidenceCollector?
     private let followMonotonicNow: @Sendable () -> TimeInterval = {
         ProcessInfo.processInfo.systemUptime
     }
@@ -63,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }()
     private lazy var bubbleProbe = BubbleVisibilityProbe(
         monotonicNow: followMonotonicNow,
+        evidence: runtimeEvidence,
         onVisibilityChange: followScheduler.visibilityChangeCallback
     )
     private let settings = Settings()
@@ -78,7 +80,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var screenCapturePermissionGate = ScreenCapturePermissionRequestGate()
     private let logger = PetLogger()
 
-    override init() {
+    init(runtimeEvidenceSHA: String? = nil) {
+        // 显式 QA 诊断开关（--runtime-evidence=<sha>）：默认 nil → 全链路 evidence 为 nil，
+        // 不创建诊断文件、不增加捕获/计时开销；启用时输出绑定 QA 提供的候选 SHA。
+        if let runtimeEvidenceSHA {
+            runtimeEvidence = RuntimeEvidenceCollector(
+                candidateSHA: runtimeEvidenceSHA,
+                outputURL: PrivateStorage.diagnosticsURL
+                    .appendingPathComponent(RuntimeEvidenceCollector.outputFileName)
+            )
+        } else {
+            runtimeEvidence = nil
+        }
         // 数据栈：RateLimitClient 经 codex app-server JSON-RPC 取官方周额度；
         //          TokenUsageLogReader 解析 ~/.codex/sessions 本机周 token（仅取数值，不读正文）。
         let sessionsRoot = FileManager.default.homeDirectoryForCurrentUser
@@ -269,13 +282,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         mascot: mascot,
                         candidates: wins,
                         bubbleProbe: bubbleProbe,
+                        evidence: runtimeEvidence,
                         frameSink: { [dock] pet, obstacles in
                             dock.placeBelow(
                                 petQuartzRect: pet,
                                 avoiding: obstacles,
                                 visibleScreen: scr,
                                 movementChanged: d.shouldSetFrame,
-                                monotonicNow: followMonotonicNow()
+                                monotonicNow: followMonotonicNow(),
+                                evidence: runtimeEvidence
                             )
                         }
                     )
@@ -286,6 +301,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         dock.hideIfNeeded()
                         detail.close()
                     }
+                    // 诊断聚合只在既有完整布局 tick 末尾落盘（无独立计时/捕获）。
+                    runtimeEvidence?.flush()
                 }
             } else {
                 // plan.hideUI：宠物可见但用户隐藏 → 只关 UI，仍跟踪宠物（静止锚点/lastWID 已更新）。
@@ -320,6 +337,8 @@ if CommandLine.arguments.contains("--diagnose") {
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // 不显示 Dock 图标，作为后台辅助应用
-let delegate = AppDelegate()
+let delegate = AppDelegate(
+    runtimeEvidenceSHA: RuntimeEvidenceFlag.parseCandidateSHA(CommandLine.arguments)
+)
 app.delegate = delegate
 app.run()

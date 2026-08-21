@@ -43,3 +43,28 @@
 
 - 自动证据不覆盖：真实 TCC/ScreenCaptureKit 像素流、真实 CG/SCK 生命周期错位、多屏负坐标、高刷/VRR 真实回调、拖拽体感、Instruments 开销——全部标记未验证，留待真机 QA。
 - 本候选不包含产品代码改动；任何后续产品变更都会使本表及全部测试结论失效并需要重新冻结。
+
+---
+
+## v6 runtime-first 诊断候选（Fifth break-loop 控制段）
+
+- 任务：fix-bubble-collapse-smooth-follow（v6，runtime-first bubble full-hide diagnostics）。
+- 产品基线 + 治理/规划 HEAD：`773317752d9487a5551df1d53109e7066047ff5a`（worktree 初始 clean；本候选在其上叠加 runtime evidence 实现）。
+- 本候选性质：仅增加默认关闭、QA 显式启用的匿名聚合诊断（`--runtime-evidence=<sha>`）及其测试/privacy guard/文档；不修改障碍分类、alpha 阈值、candidate identity、control 几何、capture cadence、scheduler 架构、插值语义或权限请求。
+
+### 逐 AC 证据拓扑（v6 新增部分）
+
+| AC / 症状 | 证据类型 | 触发 / 扰动 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- |
+| AC2c-1 默认关闭：无 flag 不创建诊断文件、不增加 capture/timer | behavior + static/absence | `RuntimeEvidenceFlag.parseCandidateSHA` 对空参数/非法值/裸 flag 返回 nil；evidence=nil 走完整生产布局链 | `main.swift` 唯一构造点（`init(runtimeEvidenceSHA:)` 内 `if let`）→ probe/placeDock/placeBelow 全部收到 nil；`RuntimeEvidence.swift` 无 Timer/Task/capture/墙钟 API（T-re8 + pytest source guard） | T-re1a–d、T-re7a（evidence=nil 时真实 DockPanel frame 与既有避让一致）；python guard 断言 Sources 中 `RuntimeEvidenceCollector(` 构造点唯一 | `make test-ui` 262/262；`pytest tests/test_runtime_privacy.py` 22 passed | 生产 AppDelegate 完整启动路径未在测试中实例化（避免拉起数据栈）；由唯一构造点 source guard + flag 解析测试覆盖 |
+| AC2c-2 白名单序列化 / 禁止字段 | behavior | 对 collector 记录全部计数类别后取 snapshot 并 JSON 序列化 | `RuntimeEvidenceCollector.snapshot()` 固定 key 集合（21 字段：schema/candidateSHA/tick/kind/outcome/visibility/identity/wake/dy bucket 计数） | T-re2a key 集合精确等于白名单（无多余/缺失）；T-re2b 计数正确；T-re2c JSON 文本不含 owner/title/wid/pid/screen/alpha/color/image/bounds/process token | 同上 | 无 |
+| AC2c-3 权限 / no-follow fail-closed | behavior | 临时目录 + sentinel 目标文件 + symlink 落盘点；调用 flush | `RuntimeEvidenceCollector.flush()` → `PrivateStorage.atomicWrite`（目录 ensurePrivateDirectory 0700、临时文件 0600、目标 symlink 先移除再原子替换，绝不写入链接目标） | T-re3a 仅 record 不创建文件；T-re3b flush 后目录 0700/文件 0600/内容=快照；T-re4 sentinel 目标内容不变且落点位成为常规证据文件（URL resourceValues 有实例缓存，断言走 attributesOfItem） | 同上 | 无 |
+| AC2c-4 聚合输入在生产 owner 处采集 | behavior（生产组合，plumbing-only） | fake capturer `.stats(expanded)`→`.targetMissing`；同 WID bounds 亚像素抖动；control-kind fixture（60×24） | `BubbleVisibilityProbe.probe`（identity-change/outcome/visibility/wake，经 Task 消费）→ `onVisibilityChange` → `FollowTickScheduler.visibilityChangeCallback` → 完整 tick → `FollowLayoutPass.placeDock`（kind/visible 计数）→ 真实 `DockPanel.placeBelow`（实际 frame 相对同 tick 无障碍 base 的 dy bucket） | T-re5a–d：capture/visibility/identity/wake 计数、tick/kind/visible 计数、dy upTo64→base 迁移、真实 frame 避让→复位；T-re6a/b：control 存在即占位 → bubble=1/control=1/visible=2 | 同上 | 真实 image3 的 runtime kind/outcome/identity 分布未采样（本表所有 fake 注入均为 plumbing-only） |
+| AC2b（v6 状态重申） | plumbing-only | 既有 T-bv42 fake `.targetMissing` 注入 | 既有生产组合证据不变（v5 表） | 管道能力已证；真实 full-hide 触发等价性未证 | `make test-ui` 262/262（含 T-bv42） | **待真机采样**：用本诊断候选执行真实图1→图2→图3，读 runtime-evidence.json 聚合后才可判定 H1/H2/H3/H4b 分支；在此之前不得宣称 image3 已修复 |
+
+### v6 诊断候选边界声明
+
+- 诊断启用只经 QA 启动参数；`candidateSHA` 由 QA 显式提供并只写入私有 0600 文件，被跟踪文件不包含真实 SHA。
+- dy bucket 的 base 判定含 <1.0 像素对齐容差，与既有 frame 断言容差一致；不输出任何坐标数值。
+- 诊断聚合在既有 tick 内采集；probe 的 outcome/visibility 计数来自其既有后台捕获 Task，wake 计数来自既有 `onVisibilityChange` 回调，均未新增捕获流、Timer 或 runloop source。
+- 真实 TCC/ScreenCaptureKit 像素流、真实 CG/SCK 生命周期、多屏、拖拽体感与 Instruments 开销仍未验证；image3 症状结论等待同一诊断候选的真机脱敏采样。

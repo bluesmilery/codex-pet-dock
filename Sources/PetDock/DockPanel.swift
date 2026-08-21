@@ -182,7 +182,8 @@ final class DockPanel {
         avoiding obstacles: [CGRect] = [],
         visibleScreen: NSScreen? = nil,
         movementChanged: Bool = false,
-        monotonicNow: TimeInterval = ProcessInfo.processInfo.systemUptime
+        monotonicNow: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        evidence: RuntimeEvidenceCollector? = nil
     ) -> Bool {
         let screenID = visibleScreen.map(ObjectIdentifier.init)
         let screenChanged = lastVisibleScreenID != screenID
@@ -210,6 +211,39 @@ final class DockPanel {
         let shouldAnimate = movementChanged && hasVisibleScreen && !screenChanged && !obstaclesChanged
         let frame = frameInterpolator.update(to: target, at: monotonicNow, movementChanged: shouldAnimate)
         panel.setFrame(frame, display: true)
+        if let evidence, let bucket = dyBucket(
+            actualAppKitFrame: frame,
+            pet: pet,
+            screen: visibleScreen
+        ) {
+            evidence.recordDockDyBucket(bucket)
+        }
         return true
+    }
+
+    /// 匿名诊断：实际写入 frame 相对本 tick 无障碍基础 frame 的垂直差 bucket。
+    /// 只输出 bucket，不输出坐标；基础 frame 按同一几何入口（无障碍）独立重算。
+    private func dyBucket(actualAppKitFrame actual: NSRect, pet: CGRect, screen: NSScreen?) -> DockDyBucket? {
+        let baseQuartz: CGRect?
+        if let screen {
+            baseQuartz = Geometry.safeDockFrame(
+                pet: pet,
+                avoiding: [],
+                dockSize: CGSize(width: dockWidth, height: dockHeight),
+                gap: gap,
+                screen: screen
+            ).frame
+        } else {
+            let dw = dockWidth, dh = dockHeight
+            baseQuartz = CGRect(
+                x: pet.origin.x + (pet.width - dw) / 2,
+                y: pet.origin.y + pet.height + gap,
+                width: dw,
+                height: dh
+            )
+        }
+        guard let baseQuartz else { return nil }
+        let base = Geometry.appKitRectFromQuartz(baseQuartz)
+        return DockDyBucket.bucket(dy: abs(actual.midY - base.midY))
     }
 }

@@ -805,3 +805,52 @@ def test_token_cache_key_is_versioned_and_path_free() -> None:
     assert "v2:" in token
     assert "memCache[file.path]" not in token
     assert "memCache[key]" in token
+
+
+def test_runtime_evidence_source_is_aggregate_only() -> None:
+    """Runtime evidence must stay an aggregate counter with no capture or timer source."""
+    source = (ROOT / "Sources" / "PetDock" / "RuntimeEvidence.swift").read_text(encoding="utf-8")
+    for banned_api in (
+        "Timer",
+        "DispatchSource",
+        "SCShareableContent",
+        "SCScreenshot",
+        "CGWindowList",
+        "Task.detached",
+        "Task {",
+        "Date(",
+        "ProcessInfo",
+    ):
+        assert banned_api not in source, banned_api
+    for banned_field in (
+        "ownerPID",
+        "ownerName",
+        "title",
+        "bounds",
+        "screen",
+        "alpha",
+        "color",
+        "image",
+        "processID",
+        "wid",
+    ):
+        assert banned_field not in source, banned_field
+    assert "PrivateStorage.atomicWrite" in source
+
+
+def test_runtime_evidence_is_disabled_without_explicit_flag() -> None:
+    """The collector must only be constructed from the QA-provided candidate SHA."""
+    sources = [
+        path
+        for path in (ROOT / "Sources" / "PetDock").glob("*.swift")
+        if path.name != "RuntimeEvidence.swift"
+    ]
+    constructions = {
+        path.name: path.read_text(encoding="utf-8").count("RuntimeEvidenceCollector(")
+        for path in sources
+    }
+    assert sum(constructions.values()) == 1, constructions
+    assert constructions.get("main.swift") == 1
+    main = (ROOT / "Sources" / "PetDock" / "main.swift").read_text(encoding="utf-8")
+    assert "RuntimeEvidenceFlag.parseCandidateSHA(CommandLine.arguments)" in main
+    assert "init(runtimeEvidenceSHA: String? = nil)" in main

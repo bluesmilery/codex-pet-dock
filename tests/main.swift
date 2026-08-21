@@ -1899,6 +1899,270 @@ _ = waitPumpingMain { !missProbe.lock.withLock { $0.inFlight } }
 check("T-bv42e hidden不变不重复wake", missTicks.withLock { $0 } == 2, "ticks=\(missTicks.withLock { $0 })")
 missScheduler.stop()
 
+// T-re (v6 runtime evidence): 默认关闭、QA 显式启用的匿名聚合诊断。
+// plumbing-only 声明：本节的 fake capturer / fixture 注入只证明
+// “每个事件被生产对象消费并计数”，不证明真实图3 full-hide 产生同类 trigger；
+// 症状结论必须等待同一候选的真机脱敏采样，不得据此宣称 image3 已修复。
+
+// T-re1: 启用参数解析（缺省/非法 → 关闭；QA 显式提供候选 SHA → 启用）
+check("T-re1a 无flag→disabled", RuntimeEvidenceFlag.parseCandidateSHA([]) == nil, "")
+check("T-re1b 合法full sha→enabled",
+      RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=0123456789abcdef0123456789abcdef01234567"])
+        == "0123456789abcdef0123456789abcdef01234567", "")
+check("T-re1c 合法short sha→enabled",
+      RuntimeEvidenceFlag.parseCandidateSHA(["-other", "--runtime-evidence=abcdef0"]) == "abcdef0", "")
+check("T-re1d 非hex/大写/过短/裸flag→disabled",
+      RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=xyz987"]) == nil
+        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=ABCDEF0"]) == nil
+        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=abcdef"]) == nil
+        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence"]) == nil, "")
+
+// T-re2/T-re3: 白名单序列化、禁止字段、record 不落盘、flush 私有权限
+let reSHA = "0123456789abcdef0123456789abcdef01234567"
+let reRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reRoot)
+let reOutputURL = reRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName)
+let reCollector = RuntimeEvidenceCollector(candidateSHA: reSHA, outputURL: reOutputURL)
+reCollector.recordLayoutTick(bubbleObstacles: 1, controlObstacles: 0, visibleObstacles: 1)
+reCollector.recordCapture(kind: .stats, visibility: .visible)
+reCollector.recordLayoutTick(bubbleObstacles: 1, controlObstacles: 0, visibleObstacles: 0)
+reCollector.recordCapture(kind: .targetMissing, visibility: .hidden)
+reCollector.recordIdentityChange()
+reCollector.recordWakeCallback()
+reCollector.recordDockDyBucket(.upTo64)
+reCollector.recordDockDyBucket(.base)
+let reSnapshot = reCollector.snapshot()
+let reExpectedKeys: Set<String> = [
+    "schema", "candidateSHA", "tickCount",
+    "bubbleObstacleCount", "controlObstacleCount", "visibleObstacleCount",
+    "lastBubbleObstacleCount", "lastControlObstacleCount", "lastVisibleObstacleCount",
+    "captureStatsCount", "captureTargetMissingCount", "captureUnavailableCount",
+    "visibilityVisibleCount", "visibilityHiddenCount",
+    "identityChangeCount", "wakeCallbackCount",
+    "dockDyBaseCount", "dockDyUpTo32Count", "dockDyUpTo64Count", "dockDyAbove64Count",
+    "lastDockDyBucket",
+]
+check("T-re2a 快照key集合=白名单（无多余/缺失）",
+      Set(reSnapshot.keys) == reExpectedKeys,
+      "extra=\(Set(reSnapshot.keys).subtracting(reExpectedKeys).sorted()) "
+        + "missing=\(reExpectedKeys.subtracting(reSnapshot.keys).sorted())")
+check("T-re2b 聚合计数正确",
+      (reSnapshot["tickCount"] as? Int) == 2
+        && (reSnapshot["bubbleObstacleCount"] as? Int) == 2
+        && (reSnapshot["captureStatsCount"] as? Int) == 1
+        && (reSnapshot["captureTargetMissingCount"] as? Int) == 1
+        && (reSnapshot["visibilityVisibleCount"] as? Int) == 1
+        && (reSnapshot["visibilityHiddenCount"] as? Int) == 1
+        && (reSnapshot["identityChangeCount"] as? Int) == 1
+        && (reSnapshot["wakeCallbackCount"] as? Int) == 1
+        && (reSnapshot["dockDyUpTo64Count"] as? Int) == 1
+        && (reSnapshot["dockDyBaseCount"] as? Int) == 1
+        && (reSnapshot["lastDockDyBucket"] as? String) == DockDyBucket.base.rawValue, "")
+let reJSONText = String(
+    data: try! JSONSerialization.data(withJSONObject: reSnapshot, options: [.sortedKeys]),
+    encoding: .utf8)!
+let reForbiddenTokens = ["owner", "title", "windowID", "wid", "pid", "screen",
+                         "alpha", "color", "image", "bounds", "process"]
+check("T-re2c JSON文本无禁止字段token", reForbiddenTokens.allSatisfy { !reJSONText.contains($0) }, reJSONText)
+check("T-re3a 仅record不创建诊断文件", !FileManager.default.fileExists(atPath: reOutputURL.path), "")
+reCollector.flush()
+let reFileMode = (try! FileManager.default.attributesOfItem(atPath: reOutputURL.path)[.posixPermissions] as! NSNumber).uint16Value & 0o777
+let reDirMode = (try! FileManager.default.attributesOfItem(atPath: reRoot.path)[.posixPermissions] as! NSNumber).uint16Value & 0o777
+let reWritten = try! JSONSerialization.jsonObject(with: Data(contentsOf: reOutputURL)) as! [String: Any]
+check("T-re3b flush落盘：目录0700/文件0600/内容=快照",
+      reFileMode == 0o600 && reDirMode == 0o700
+        && (reWritten["candidateSHA"] as? String) == reSHA
+        && (reWritten["tickCount"] as? Int) == 2,
+      "file=0\(String(reFileMode, radix: 8)) dir=0\(String(reDirMode, radix: 8))")
+
+// T-re4: symlink fail-closed —— 外部链接目标绝不接收诊断内容
+let reEvilTarget = reRoot.appendingPathComponent("evil-target.json")
+try! "SENTINEL".data(using: .utf8)!.write(to: reEvilTarget)
+let reLinkURL = reRoot.appendingPathComponent("evidence-link.json")
+try! FileManager.default.createSymbolicLink(at: reLinkURL, withDestinationURL: reEvilTarget)
+let reLinkCollector = RuntimeEvidenceCollector(candidateSHA: reSHA, outputURL: reLinkURL)
+reLinkCollector.recordLayoutTick(bubbleObstacles: 0, controlObstacles: 0, visibleObstacles: 0)
+reLinkCollector.flush()
+let reEvilContent = try! String(contentsOf: reEvilTarget, encoding: .utf8)
+// 注意：URL 实例会缓存 resourceValues（createSymbolicLink 后读旧值），
+// 断言必须走 attributesOfItem 取文件系统真实状态。
+let reLinkType = try! FileManager.default.attributesOfItem(atPath: reLinkURL.path)[.type] as? FileAttributeType
+let reLinkReplacedWithEvidence = reLinkType == .typeRegular
+    && ((try? JSONSerialization.jsonObject(with: Data(contentsOf: reLinkURL))) as? [String: Any]) != nil
+check("T-re4 symlink目标不被写入（链接本体被安全替换）",
+      reEvilContent == "SENTINEL" && reLinkReplacedWithEvidence,
+      "evil=\(reEvilContent) linkType=\(reLinkType?.rawValue ?? "nil")")
+
+// T-re5: 生产组合消费链 —— probe/FollowLayoutPass/DockPanel 各自消费事件并计数（plumbing-only）
+var rePTime: TimeInterval = 17_000
+var rePClock: TimeInterval = 0
+let rePDock = DockPanel()
+let rePOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(expandedS))
+let rePCap: BubbleCapturer = { _ in rePOutcome.withLock { $0 } }
+let rePSHA = "1234567890abcdef1234567890abcdef12345678"
+let rePROot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-prod-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: rePROot)
+let rePCollector = RuntimeEvidenceCollector(
+    candidateSHA: rePSHA,
+    outputURL: rePROot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName))
+let rePMascot = mkw(563, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
+let rePCandidate = mkw(561, layer: 3, bubbleForCollapse)
+let rePBaseX = petForCollapse.origin.x + (petForCollapse.width - 200) / 2
+let rePBaseAppKitFrame = Geometry.appKitRectFromQuartz(CGRect(x: rePBaseX, y: baseY, width: 200, height: 48))
+let rePAvoidAppKitFrame = Geometry.appKitRectFromQuartz(CGRect(x: rePBaseX, y: avoidY, width: 200, height: 48))
+var rePProbe: BubbleVisibilityProbe!
+let rePScheduler = FollowTickScheduler(
+    runTick: {
+        FollowLayoutPass.placeDock(
+            mascot: rePMascot,
+            candidates: [rePMascot, rePCandidate],
+            bubbleProbe: rePProbe,
+            evidence: rePCollector,
+            frameSink: { pet, obstacles in
+                rePDock.placeBelow(
+                    petQuartzRect: pet,
+                    avoiding: obstacles,
+                    visibleScreen: nil,
+                    movementChanged: false,
+                    monotonicNow: rePTime,
+                    evidence: rePCollector
+                )
+            }
+        ) ? .stable : .hidden
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { rePClock },
+    makeTimer: { interval, repeats, callback in
+        TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+    }
+)
+rePProbe = BubbleVisibilityProbe(
+    monotonicNow: { rePTime },
+    canCapture: { true },
+    capturer: rePCap,
+    evidence: rePCollector,
+    onVisibilityChange: rePScheduler.visibilityChangeCallback
+)
+rePProbe.probe(candidates: [rePCandidate])
+_ = waitPumpingMain { !rePProbe.lock.withLock { $0.inFlight } }
+let rePAfterFirstCapture = rePCollector.snapshot()
+check("T-re5a probe消费fake capturer→outcome/visibility/identity计数",
+      (rePAfterFirstCapture["captureStatsCount"] as? Int) == 1
+        && (rePAfterFirstCapture["visibilityVisibleCount"] as? Int) == 1
+        && (rePAfterFirstCapture["identityChangeCount"] as? Int) == 1,
+      "identity=\(rePAfterFirstCapture["identityChangeCount"] ?? -1)")
+rePScheduler.start()
+rePScheduler.requestWake()
+_ = waitPumpingMain { (rePCollector.snapshot()["tickCount"] as? Int ?? 0) == 1 }
+let rePAfterTick1 = rePCollector.snapshot()
+check("T-re5b FollowLayoutPass/DockPanel消费→kind/visible/dy计数+实际避让frame",
+      (rePAfterTick1["tickCount"] as? Int) == 1
+        && (rePAfterTick1["bubbleObstacleCount"] as? Int) == 1
+        && (rePAfterTick1["controlObstacleCount"] as? Int) == 0
+        && (rePAfterTick1["lastVisibleObstacleCount"] as? Int) == 1
+        && (rePAfterTick1["dockDyUpTo64Count"] as? Int) == 1
+        && (rePAfterTick1["lastDockDyBucket"] as? String) == DockDyBucket.upTo64.rawValue
+        && dockFrameNear(rePDock.frame, rePAvoidAppKitFrame),
+      "ticks=\(rePAfterTick1["tickCount"] ?? -1) frame=\(rePDock.frame)")
+rePOutcome.withLock { $0 = .targetMissing }
+rePTime = 17_001
+rePProbe.probe(candidates: [rePCandidate])
+let rePWakePump = Date().addingTimeInterval(5)
+while (rePProbe.lock.withLock({ $0.inFlight })
+       || ((rePCollector.snapshot()["tickCount"] as? Int ?? 0) < 2)) && Date() < rePWakePump {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+}
+RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+let rePAfterTick2 = rePCollector.snapshot()
+check("T-re5c targetMissing→wake计数+完整tick→base bucket+实际frame复位",
+      (rePAfterTick2["captureTargetMissingCount"] as? Int) == 1
+        && (rePAfterTick2["visibilityHiddenCount"] as? Int) == 1
+        && (rePAfterTick2["wakeCallbackCount"] as? Int) == 1
+        && (rePAfterTick2["tickCount"] as? Int) == 2
+        && (rePAfterTick2["bubbleObstacleCount"] as? Int) == 2
+        && (rePAfterTick2["lastVisibleObstacleCount"] as? Int) == 0
+        && (rePAfterTick2["dockDyBaseCount"] as? Int) == 1
+        && (rePAfterTick2["lastDockDyBucket"] as? String) == DockDyBucket.base.rawValue
+        && dockFrameNear(rePDock.frame, rePBaseAppKitFrame),
+      "ticks=\(rePAfterTick2["tickCount"] ?? -1) frame=\(rePDock.frame)")
+let rePJitter = mkw(561, layer: 3, CGRect(x: 80, y: 280, width: 345.4, height: 54))
+rePTime = 17_002
+rePProbe.probe(candidates: [rePJitter])
+let rePAfterJitter = rePCollector.snapshot()
+check("T-re5d 同WID bounds抖动→identity-change计数（H4b探针）",
+      (rePAfterJitter["identityChangeCount"] as? Int) == 2,
+      "identity=\(rePAfterJitter["identityChangeCount"] ?? -1)")
+rePScheduler.stop()
+
+// T-re6: control-kind 存在即占位 → kind/visible 计数 + dy bucket（生产 owner 消费）
+let reCRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-control-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reCRoot)
+let reCCollector = RuntimeEvidenceCollector(
+    candidateSHA: reSHA,
+    outputURL: reCRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName))
+let reControlCandidate = mkw(566, layer: 3, CGRect(x: 140, y: 280, width: 60, height: 24))
+check("T-re6a 前置: 60x24候选→control kind",
+      PetTracker.obstacleKind(reControlCandidate, petMaxY: petForCollapse.maxY) == .control, "")
+let reControlDock = DockPanel()
+let reControlProbe = BubbleVisibilityProbe(
+    monotonicNow: { 21_000 }, canCapture: { true }, capturer: { _ in .unavailable })
+_ = FollowLayoutPass.placeDock(
+    mascot: rePMascot,
+    candidates: [rePMascot, rePCandidate, reControlCandidate],
+    bubbleProbe: reControlProbe,
+    evidence: reCCollector,
+    frameSink: { pet, obstacles in
+        reControlDock.placeBelow(
+            petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+            movementChanged: false, monotonicNow: 21_000, evidence: reCCollector)
+    }
+)
+let reControlSnapshot = reCCollector.snapshot()
+check("T-re6b control+bubble→kind计数/visible=2/避让bucket",
+      (reControlSnapshot["bubbleObstacleCount"] as? Int) == 1
+        && (reControlSnapshot["controlObstacleCount"] as? Int) == 1
+        && (reControlSnapshot["lastVisibleObstacleCount"] as? Int) == 2
+        && (reControlSnapshot["lastDockDyBucket"] as? String) == DockDyBucket.upTo64.rawValue,
+      "bubble=\(reControlSnapshot["bubbleObstacleCount"] ?? -1) "
+        + "control=\(reControlSnapshot["controlObstacleCount"] ?? -1) "
+        + "visible=\(reControlSnapshot["lastVisibleObstacleCount"] ?? -1)")
+
+// T-re7: 默认关闭（evidence=nil）→ 生产链行为不变、无诊断 writer
+let reDisabledDock = DockPanel()
+let reDisabledProbe = BubbleVisibilityProbe(
+    monotonicNow: { 23_000 }, canCapture: { true }, capturer: { _ in .stats(expandedS) })
+let reDisabledShown = FollowLayoutPass.placeDock(
+    mascot: rePMascot,
+    candidates: [rePMascot, rePCandidate],
+    bubbleProbe: reDisabledProbe,
+    frameSink: { pet, obstacles in
+        reDisabledDock.placeBelow(
+            petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+            movementChanged: false, monotonicNow: 23_000)
+    }
+)
+check("T-re7a evidence=nil生产链行为不变（避让frame）",
+      reDisabledShown && dockFrameNear(reDisabledDock.frame, rePAvoidAppKitFrame),
+      "frame=\(reDisabledDock.frame)")
+
+// T-re8 (source guard): RuntimeEvidence.swift 不得引入捕获/计时/墙钟来源
+let reGuardRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+let reGuardSource = try! String(
+    contentsOf: reGuardRoot.appendingPathComponent("Sources/PetDock/RuntimeEvidence.swift"), encoding: .utf8)
+let reGuardPattern = try! NSRegularExpression(
+    pattern: "\\bTimer\\b|DispatchSource|SCShareableContent|SCScreenshot|CGWindowList|\\bTask\\b|DispatchQueue|\\bDate\\b|async|ProcessInfo|CGPreflight|CGRequest"
+)
+let reGuardMatch = reGuardPattern.firstMatch(
+    in: reGuardSource, range: NSRange(reGuardSource.startIndex..., in: reGuardSource))
+check("T-re8 RuntimeEvidence.swift无捕获/计时/墙钟API且仅经PrivateStorage落盘（source guard）",
+      reGuardMatch == nil && reGuardSource.contains("PrivateStorage.atomicWrite"),
+      reGuardMatch != nil ? "violations found" : "")
+
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)
 let staleCap: BubbleCapturer = { _ in

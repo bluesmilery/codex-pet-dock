@@ -59,6 +59,18 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 
 这些项目依赖 TCC、ScreenCaptureKit、Accessibility、真实多显示器和 `.app` 运行环境，不能由 `make test` 代替。`make app` 属于发布 / 真机阶段命令，本页不把其执行状态写成当前候选结论。
 
+## Runtime 证据采样（QA 专用，默认关闭）
+
+runtime 聚合诊断默认关闭：不提供启动参数时不创建诊断文件，也不增加捕获或计时开销。QA 需要区分真实 full-hide 触发分支时，用精确候选的可执行文件显式启动：
+
+```sh
+<candidate>/Contents/MacOS/PetDock --runtime-evidence=<candidate-full-sha>
+```
+
+输出写入 PetDock 私有 Diagnostics（`~/Library/Application Support/PetDock/Diagnostics/runtime-evidence.json`；目录 0700、文件 0600、no-follow fail-closed），内容只包含白名单内的聚合计数：tick 数、bubble/control 障碍数、capture outcome / visibility 枚举计数、identity-change / wake callback 计数、可见障碍数，以及实际底座 frame 相对本 tick 无障碍基础 frame 的匿名 dy bucket（base / (0,32] / (32,64] / >64）。文件中的 `candidateSHA` 绑定 QA 启动时显式提供的完整候选 SHA；该 SHA 只允许出现在私有诊断产物中，不写入被跟踪文件。
+
+采样在既有 follow tick 内更新，不新建持续捕获流或计时器。该机制只验证 instrumentation：自动测试中注入的 fake outcome 仍标为 plumbing-only；在真实图 1→图 2→图 3 操作中取得同一候选的脱敏聚合之前，不得宣称 full-hide 症状已修复或根因已确认。
+
 ## 开发候选产物归档
 
 `make app` 会删除并重新组装、ad-hoc 签名 `build/PetDock.app`。该路径是可变的 staging，不是交给用户测试的开发候选。候选归档是最终 QA 的最后阶段：必须从同一 worktree 的精确清洁 Git 状态开始，先捕获完整与 7 位提交 SHA，再运行门禁和 `make app`，复核 SHA 与清洁状态未变后，才归档一份新的本地候选：

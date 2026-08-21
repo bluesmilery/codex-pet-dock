@@ -148,16 +148,19 @@ final class BubbleVisibilityProbe: Sendable {
     private let monotonicNow: @Sendable () -> TimeInterval
     private let canCapture: @Sendable () -> Bool
     private let capturer: BubbleCapturer
+    private let evidence: RuntimeEvidenceCollector?
     private let onVisibilityChange: @Sendable () -> Void
 
     init(monotonicNow: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          canCapture: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
          capturer: BubbleCapturer? = nil,
+         evidence: RuntimeEvidenceCollector? = nil,
          onVisibilityChange: @escaping @Sendable () -> Void = {}) {
         self.lock = OSAllocatedUnfairLock(initialState: ProbeState())
         self.monotonicNow = monotonicNow
         self.canCapture = canCapture
         self.capturer = capturer ?? Self.defaultCapturer
+        self.evidence = evidence
         self.onVisibilityChange = onVisibilityChange
     }
 
@@ -179,19 +182,22 @@ final class BubbleVisibilityProbe: Sendable {
         let previouslyObserved: Set<CGWindowID>
         let capturedCandidates: [CGWindowID: BubbleCandidateIdentity]
         let shouldStart: Bool
+        let identityChanged: Bool
         let captureAllowed = !candidates.isEmpty && canCapture()
-        (gen, prev, previouslyObserved, capturedCandidates, shouldStart) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Set<CGWindowID>, [CGWindowID: BubbleCandidateIdentity], Bool) in
+        (gen, prev, previouslyObserved, capturedCandidates, shouldStart, identityChanged) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Set<CGWindowID>, [CGWindowID: BubbleCandidateIdentity], Bool, Bool) in
             s.pendingRetryAt = nil
             // 同步刷新 knownWids：当前帧实际存在的候选 wid（每帧事实，立即生效）。
             let nextWids = Set(candidates.map { $0.wid })
             let nextCandidates = candidates.reduce(into: [CGWindowID: BubbleCandidateIdentity]()) { result, candidate in
                 result[candidate.wid] = BubbleCandidateIdentity(candidate)
             }
-            if s.knownWids != nextWids || s.knownCandidates != nextCandidates {
+            let candidatesChanged = s.knownWids != nextWids || s.knownCandidates != nextCandidates
+            if candidatesChanged {
                 s.generation += 1
                 s.cached.removeAll()
                 s.successfullyObservedWids.removeAll()
             }
+            let identityChanged = candidatesChanged && !candidates.isEmpty
             s.knownWids = nextWids
             s.knownCandidates = nextCandidates
             guard !candidates.isEmpty else {
@@ -199,14 +205,14 @@ final class BubbleVisibilityProbe: Sendable {
                 // 宠物可见但下方无会话气泡时，moving 态会高频调用 probe([])，
                 // 此早退避免每帧递增 generation + 清空字典的无意义锁写。
                 if s.cached.isEmpty && s.successfullyObservedWids.isEmpty && !s.inFlight {
-                    return (0, [:], [], [:], false)
+                    return (0, [:], [], [:], false, false)
                 }
                 // 仍有缓存或在途：与 reset() 一致递增 generation + 清 cached，使旧结果失效。
                 // 旧 Task 仍持有唯一 token，完成时清 inFlight；期间候选重新出现 probe 被拒。
                 s.generation += 1
                 s.cached.removeAll()
                 s.successfullyObservedWids.removeAll()
-                return (0, [:], [], [:], false)
+                return (0, [:], [], [:], false, false)
             }
             guard captureAllowed else {
                 // 权限尚未对本进程生效：不进入 ScreenCaptureKit，并清除旧 hidden 缓存，
@@ -216,37 +222,49 @@ final class BubbleVisibilityProbe: Sendable {
                     s.cached.removeAll()
                     s.successfullyObservedWids.removeAll()
                 }
-                return (0, [:], [], [:], false)
+                return (0, [:], [], [:], false, identityChanged)
             }
             let time = monotonicNow()
             guard !s.inFlight else {
-                return (0, [:], [], [:], false)
+                return (0, [:], [], [:], false, identityChanged)
             }
             let elapsed = time - s.lastCaptureAt
             guard elapsed >= Self.minInterval else {
                 s.pendingRetryAt = s.lastCaptureAt + Self.minInterval
-                return (0, [:], [], [:], false)
+                return (0, [:], [], [:], false, identityChanged)
             }
             s.inFlight = true
             s.lastCaptureAt = time
-            return (s.generation, s.cached, s.successfullyObservedWids, s.knownCandidates, true)
+            return (s.generation, s.cached, s.successfullyObservedWids, s.knownCandidates, true, identityChanged)
         }
         guard shouldStart else { return }
+        if identityChanged { evidence?.recordIdentityChange() }
         let cap = capturer
         let notify = onVisibilityChange
         // Task.detached：不捕获 self（仅捕获 Sendable 值 lock/cap/gen/prev/candidates/identity）→ 0 #SendableClosureCaptures warning。
         // 像素计算（cap → captureStats → computeAlphaStats）在后台线程执行。
-        Task.detached { [lock] in
+        // evidence 只接收枚举计数（outcome kind + classified visibility），不接收 alpha 统计值。
+        Task.detached { [lock, evidence] in
             var r: [CGWindowID: BubbleVisibility] = [:]
             var observedWids = Set<CGWindowID>()
             for c in candidates {
                 let outcome = await cap(c)
-                if case .stats = outcome { observedWids.insert(c.wid) }
-                r[c.wid] = BubbleVisibilityClassifier.classify(
+                let classified = BubbleVisibilityClassifier.classify(
                     outcome: outcome,
                     previous: prev[c.wid] ?? .visible,
                     hasSuccessfulObservation: previouslyObserved.contains(c.wid)
                 )
+                if let evidence {
+                    let kind: RuntimeCaptureOutcomeKind
+                    switch outcome {
+                    case .stats: kind = .stats
+                    case .targetMissing: kind = .targetMissing
+                    case .unavailable: kind = .unavailable
+                    }
+                    evidence.recordCapture(kind: kind, visibility: classified)
+                }
+                if case .stats = outcome { observedWids.insert(c.wid) }
+                r[c.wid] = classified
             }
             let results = r   // var→let：lock 闭包只捕获不可变 Sendable 值
             let successfulWids = observedWids
@@ -263,7 +281,10 @@ final class BubbleVisibilityProbe: Sendable {
                 s.successfullyObservedWids.formUnion(successfulWids)
                 return changed
             }
-            if didChange { notify() }
+            if didChange {
+                evidence?.recordWakeCallback()
+                notify()
+            }
         }
     }
 

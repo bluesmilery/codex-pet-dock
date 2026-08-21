@@ -274,6 +274,7 @@ enum FollowLayoutPass {
         mascot: WinCandidate,
         candidates: [WinCandidate],
         bubbleProbe: BubbleVisibilityProbe,
+        evidence: RuntimeEvidenceCollector? = nil,
         frameSink: FrameSink
     ) -> Bool {
         let obstacles = PetTracker.obstaclesNear(mascot: mascot, candidates: candidates)
@@ -285,6 +286,14 @@ enum FollowLayoutPass {
         let visibleBounds = classified.compactMap { pair -> CGRect? in
             if pair.1 == .control { return pair.0.bounds }
             return bubbleProbe.visibility(for: pair.0.wid) == .visible ? pair.0.bounds : nil
+        }
+        if let evidence {
+            let bubbleCount = classified.filter { $0.1 == .bubble }.count
+            evidence.recordLayoutTick(
+                bubbleObstacles: bubbleCount,
+                controlObstacles: classified.count - bubbleCount,
+                visibleObstacles: visibleBounds.count
+            )
         }
         return frameSink(mascot.bounds, visibleBounds)
     }
