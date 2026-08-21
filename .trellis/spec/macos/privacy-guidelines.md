@@ -15,6 +15,13 @@
 - 只在**内存**计算 alpha 像素统计（非透明占比 / bbox 占比）。
 - **不 OCR、不保存图像、不记录颜色 / 文字 / 内容**。`computeAlphaStats` 仅返回两个 Double 比例。
 
+### Runtime telemetry 白名单
+
+- 仅在显式诊断/QA 模式下启用，默认关闭；输出绑定候选 SHA，但公开或被跟踪文件不得写真实 SHA/CDHash。
+- 允许：聚合后的 obstacle kind 数量、capture outcome / visibility enum 数量、identity-change / wake callback 计数、visible obstacle 数量，以及 dock 相对本 tick 无障碍基础 frame 的匿名 bucket（`base`、`(0,32]`、`(32,64]`、`>64`）。
+- 禁止：WID/PID、title、owner、绝对/精确坐标、screen 名称、颜色、文字、图像、逐像素值、会话内容或可关联到单个真实窗口的事件序列。
+- 若需落盘，只能写入 PetDock 私有 0700/0600 目录，并优先输出时间窗聚合；截图、OCR 或 alpha 原始内容不得落盘。诊断产物进入 task/spec 前必须转成稳定占位符与枚举摘要。
+
 ## 数据读取边界
 
 - `TokenUsageLogReader` 只解析 `last_token_usage` 的**数值**字段，不读会话正文。

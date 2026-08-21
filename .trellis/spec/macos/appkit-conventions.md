@@ -35,6 +35,13 @@ appKitOriginY = mainScreenHeight - quartzOriginY - height
 - `BubbleVisibilityProbe` 用 `OSAllocatedUnfairLock` + generation 校验保证 single-flight。
 - `LineReader` 用 `readabilityHandler`（GCD）替代阻塞 `availableData`，`stop()` 有限时间返回不挂起。
 
+## 障碍 kind 与候选 identity
+
+- `FollowLayoutPass` 对 `.control` 使用“候选存在即占位”，不会进入 `BubbleVisibilityProbe`。视觉上像细条或残留控件不代表 CG bounds 一定小，也不能假设它会走 bubble 像素分类；改变 control 规则前必须先取得真实 runtime kind 计数。
+- `BubbleCandidateIdentity` 若把 bounds / alpha 的逐值精确相等作为 generation 边界，CGWindowList 的亚像素或动画抖动可能每 tick 清空 cache，使 `visibility(for:)` 长期回落到保守 `.visible`。任何容差或局部失效修复必须先由 identity-change 计数确认，并保持 single-flight / generation 的旧结果隔离语义。
+- 对 residual window 的修复必须同时记录 `obstacle kind → capture outcome → classified visibility → visibleBounds count → DockPanel frame relation`；只在 capture 层注入 `targetMissing` 不能覆盖 control bypass、stats-visible 或 identity-reset 分支。
+- `unavailable` 仍表示观察失败并保持保守占位；不得为了让底座复位而把权限/截图失败解释成窗口消失。
+
 ## 显示节拍与调度源存活性
 
 - 有最大启动间隔契约的 tick 必须从本次 tick 的单调开始时间计算下一 deadline；外部 wake 会重置相位，不能继续沿用旧 stable phase。下一次 tick 应在 `max(deadline, workCompletedAt)` 前启动；若串行主线程工作已经跨过 deadline，只保留一个在工作完成后立即执行的 latest-only tick，不补发历史帧，也不再额外等待一个完整 interval。启动间隔验收须区分调度器新增等待、当前串行工作时间与异步 single-flight 在途时间。

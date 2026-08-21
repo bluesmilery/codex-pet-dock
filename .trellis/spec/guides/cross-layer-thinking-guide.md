@@ -132,6 +132,14 @@ Rendering code may format fields, but it must not redefine the payload contract.
 
 **Rule**: Name and map every required edge. Passing output from a pure helper is not proof that production composition delivered the event to the real sink.
 
+### Mistake 9: Production Composition Without A Production-Equivalent Trigger
+
+**Bad**: A fake outcome is consumed by the real probe, callback, scheduler and panel, so the test is called end-to-end even though no runtime evidence shows the user action produces that outcome. The plumbing is real; the trigger model is invented.
+
+**Good**: First capture a privacy-safe aggregate of the real kind/outcome/visibility path for the exact candidate and user action. Then inject the same semantic trigger into the production composition and assert the final owner.
+
+**Rule**: Separate two questions: “Can the production pipeline handle this outcome?” and “Does the real user action produce this outcome?” Until both are proven, label the test plumbing-only and do not use it to justify a product fix or symptom acceptance.
+
 ---
 
 ## Checklist for Cross-Layer Features
@@ -158,6 +166,8 @@ After implementation:
 - [ ] Kept authoritative absence distinct from unavailable or failed observation
 - [ ] Verified every injected perturbation is consumed by the production boundary under test
 - [ ] Mapped event-driven acceptance tests from source callback through coalescing/transport to the final owner-observable sink
+- [ ] Confirmed each injected kind/outcome/failure has an equivalent runtime observation for the exact user symptom and candidate SHA
+- [ ] Labeled complete production-composition tests as plumbing-only when trigger equivalence is still unknown
 
 ---
 

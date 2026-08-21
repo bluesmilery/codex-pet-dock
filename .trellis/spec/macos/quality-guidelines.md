@@ -24,6 +24,7 @@
 - 测试用纯函数 / 依赖注入 / fixture，不依赖屏幕录制权限、不联网、不启动 GUI。
 - 不可靠隔离的集成测试（如 rpc 全链路握手、超时/取消分支）**不写**，在交付报告说明，不为覆盖率伪造。
 - 每条 AC 的自动证据必须列出 `输入/扰动 → 实际生产消费者 → 可观察结果`；只对应到测试名、通过计数或未被 SUT 读取的 fake 不算覆盖。
+- fake outcome 即使被完整生产组合消费，也只有在同一症状的真实 runtime 证据确认其 kind / outcome 语义等价时，才能作为症状 AC 的主证据；否则只能标为 plumbing-only。
 - 事件驱动 UI 链路若要求唤醒/合并/frame 写回，集成测试必须经过生产 callback、scheduler/coalescer 和实际 frame owner；手工调用 Geometry/helper 只能作为相邻单元测试。
 - 对生产设计明确排除的依赖（例如 cadence 不接受墙钟），使用行为测试加可执行 source/API guard 固化“无该依赖”的契约；不要为了测试注入而向生产增加无业务用途的依赖。
 
@@ -53,10 +54,12 @@
 
 - **消费合同**：fake、clock、event、failure 和 callback 必须注入被测生产对象并被实际读取。只修改测试局部变量、但生产对象继续读取默认依赖，视为无效证据。
 - **组合合同**：测试不得手动调用本应由上游 callback 或 scheduler 触发的下游 helper 来冒充整条链路。
+- **触发等价合同**：测试注入的 kind、outcome、failure provenance 或状态分布必须有同一真实症状的脱敏 runtime 证据支持。生产组合完整但 trigger 语义未经确认时，只能证明 plumbing 能力，不得宣称症状 AC 已通过。
 - **所有者合同**：断言必须落到真实最终所有者，例如实际 `DockPanel.frame`、持久化状态或对外 action；只断言目标 frame、helper 返回值或临时 sink 不代表产品状态已更新。
 - **基线合同**：先在批准的未修改基线上运行关键症状测试。基线 fail 才支持行为修复；基线 pass 说明是覆盖缺口，应补证据但不得为制造红测而绕过生产组合或继续猜测式改代码。
 - **缺失合同**：要证明“不依赖墙上时间”“不调用禁用 API”等不存在性，使用行为测试加可执行 source/API guard；不得注入一个生产代码从未读取的禁用依赖来宣称通过。
 - **边界合同**：TCC、ScreenCaptureKit 像素、多屏负坐标、真实拖拽手感等无法可靠隔离的部分明确留给真机 QA，自动证据不得越界宣称。
+- **真机 outcome 合同**：外部窗口、TCC 或 ScreenCaptureKit 决定行为的症状，真机 QA 除 UI 结果外还必须绑定同一候选的脱敏生产 outcome 证据；只有 UI 截图或只注入 fake outcome 均不足以证明修复触发了真实分支。
 - **持久化合同**：表格写入当前 task 的 `research/ac-evidence-topology.md` 并包含在冻结候选提交中；主 Agent 将该路径和完整候选 SHA 一并交给全新 Reviewer。Reviewer 必须从候选树读取，不能依赖聊天里的旧副本。
 
 ### 准入判定矩阵
@@ -67,9 +70,11 @@
 | helper / 纯函数测试，另有完整生产组合回归 | 可作为补充证据 |
 | 手动调用下游 helper，绕过本应验证的 callback/scheduler | 拒绝送审 |
 | fake 已变化，但被测对象没有读取该 fake | 拒绝送审 |
+| 生产组合完整，但 fake kind/outcome 未被真实 runtime 证据确认等价 | plumbing-only；不得作为症状 AC 主证据 |
 | 只断言计算出的目标值，未断言实际窗口/状态所有者 | 拒绝送审 |
 | 基线已通过关键症状测试 | 记录为覆盖补强，不做无证据产品改动 |
 | 只能真机验证且已明确列为未验证 | 可进入正式 Review，但 QA 前不得宣称完成 |
+| 真机 UI 通过，但外部观察驱动的生产 outcome 未记录 | QA 不准入；补同一候选的脱敏 outcome 证据 |
 
 ### 最小测试组合
 
@@ -85,6 +90,79 @@
 - **正确**：cadence 只接收可注入单调时钟，测试在同一单调时间序列下改变外部墙上时间仍得到相同调度结果，并用 source/API guard 禁止 cadence owner 引用墙上时间 API。
 - **错误**：测试收到 `targetMissing` 后手动调用几何 helper，并断言 helper 算出的 frame；这跳过了 visibility callback、coalescer、完整 tick 和真实 panel 写入。
 - **正确**：向真实生产组合发送 `targetMissing`，让 callback 请求一次 coalesced tick，执行完整布局，再直接断言实际 `DockPanel.frame` 回到底座基础位置。
+
+## Scenario: 外部观察驱动 UI 的 Trigger Equivalence
+
+### 1. Scope / Trigger
+
+- 触发：产品行为由 CGWindowList、ScreenCaptureKit、TCC、Accessibility 或其他外部观察结果驱动，而自动测试需要注入 kind / outcome / failure。
+- 目标：同时证明“生产管道会消费该 outcome”和“真实用户动作确实产生同一种 outcome”；两者缺一不可。
+
+### 2. Signatures
+
+诊断实现使用聚合、脱敏的逻辑结构；字段名可按实现语言调整，但语义不得扩张：
+
+```swift
+struct RuntimeEvidenceSample {
+    let bubbleObstacleCount: Int
+    let controlObstacleCount: Int
+    let captureOutcomeCounts: [CaptureOutcome: Int]
+    let visibilityCounts: [BubbleVisibility: Int]
+    let identityChangeCount: Int
+    let wakeCallbackCount: Int
+    let dockDyBucket: DockDyBucket
+}
+
+enum DockDyBucket { case base, upTo32, upTo64, above64 }
+```
+
+### 3. Contracts
+
+- 诊断默认关闭，仅在显式 QA/诊断模式下启用，并绑定完整候选 SHA 与真实操作步骤。
+- 只聚合 count、enum 与相对基础 frame 的 bucket；禁止记录窗口标识、进程标识、标题、owner、绝对坐标、颜色、文字或图像。
+- 每个症状 AC 必须注明 `runtime trigger source → observed kind/outcome → injected regression trigger` 的对应关系；未取得对应关系时回归测试标为 plumbing-only。
+- `unavailable` 等保守失败语义不得因 UI 期望而重解释为 authoritative absence。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 判定 |
+| --- | --- |
+| runtime kind/outcome 与测试注入一致，生产组合与最终 owner 断言完整 | 可作为症状 AC 主证据 |
+| runtime 未采样或样本来自其他 SHA | trigger provenance 缺失，拒绝 QA 准入 |
+| UI 已复位，但 outcome/visibility 计数缺失 | 仅症状观察，不能证明根因分支 |
+| outcome 为 unavailable，但测试注入 targetMissing | 触发不等价，禁止据此改 hidden 策略 |
+| telemetry 含任何禁止字段 | 隐私门禁失败，候选不得交付 |
+
+### 5. Good / Base / Bad Cases
+
+- Good：真实 full-hide 采样显示 `stats → hidden`，回归注入同类 stats 并穿过 callback/scheduler 到实际 `DockPanel.frame`。
+- Base：fake `targetMissing` 穿过完整生产组合并回位，但 runtime outcome 未知；只记录 plumbing coverage。
+- Bad：看到 UI 未复位后直接下调 alpha 阈值，或把 `unavailable` 改成 hidden，却没有真实 kind/outcome 分布。
+
+### 6. Tests Required
+
+- 自动：每个确认的 runtime 分支使用生产消费者、callback/scheduler 和最终 owner 断言；另保留相邻 classifier/helper 边界测试。
+- 可失败性：改变测试 trigger 为与 runtime 不同的 outcome 时，症状主证据必须失败或被明确降级为 plumbing-only。
+- 真机：同一 SHA 执行用户原始操作，记录 UI 结果与白名单 telemetry 聚合；二者均符合验收矩阵才可 accepted。
+- 隐私：`make test-privacy` 或等价 guard 拒绝禁止字段与非私有落盘路径。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```swift
+fakeCapturer.result = .targetMissing
+// 管道和 frame 都通过，因此宣称真实 full-hide 已修复。
+```
+
+#### Correct
+
+```swift
+// 先用同一候选的脱敏 runtime evidence 确认真实 full-hide outcome。
+precondition(runtimeEvidence.dominantOutcome == .stats)
+fakeCapturer.result = .stats(runtimeEquivalentStats)
+// 再穿过生产 callback/scheduler 并断言实际 frame owner。
+```
 
 ## 改动纪律
 
