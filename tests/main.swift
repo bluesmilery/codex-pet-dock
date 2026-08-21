@@ -333,6 +333,33 @@ check("T18c WEEK TOKENS 数值在标题下方剩余区域居中",
       "valueMidY=\(tokensValF.midY) remainingMidY=\(remainingBelowCaption.midY) remaining=\(remainingBelowCaption)")
 check("T18d 对齐后底座仍为 200x48",
       dv.frame.width == 200 && dv.frame.height == 48, "\(dv.frame.size)")
+var themedDockGeometryOK = true
+var themedDockGeometryExtra = ""
+for spec in Theme.builtins {
+    let themedDock = DockView()
+    themedDock.applyTheme(spec.metrics)
+    themedDock.layoutForTesting()
+    let themedAvailable = themedDock.availableContentFrameForTesting
+    let leftCaptionRect = titleRectInDock(
+        descendantTextField(in: themedDock, text: "WEEK LEFT"), dock: themedDock)
+    let tokenCaptionRect = themedDock.tokensCaptionTitleRectForTesting
+    let tokenValueRect = themedDock.tokensValueTitleRectForTesting
+    let remaining = NSRect(
+        x: themedAvailable.minX,
+        y: themedAvailable.minY,
+        width: themedAvailable.width,
+        height: max(0, tokenCaptionRect.minY - themedAvailable.minY)
+    )
+    if leftCaptionRect.isEmpty
+        || abs(leftCaptionRect.maxY - tokenCaptionRect.maxY) >= 1.0
+        || remaining.isEmpty
+        || abs(tokenValueRect.midY - remaining.midY) >= 1.0 {
+        themedDockGeometryOK = false
+        themedDockGeometryExtra += "\(spec.id): left=\(leftCaptionRect) cap=\(tokenCaptionRect) value=\(tokenValueRect) remaining=\(remaining) "
+    }
+}
+check("T18e 三主题下标题同顶线且 token value 在剩余区居中",
+      themedDockGeometryOK, themedDockGeometryExtra)
 print("\n[Dock 几何/reset/placeBelow] \(pass - dkPass) passed, \(fail - dkBase) failed")
 
 // ---- T-avoid: 会话气泡避让（obstaclesNear + safeDockFrame + placeBelow）----
@@ -988,16 +1015,38 @@ if let screen = NSScreen.screens.first {
     let df4 = dtPanel.frameForTesting
     check("D4 常规空间→detail相对dock水平居中", abs(df4.midX - dockCenter.midX) < 1.0,
           "detailMidX=\(df4.midX) dockMidX=\(dockCenter.midX)")
+
+    // D5/D6: 直接穿过生产 open/toggle（不注入 screen），边缘首次打开也必须 clamp。
+    let productionPanel = DetailPanel()
+    productionPanel.open(relativeTo: dockAtLeftEdge)
+    let openLeftFrame = productionPanel.frameForTesting
+    check("D5 生产open左边缘→自动解析screen并clamp",
+          openLeftFrame.minX >= v.minX,
+          "detailMinX=\(openLeftFrame.minX) visibleMinX=\(v.minX)")
+    productionPanel.close()
+    productionPanel.toggle(relativeTo: dockAtRightEdge)
+    let toggleRightFrame = productionPanel.frameForTesting
+    check("D6 生产toggle右边缘→自动解析screen并clamp",
+          toggleRightFrame.maxX <= v.maxX,
+          "detailMaxX=\(toggleRightFrame.maxX) visibleMaxX=\(v.maxX)")
+    productionPanel.close()
 } else {
-    check("D2/D3/D4（无屏跳过）", true, "")
+    check("D2-D6（无屏跳过）", true, "")
 }
 
-// D5: 无 screen → 不 clamp，但仍相对 dock 水平居中
+// D7: 无 screen → 不 clamp，但仍相对 dock 水平居中
 let noScrDock = NSRect(x: 5000, y: 5000, width: 200, height: 48)  // 远超常规屏
 dtPanel.placeBelow(dockFrame: noScrDock, visibleScreen: nil)
 let df5 = dtPanel.frameForTesting
-check("D5 无screen→不clamp但仍水平居中", abs(df5.midX - noScrDock.midX) < 0.01,
+check("D7 无screen→不clamp但仍水平居中", abs(df5.midX - noScrDock.midX) < 0.01,
       "detailMidX=\(df5.midX) dockMidX=\(noScrDock.midX)")
+let unresolvedScreenPanel = DetailPanel()
+unresolvedScreenPanel.open(relativeTo: noScrDock)
+let unresolvedFrame = unresolvedScreenPanel.frameForTesting
+check("D8 生产open无法解析screen→合理降级为水平居中",
+      abs(unresolvedFrame.midX - noScrDock.midX) < 0.01,
+      "detailMidX=\(unresolvedFrame.midX) dockMidX=\(noScrDock.midX)")
+unresolvedScreenPanel.close()
 
 print("\n[DetailPanel clamp] \(pass - dtPass) passed, \(fail - dtBase) failed")
 
@@ -1063,6 +1112,88 @@ func fontIsMedium(_ f: NSFont?) -> Bool {
     let weight = (traits?[.weight] as? NSNumber)?.doubleValue ?? 0
     return abs(weight - Double(NSFont.Weight.medium.rawValue)) < 0.08
 }
+func detailSnapshot(note: String) -> DockSnapshot {
+    DockSnapshot(
+        weekLeft: "73%", weekTokens: "1.2M", plan: "Plus",
+        resetAt: "08-21 09:00", cacheRatio: "12%", inputTokens: "800k",
+        outputTokens: "400k", sessionCount: 3, updatedAt: "08-20 10:00",
+        localEstimateNote: note)
+}
+func wrappedTextHeight(_ text: String, font: NSFont, width: CGFloat) -> CGFloat {
+    ceil((text as NSString).boundingRect(
+        with: NSSize(width: width, height: .greatestFiniteMagnitude),
+        options: [.usesLineFragmentOrigin, .usesFontLeading],
+        attributes: [.font: font]
+    ).height)
+}
+func detailContentFits(_ detail: DetailPanel) -> (Bool, String) {
+    detail.layoutForTesting()
+    let bounds = detail.contentBoundsForTesting
+    let rows = detail.rowFramesForTesting
+    let note = detail.noteFrameForTesting
+    let topInset = bounds.maxY - (rows.first?.maxY ?? bounds.maxY)
+    let bottomInset = note.minY - bounds.minY
+    let inside = rows.allSatisfy { bounds.contains($0) } && bounds.contains(note)
+    let noOverlap = rows.allSatisfy { !$0.intersects(note) }
+    let ok = inside && noOverlap
+        && abs(topInset - 8) <= 1.0
+        && abs(bottomInset - 8) <= 1.0
+    return (ok, "frame=\(detail.frameForTesting.size) note=\(note) top=\(topInset) bottom=\(bottomInset)")
+}
+
+// DU-dynamic: render 三态与 applyTheme 后都必须按当前实际文字重新贴合。
+let dynamicDetail = DetailPanel()
+dynamicDetail.applyTheme(Theme.holographic.metrics)
+let emptyNote = ""
+let shortNote = "本机估算 · 仅供参考"
+let wideNote = "本机估算 · LEFT 为官方额度，TOKENS 来自本机日志"
+var dynamicLayoutOK = true
+var dynamicLayoutExtra = ""
+var stateHeights: [CGFloat] = []
+for (name, note) in [("empty", emptyNote), ("short", shortNote), ("wide", wideNote)] {
+    dynamicDetail.render(detailSnapshot(note: note))
+    let fit = detailContentFits(dynamicDetail)
+    stateHeights.append(dynamicDetail.frameForTesting.height)
+    if !fit.0 {
+        dynamicLayoutOK = false
+        dynamicLayoutExtra += "\(name):\(fit.1) "
+    }
+    if !note.isEmpty, let font = dynamicDetail.noteFontForTesting {
+        let noteFrame = dynamicDetail.noteFrameForTesting
+        let expectedHeight = wrappedTextHeight(note, font: font, width: noteFrame.width)
+        let twoLineLimit = ceil(font.boundingRectForFont.height) * 2
+        if abs(noteFrame.height - expectedHeight) > 1 || expectedHeight > twoLineLimit + 1 {
+            dynamicLayoutOK = false
+            dynamicLayoutExtra += "\(name):actualH=\(noteFrame.height) expectedH=\(expectedHeight) twoLineLimit=\(twoLineLimit) "
+        }
+    }
+}
+let wideUnwrapped = (wideNote as NSString).size(
+    withAttributes: [.font: dynamicDetail.noteFontForTesting ?? NSFont.systemFont(ofSize: 9)]).width
+check("DU6 render三态后内容贴合且超宽note完整换行",
+      dynamicLayoutOK
+        && stateHeights.count == 3
+        && stateHeights[2] > stateHeights[1]
+        && wideUnwrapped > dynamicDetail.noteFrameForTesting.width,
+      "heights=\(stateHeights) unwrapped=\(wideUnwrapped) \(dynamicLayoutExtra)")
+
+var dynamicThemeLayoutOK = true
+var dynamicThemeLayoutExtra = ""
+for spec in Theme.builtins {
+    dynamicDetail.applyTheme(spec.metrics)
+    let fit = detailContentFits(dynamicDetail)
+    let noteFrame = dynamicDetail.noteFrameForTesting
+    let expectedHeight = wrappedTextHeight(
+        wideNote,
+        font: dynamicDetail.noteFontForTesting ?? NSFont.systemFont(ofSize: 9),
+        width: noteFrame.width)
+    if !fit.0 || abs(noteFrame.height - expectedHeight) > 1 {
+        dynamicThemeLayoutOK = false
+        dynamicThemeLayoutExtra += "\(spec.id):\(fit.1) actualH=\(noteFrame.height) expectedH=\(expectedHeight) "
+    }
+}
+check("DU7 applyTheme后三主题按当前note重算且不截断",
+      dynamicThemeLayoutOK, dynamicThemeLayoutExtra)
 
 var themeOk = true
 var themeExtra = ""
@@ -1150,12 +1281,12 @@ for spec in Theme.builtins {
         themeExtra += "\(spec.id)-geo:\(geoFailed) frame=\(detailUI.frameForTesting.size) top=\(topInset) bottom=\(bottomInset) "
     }
 }
-check("DU6 标签列左对齐且共享稳定宽度（换肤后）", geoOk, themeExtra)
-check("DU7 数值列右对齐且共享稳定宽度（换肤后）", geoOk, themeExtra)
-check("DU8 七行之间有克制分隔线（换肤后）", geoOk, themeExtra)
-check("DU9 内容不截断/重叠且底部提示分层（换肤后）", geoOk, themeExtra)
-check("DU10 三主题详情卡与底座共用 ThemeMetrics 并同步换肤", themeOk, themeExtra)
-check("DU11 详情左右文字字号一致", nearlyEqual(fontPointSize(detailUI.captionFontForTesting), fontPointSize(detailUI.valueFontForTesting), 0.01),
+check("DU8 标签列左对齐且共享稳定宽度（换肤后）", geoOk, themeExtra)
+check("DU9 数值列右对齐且共享稳定宽度（换肤后）", geoOk, themeExtra)
+check("DU10 七行之间有克制分隔线（换肤后）", geoOk, themeExtra)
+check("DU11 内容不截断/重叠且底部提示分层（换肤后）", geoOk, themeExtra)
+check("DU12 三主题详情卡与底座共用 ThemeMetrics 并同步换肤", themeOk, themeExtra)
+check("DU13 详情左右文字字号一致", nearlyEqual(fontPointSize(detailUI.captionFontForTesting), fontPointSize(detailUI.valueFontForTesting), 0.01),
       "caption=\(fontPointSize(detailUI.captionFontForTesting)) value=\(fontPointSize(detailUI.valueFontForTesting))")
 
 print("\n[DetailPanel UI] \(pass - duPass) passed, \(fail - duBase) failed")

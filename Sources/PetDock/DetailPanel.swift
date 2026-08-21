@@ -94,12 +94,7 @@ final class DetailPanel {
             capL.widthAnchor.constraint(equalTo: firstCap.widthAnchor).isActive = true
             val.widthAnchor.constraint(equalTo: firstVal.widthAnchor).isActive = true
         }
-        let arrangedHeight = container.arrangedSubviews.reduce(CGFloat.zero) {
-            $0 + $1.fittingSize.height
-        }
-        let gapsHeight = CGFloat(max(0, container.arrangedSubviews.count - 1)) * container.spacing
-        let fittedHeight = container.edgeInsets.top + arrangedHeight + gapsHeight + container.edgeInsets.bottom
-        panel.setContentSize(NSSize(width: 230, height: ceil(fittedHeight)))
+        fitPanelToContent()
     }
 
     var isVisible: Bool { isOpen }
@@ -112,9 +107,10 @@ final class DetailPanel {
             rowValues[i].stringValue = s.rendered(v)
         }
         noteLabel.stringValue = s.localEstimateNote
+        fitPanelToContent()
     }
 
-    /// 应用主题指标（背景/圆角/边框/文字色/字体），即时换皮不改变几何。
+    /// 应用主题指标（背景/圆角/边框/文字色/字体），即时换皮并按当前字体重算内容高度。
     func applyTheme(_ m: ThemeMetrics) {
         let bg = m.background.nsColor
         let accent = m.accent.nsColor
@@ -141,6 +137,7 @@ final class DetailPanel {
             sep.wantsLayer = true
             sep.layer?.backgroundColor = sepColor.cgColor
         }
+        fitPanelToContent()
     }
 
     /// 切换展开/关闭（相对于底座 frame 定位）。
@@ -149,7 +146,7 @@ final class DetailPanel {
     }
 
     func open(relativeTo dockFrame: NSRect) {
-        placeBelow(dockFrame: dockFrame)
+        placeBelow(dockFrame: dockFrame, visibleScreen: screenContaining(dockFrame: dockFrame))
         if !isOpen { panel.orderFrontRegardless(); isOpen = true }
     }
 
@@ -171,6 +168,35 @@ final class DetailPanel {
         }
         let f = NSRect(x: x, y: dockFrame.origin.y - h - 2, width: w, height: h)
         panel.setFrame(f, display: true)
+    }
+
+    /// dockFrame 使用 AppKit 全局坐标；优先中心点，跨屏边界时回退到相交屏幕。
+    private func screenContaining(dockFrame: NSRect) -> NSScreen? {
+        let center = NSPoint(x: dockFrame.midX, y: dockFrame.midY)
+        return NSScreen.screens.first(where: { $0.frame.contains(center) })
+            ?? NSScreen.screens.first(where: { $0.frame.intersects(dockFrame) })
+    }
+
+    /// 按当前字段、note 与主题字体计算自然高度；面板已打开时固定顶边，保持与 dock 的间距。
+    private func fitPanelToContent() {
+        let width = max(panel.contentView?.bounds.width ?? 230, 230)
+        noteLabel.preferredMaxLayoutWidth = max(0, width - container.edgeInsets.left - container.edgeInsets.right)
+        for label in captionLabels + rowValues + [noteLabel] {
+            label.invalidateIntrinsicContentSize()
+        }
+        let arrangedHeight = container.arrangedSubviews.reduce(CGFloat.zero) {
+            $0 + $1.fittingSize.height
+        }
+        let gapsHeight = CGFloat(max(0, container.arrangedSubviews.count - 1)) * container.spacing
+        let fittedHeight = container.edgeInsets.top + arrangedHeight + gapsHeight + container.edgeInsets.bottom
+        let top = panel.frame.maxY
+        panel.setContentSize(NSSize(width: width, height: ceil(fittedHeight)))
+        if isOpen {
+            var frame = panel.frame
+            frame.origin.y = top - frame.height
+            panel.setFrame(frame, display: true)
+        }
+        panel.contentView?.layoutSubtreeIfNeeded()
     }
 
     // MARK: - 测试钩子
@@ -266,7 +292,7 @@ final class DetailPanel {
         l.font = .systemFont(ofSize: 9)
         l.textColor = NSColor.systemYellow.withAlphaComponent(0.9)
         l.backgroundColor = .clear
-        l.lineBreakMode = .byTruncatingTail
+        l.lineBreakMode = .byWordWrapping
         l.maximumNumberOfLines = 2
         l.preferredMaxLayoutWidth = 200
         l.alignment = .left
