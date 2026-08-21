@@ -130,6 +130,12 @@ v7 第二轮正式 Review 报告两个实质 P2：定义文件豁免允许同文
 
 v8 将 designated initializer 改为 `private`，同文件 production factory 只接收 candidate SHA/单调时钟并固定私有 Diagnostics sink；自定义测试 sink 仅由 `PETDOCK_TESTING` 包裹的同文件 factory 暴露，flag 只允许出现在 test-ui swiftc recipe，SwiftPM release 不定义。外部构造、`.init`、alias/comment 形态与调用点传 URL 以 release 编译失败证明；文本 guard 只保留单一 token、API shape 与 flag 布线 canary。除构造/测试接线外，不修改 telemetry、障碍、捕获、调度、插值、权限或 UI 行为；image3 仍等待同一候选的真实 runtime 采样。
 
+## Eighth break-loop v9 private implementation boundary
+
+v8 第二轮正式 Review 报告 P1/P2 各一项，因此该 campaign 关闭且不得 QA 或第三轮补丁。P1 证明 W7 的 declaration-shape inventory 仍在枚举 Swift 语法：`convenience init`、`static subscript` 等合法成员可绕过文本清单并在同文件访问 private initializer；P2 证明 W5 只计连写 `-DNAME`，漏掉 swiftc 同样接受的 `-D NAME`。根因是 r1 修复重新引入了第七次 break-loop 已禁止的“文本枚举语言语义”，同时 flag guard 没有按实际 shell token 建模。
+
+v9 不扩充 W7。持有 sink 的 `RuntimeEvidenceCollector` 改为 `private final`，并实现一个只暴露 record/snapshot/flush 能力、不含 URL 或 sink 的 `RuntimeEvidenceRecording` 协议；生产文件只保存该协议 existential，并经 `makeRuntimeEvidenceRecorder(candidateSHA:flushNow:)` 创建。这样具体类型新增任何 initializer、subscript、property 或 method 都仍不可被其他生产文件命名，语言边界不再依赖成员声明清单。测试专用 `makeRuntimeEvidenceRecorderForTesting(...)` 继续由 `PETDOCK_TESTING` 包裹，但 Makefile guard 必须 token 化所有 swiftc recipe，同时识别连写与分离的 `-D` 形式并断言只在 test-ui 定义一次。删除旧 W0/W3/W6/W7，不以新形态重钉 declaration regex；保留聚合白名单、固定 sink、release 无测试工厂和真实编译 probe。产品分类、捕获、调度、插值、权限和 UI 行为不变，image3 仍等待精确候选真机采样。
+
 ## Rollout and rollback
 
 `24b9732` 的最终 Review 结论为 P0=0/P1=0/P2=2，问题均为证据没有穿过生产边界，QA 未启动且旧结论不可复用。当时的统一 `zhipu/glm-5.3 + max` 分工已由 Fifth contract 的“自动角色 zhipu、视觉 QA kimi”取代；派发仍须预检对应模型与 worktree，失败即停派、不换模型。若基线证据暴露范围外根因，或需要预测/持续 SCStream，必须再次回到规划。

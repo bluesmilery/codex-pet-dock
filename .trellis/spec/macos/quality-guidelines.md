@@ -78,6 +78,7 @@
 | 只断言计算出的目标值，未断言实际窗口/状态所有者 | 拒绝送审 |
 | telemetry 在副作用后仍消费请求值，未从最终 owner 回读 | 拒绝送审 |
 | source guard 未覆盖完整递归范围、关键 sink 或没有 mutation 失败证据 | 不得作为 absence/privacy 主证据 |
+| source guard 通过枚举 Swift declaration/constructor 形态声称语言级封闭 | 拒绝送审；改用 private 类型/协议能力边界和真实编译 probe |
 | 基线已通过关键症状测试 | 记录为覆盖补强，不做无证据产品改动 |
 | 只能真机验证且已明确列为未验证 | 可进入正式 Review，但 QA 前不得宣称完成 |
 | 真机 UI 通过，但外部观察驱动的生产 outcome 未记录 | QA 不准入；补同一候选的脱敏 outcome 证据 |

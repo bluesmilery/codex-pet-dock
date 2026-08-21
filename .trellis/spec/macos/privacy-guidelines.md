@@ -21,7 +21,8 @@
 - 允许：聚合后的 obstacle kind 数量、capture outcome / visibility enum 数量、identity-change / wake callback 计数、visible obstacle 数量，以及 dock 相对本 tick 无障碍基础 frame 的匿名 bucket（`base`、`(0,32]`、`(32,64]`、`>64`）。
 - 禁止：WID/PID、title、owner、绝对/精确坐标、screen 名称、颜色、文字、图像、逐像素值、会话内容或可关联到单个真实窗口的事件序列。
 - 若需落盘，只能写入 PetDock 私有 0700/0600 目录，并优先输出时间窗聚合；截图、OCR 或 alpha 原始内容不得落盘。诊断产物进入 task/spec 前必须转成稳定占位符与枚举摘要。
-- runtime evidence 的任意生产 sink 必须在语言层不可表达：collector designated initializer 使用 `private`，同文件 production factory 不接受 URL 参数并固定写入 `PrivateStorage.diagnosticsURL` 加 evidence 文件名。测试自定义 sink 只能位于专用编译 flag 包裹的同文件 test factory；release 构建不得定义该 flag。
+- runtime evidence 的任意生产 sink 必须在语言层不可表达：持有地址状态的具体 collector 类型整体使用文件私有访问级别；其他生产文件只依赖不含 URL/sink 能力的 recorder 协议 existential，并经同文件无地址参数工厂取得实例，固定写入 `PrivateStorage.diagnosticsURL` 加 evidence 文件名。测试自定义 sink 只能位于专用编译 flag 包裹的同文件 test factory；release 构建不得定义该 flag。具体类型新增 initializer/subscript/property/method 不得扩大跨文件 API。
+- 不得用 Swift declaration/constructor regex 或源码行 inventory 证明上述访问控制。编译 mutation 负责证明具体类型不可从外部文件命名/构造；编译 flag guard 必须按 shell token 同时识别 `-DNAME` 与 `-D NAME`，并断言测试 flag 只进入批准的 test-ui recipe。
 - 禁止用 constructor 拼写枚举、空白/注释归一化或自制 Swift parser 证明“唯一构造点”。文本 guard 只承担不可被 trivia 分割的单一 token absence、presence shape 与编译 flag 布线计数；外部 direct / `.init` / alias / comment-split 构造和 production factory 注入 URL 必须以 release 编译失败作为主证据。
 - 上述合同至少记录一条编译层 mutation 与一条布线层 mutation 的 FAIL → 撤销后 PASS；定义文件内新增 URL 型生产 API、测试 flag 进入 `Package.swift`、测试工厂脱离 flag 或 flag 出现在其他 recipe 都必须被可执行 canary 拒绝。
 

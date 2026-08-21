@@ -14,3 +14,4 @@
 {"file":".trellis/spec/macos/documentation-guidelines.md","reason":"separate diagnostic, automated and real-device evidence without overstating verification"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-6-2026-08-22.md","reason":"v6 second-review residual P2 root causes and v7 evidence-hardening contract"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-7-2026-08-22.md","reason":"v7 regex non-convergence and compiler-enforced v8 sink contract"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-8-2026-08-22.md","reason":"v8 declaration-inventory relapse and v9 private implementation boundary"}
