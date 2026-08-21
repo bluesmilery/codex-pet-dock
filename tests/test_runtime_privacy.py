@@ -11,7 +11,9 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import stat
+import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -855,75 +857,45 @@ def _runtime_evidence_test_flag_region(lines: list[str]) -> tuple[int, int]:
     return opens[0], closes[0]
 
 
-# v8 guard layering: access control itself is proven by release compile
-# mutations (external construction and factory misuse fail to compile).  The
-# text tests below are accidental-drift and wiring canaries only, never the
-# primary access-control evidence.
+# v9 guard layering: cross-file access control is enforced by the compiler
+# (the concrete collector is file-private; production files only see the
+# recorder protocol and the address-free facades).  W1/W2/W4/W5 below are
+# single-token/wiring canaries and the compile probes are the primary
+# external-access evidence.  Swift declaration or constructor inventories
+# must not be reintroduced.
 
+TEST_FACADE_TOKEN = "makeRuntimeEvidenceRecorderForTesting"
 
-def test_w0_runtime_evidence_private_init_shape_is_pinned() -> None:
-    """W0 drift canary: exactly one line-anchored private init declaration."""
-    shapes = [
-        line for line in _runtime_evidence_source_lines()
-        if re.match(r"^\s*private init\(", line)
-    ]
-    assert len(shapes) == 1, shapes
-    assert shapes[0].strip() == "private init("
-
-
-def test_w6_runtime_evidence_production_factory_shape_is_pinned() -> None:
-    """W6 drift canary: exactly one line-anchored production factory declaration."""
-    shapes = [
-        line for line in _runtime_evidence_source_lines()
-        if re.match(r"^\s*static func production\(", line)
-    ]
-    assert len(shapes) == 1, shapes
-    assert shapes[0].strip() == "static func production("
+# 40-char ASCII lowercase hex fixture, deliberately not a literal so
+# sensitive-fingerprint scans do not need per-line exceptions for test data.
+PROBE_SHA = "0123456789abcdef" * 2 + "01234567"
 
 
 def test_w1_test_factory_token_is_confined_to_definition_file() -> None:
-    """W1 single-token absence: forTesting may only appear in RuntimeEvidence.swift."""
+    """W1 single-token absence: the test facade may only appear in RuntimeEvidence.swift."""
     production_root = ROOT / "Sources" / "PetDock"
     definition = RUNTIME_EVIDENCE_SWIFT.read_text(encoding="utf-8")
-    assert "forTesting" in definition
+    assert TEST_FACADE_TOKEN in definition
     offenders = sorted(
         str(path.relative_to(production_root))
         for path in production_root.rglob("*.swift")
-        if path != RUNTIME_EVIDENCE_SWIFT and "forTesting" in path.read_text(encoding="utf-8")
+        if path != RUNTIME_EVIDENCE_SWIFT and TEST_FACADE_TOKEN in path.read_text(encoding="utf-8")
     )
     assert offenders == [], offenders
 
 
 def test_w2_test_factory_lives_in_exactly_one_flag_region() -> None:
-    """W2 wiring: one #if PETDOCK_TESTING/#endif pair, forTesting only inside it."""
+    """W2 wiring: one #if PETDOCK_TESTING/#endif pair, the test facade only inside it."""
     lines = _runtime_evidence_source_lines()
     open_index, close_index = _runtime_evidence_test_flag_region(lines)
     inside = set(range(open_index + 1, close_index))
-    inside_hits = [i for i in sorted(inside) if "forTesting" in lines[i]]
+    inside_hits = [i for i in sorted(inside) if TEST_FACADE_TOKEN in lines[i]]
     outside_hits = [
         i for i, line in enumerate(lines)
-        if "forTesting" in line and i not in inside
+        if TEST_FACADE_TOKEN in line and i not in inside
     ]
     assert inside_hits, "test factory declaration missing from flag region"
     assert outside_hits == [], [lines[i] for i in outside_hits]
-
-
-def test_w3_url_api_surface_outside_test_region_is_pinned() -> None:
-    """W3 canary: identifier-boundary URL/NSURL/CFURL allowlist outside the region."""
-    lines = _runtime_evidence_source_lines()
-    open_index, close_index = _runtime_evidence_test_flag_region(lines)
-    url_token = re.compile(r"(?<![A-Za-z0-9_])(?:URL|NSURL|CFURL)(?![A-Za-z0-9_])")
-    hits = [
-        line.strip()
-        for index, line in enumerate(lines)
-        if (index < open_index or index > close_index) and url_token.search(line)
-    ]
-    # diagnosticsURL/outputURL are distinct identifiers and never match the
-    # identifier-boundary pattern; only the two type annotations count.
-    assert hits == [
-        "private let outputURL: URL",
-        "outputURL: URL,",
-    ], hits
 
 
 def test_w4_release_package_has_no_testing_flag() -> None:
@@ -932,114 +904,144 @@ def test_w4_release_package_has_no_testing_flag() -> None:
     assert "PETDOCK_TESTING" not in package
 
 
-def test_w5_makefile_testing_flag_is_wired_once_in_test_ui_recipe() -> None:
-    """W5 wiring: exactly one -DPETDOCK_TESTING on the test-ui swiftc line."""
+def _makefile_swiftc_commands() -> list[tuple[str | None, int, list[str]]]:
+    """Every Makefile recipe command invoking swiftc, with its owning target."""
     lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
-    flagged = [i for i, line in enumerate(lines) if "-DPETDOCK_TESTING" in line]
-    assert len(flagged) == 1, flagged
-    line = lines[flagged[0]]
-    assert "swiftc" in line, line
-    assert "tests/main.swift" in line, line
-
-    targets = [
-        i for i, candidate in enumerate(lines)
-        if re.match(r"^[A-Za-z][A-Za-z0-9_-]*:(?:\s|$)", candidate)
-    ]
-    test_ui = [i for i in targets if lines[i].startswith("test-ui:")]
-    assert len(test_ui) == 1, test_ui
-    following = [i for i in targets if i > test_ui[0]]
-    recipe_end = following[0] if following else len(lines)
-    assert test_ui[0] < flagged[0] < recipe_end
+    commands: list[tuple[str | None, int, list[str]]] = []
+    target: str | None = None
+    for index, line in enumerate(lines):
+        target_match = re.match(r"^([A-Za-z][A-Za-z0-9_-]*):(?:\s|$)", line)
+        if target_match:
+            target = target_match.group(1)
+            continue
+        if not line.startswith("\t") or "swiftc" not in line:
+            continue
+        commands.append((target, index, shlex.split(line)))
+    assert commands, "no swiftc recipes found in Makefile"
+    return commands
 
 
-def test_w7_runtime_evidence_declaration_inventory_is_pinned() -> None:
-    """W7 drift inventory: exact declaration set outside the test region.
+def _swiftc_conditional_defines(tokens: list[str], line_number: int) -> list[str]:
+    """Macro names from joined -DNAME and separated -D NAME shell tokens.
 
-    Drift inventory only, never language proof: access control stays with the
-    compiler (private init + no-sink production factory).  Because Swift lets
-    a same-file API derive a sink from a String without any URL/NSURL/CFURL
-    token, W3 cannot see shape drift; this canary pins every declaration-shaped
-    line outside the PETDOCK_TESTING region and bans the extension token
-    outright.  Local/nested declaration lines are intentionally included:
-    separating scopes would require a parser, and any new line must fail
-    closed here and go through privacy re-review.  Comment/string false
-    positives are acceptable in the fail-closed direction.
+    A -D with no macro token (or followed directly by another option) is a
+    malformed dangling define and fails closed here.
     """
-    lines = _runtime_evidence_source_lines()
-    open_index, close_index = _runtime_evidence_test_flag_region(lines)
-    production_lines = [
-        line for index, line in enumerate(lines)
-        if index < open_index or index > close_index
-    ]
-    assert "extension" not in "\n".join(production_lines), "extension token outside test region"
+    defines: list[str] = []
+    position = 0
+    while position < len(tokens):
+        token = tokens[position]
+        if token == "-D":
+            assert position + 1 < len(tokens), (
+                f"dangling -D at Makefile line {line_number}: {tokens}"
+            )
+            assert not tokens[position + 1].startswith("-"), (
+                f"dangling -D before option at Makefile line {line_number}: {tokens}"
+            )
+            defines.append(tokens[position + 1])
+            position += 2
+            continue
+        if token.startswith("-D") and len(token) > 2:
+            defines.append(token[2:])
+        position += 1
+    return defines
 
-    declaration_shape = re.compile(
-        r"^\s*(?:@\w+\s+)?"
-        r"(?:private\s+|internal\s+|fileprivate\s+|public\s+|open\s+|"
-        r"static\s+|final\s+|override\s+)*"
-        r"(?:class|struct|enum|protocol|typealias|func|init|deinit|let|var)\b"
+
+def test_w5_makefile_testing_flag_is_wired_once_in_test_ui_recipe() -> None:
+    """W5 wiring: shell-token scan of every Makefile swiftc command.
+
+    Joined (-DNAME) and separated (-D NAME) conditional-compilation flags are
+    both recognized and every recipe rejects a dangling -D.  PETDOCK_TESTING
+    must be defined exactly once across all Makefile swiftc commands and must
+    live in the test-ui recipe that compiles tests/main.swift.
+    """
+    lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    testing_wires: list[tuple[str | None, int]] = []
+    for target, line_index, tokens in _makefile_swiftc_commands():
+        assert tokens[0] == "swiftc", tokens
+        for name in _swiftc_conditional_defines(tokens, line_index + 1):
+            if name == "PETDOCK_TESTING":
+                testing_wires.append((target, line_index))
+    assert len(testing_wires) == 1, testing_wires
+    target, line_index = testing_wires[0]
+    assert target == "test-ui", testing_wires
+    assert "tests/main.swift" in lines[line_index], lines[line_index]
+
+
+def _release_probe_compile_command(probe_main: Path, output: Path) -> list[str]:
+    """A release-like swiftc command derived from the test-ui recipe.
+
+    The production composition is reused verbatim except that tests/main.swift
+    is replaced by the probe entry, the test-only flag is removed, and the
+    output path points at the probe scratch directory.
+    """
+    for target, _line_index, tokens in _makefile_swiftc_commands():
+        if target != "test-ui":
+            continue
+        assert tokens[0] == "swiftc", tokens
+        command = ["swiftc"]
+        position = 1
+        while position < len(tokens):
+            token = tokens[position]
+            if token == "-o":
+                position += 2
+                continue
+            if token == "-D" and position + 1 < len(tokens) and tokens[position + 1] == "PETDOCK_TESTING":
+                position += 2
+                continue
+            if token == "-DPETDOCK_TESTING":
+                position += 1
+                continue
+            command.append(str(probe_main) if token == "tests/main.swift" else token)
+            position += 1
+        command += ["-o", str(output)]
+        return command
+    raise AssertionError("test-ui swiftc recipe not found")
+
+
+def _compile_release_probe(probe_source: str, expected_error: str, tmp_path: Path) -> None:
+    probe_main = tmp_path / "main.swift"
+    probe_main.write_text(probe_source, encoding="utf-8")
+    command = _release_probe_compile_command(probe_main, tmp_path / "probe-binary")
+    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=600)
+    assert completed.returncode != 0, f"probe unexpectedly compiled: {command}"
+    assert expected_error in completed.stderr, completed.stderr
+
+
+def test_compile_probe_external_file_cannot_name_private_collector(tmp_path: Path) -> None:
+    """Compiler-layer evidence: the concrete collector is unnameable outside its file."""
+    _compile_release_probe(
+        "import Foundation\n"
+        "let probeSink: RuntimeEvidenceCollector = RuntimeEvidenceCollector(\n"
+        f"    candidateSHA: \"{PROBE_SHA}\",\n"
+        "    outputURL: URL(fileURLWithPath: \"/tmp/petdock-probe-sink.json\"),\n"
+        "    flushNow: { 0 })\n",
+        "'RuntimeEvidenceCollector' is inaccessible due to 'private' protection level",
+        tmp_path,
     )
-    actual = sorted(
-        line.strip()
-        for line in production_lines
-        if declaration_shape.match(line)
+
+
+def test_compile_probe_production_facade_rejects_address_argument(tmp_path: Path) -> None:
+    """Compiler-layer evidence: no address parameter exists on the production facade."""
+    _compile_release_probe(
+        "import Foundation\n"
+        "let probeRecorder = makeRuntimeEvidenceRecorder(\n"
+        f"    candidateSHA: \"{PROBE_SHA}\",\n"
+        "    outputURL: URL(fileURLWithPath: \"/tmp/petdock-probe-sink.json\"),\n"
+        "    flushNow: { 0 })\n",
+        "extra argument 'outputURL' in call",
+        tmp_path,
     )
-    expected = sorted([
-        "enum DockDyBucket: String, CaseIterable, Sendable {",
-        "enum RuntimeCaptureOutcomeKind: String, Sendable {",
-        "enum RuntimeEvidenceFlag {",
-        "final class RuntimeEvidenceCollector: Sendable {",
-        "func flush() -> Bool {",
-        "func recordCapture(kind: RuntimeCaptureOutcomeKind, visibility: BubbleVisibility) {",
-        "func recordDockDyBucket(_ bucket: DockDyBucket) {",
-        "func recordIdentityChange() {",
-        "func recordLayoutTick(bubbleObstacles: Int, controlObstacles: Int, visibleObstacles: Int) {",
-        "func recordWakeCallback() {",
-        "func snapshot() -> [String: Any] {",
-        "internal let lock = OSAllocatedUnfairLock<State>(initialState: State())",
-        "internal struct State: Sendable {",
-        "let candidateSHA: String",
-        "let dyBucketChanged = $0.lastDockDyBucket != bucket",
-        "let firstLayoutSample = $0.tickCount == 0",
-        "let layoutStateChanged = $0.lastBubbleObstacleCount != bubbleObstacles",
-        "let now = flushNow()",
-        "let payload = snapshot()",
-        "let sha = String(argument.dropFirst(name.count + 1))",
-        "let shouldWrite = lock.withLock { s -> Bool in",
-        "private init(",
-        "private let flushNow: @Sendable () -> TimeInterval",
-        "private let outputURL: URL",
-        "static func bucket(dy: CGFloat) -> DockDyBucket {",
-        "static func isCandidateSHA(_ value: String) -> Bool {",
-        "static func parseCandidateSHA(_ arguments: [String]) -> String? {",
-        "static func production(",
-        "static let minimumFlushInterval: TimeInterval = 0.5",
-        "static let name = \"--runtime-evidence\"",
-        "static let outputFileName = \"runtime-evidence.json\"",
-        "static let schemaVersion = \"petdock-runtime-evidence/1\"",
-        "var bubbleObstacleTotal = 0",
-        "var captureStatsCount = 0",
-        "var captureTargetMissingCount = 0",
-        "var captureUnavailableCount = 0",
-        "var controlObstacleTotal = 0",
-        "var dirty = false",
-        "var dockDyAbove64Count = 0",
-        "var dockDyBaseCount = 0",
-        "var dockDyUpTo32Count = 0",
-        "var dockDyUpTo64Count = 0",
-        "var identityChangeCount = 0",
-        "var lastBubbleObstacleCount = 0",
-        "var lastControlObstacleCount = 0",
-        "var lastDockDyBucket: DockDyBucket?",
-        "var lastFlushAt: TimeInterval?",
-        "var lastVisibleObstacleCount = 0",
-        "var tickCount = 0",
-        "var visibilityHiddenCount = 0",
-        "var visibilityVisibleCount = 0",
-        "var visibleObstacleTotal = 0",
-        "var wakeCallbackCount = 0",
-    ])
-    assert actual == expected, {
-        "unexpected": sorted(set(actual) - set(expected)),
-        "missing": sorted(set(expected) - set(actual)),
-    }
+
+
+def test_compile_probe_release_cannot_reference_test_facade(tmp_path: Path) -> None:
+    """Compiler-layer evidence: the test facade is absent without PETDOCK_TESTING."""
+    _compile_release_probe(
+        "import Foundation\n"
+        "let probeRecorder = makeRuntimeEvidenceRecorderForTesting(\n"
+        f"    candidateSHA: \"{PROBE_SHA}\",\n"
+        "    outputURL: URL(fileURLWithPath: \"/tmp/petdock-probe-sink.json\"),\n"
+        "    flushNow: { 0 })\n",
+        "cannot find 'makeRuntimeEvidenceRecorderForTesting' in scope",
+        tmp_path,
+    )

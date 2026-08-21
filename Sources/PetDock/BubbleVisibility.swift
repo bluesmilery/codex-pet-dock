@@ -148,13 +148,13 @@ final class BubbleVisibilityProbe: Sendable {
     private let monotonicNow: @Sendable () -> TimeInterval
     private let canCapture: @Sendable () -> Bool
     private let capturer: BubbleCapturer
-    private let evidence: RuntimeEvidenceCollector?
+    private let evidence: (any RuntimeEvidenceRecording)?
     private let onVisibilityChange: @Sendable () -> Void
 
     init(monotonicNow: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          canCapture: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
          capturer: BubbleCapturer? = nil,
-         evidence: RuntimeEvidenceCollector? = nil,
+         evidence: (any RuntimeEvidenceRecording)? = nil,
          onVisibilityChange: @escaping @Sendable () -> Void = {}) {
         self.lock = OSAllocatedUnfairLock(initialState: ProbeState())
         self.monotonicNow = monotonicNow

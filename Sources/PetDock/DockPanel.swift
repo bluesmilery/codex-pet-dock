@@ -183,7 +183,7 @@ final class DockPanel {
         visibleScreen: NSScreen? = nil,
         movementChanged: Bool = false,
         monotonicNow: TimeInterval = ProcessInfo.processInfo.systemUptime,
-        evidence: RuntimeEvidenceCollector? = nil
+        evidence: (any RuntimeEvidenceRecording)? = nil
     ) -> Bool {
         let screenID = visibleScreen.map(ObjectIdentifier.init)
         let screenChanged = lastVisibleScreenID != screenID

@@ -274,7 +274,7 @@ enum FollowLayoutPass {
         mascot: WinCandidate,
         candidates: [WinCandidate],
         bubbleProbe: BubbleVisibilityProbe,
-        evidence: RuntimeEvidenceCollector? = nil,
+        evidence: (any RuntimeEvidenceRecording)? = nil,
         frameSink: FrameSink
     ) -> Bool {
         let obstacles = PetTracker.obstaclesNear(mascot: mascot, candidates: candidates)

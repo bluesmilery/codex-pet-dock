@@ -1927,8 +1927,8 @@ let reSHA = "0123456789abcdef0123456789abcdef01234567"
 let reRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 try? FileManager.default.removeItem(at: reRoot)
-let reOutputURL = reRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName)
-let reCollector = RuntimeEvidenceCollector.forTesting(candidateSHA: reSHA, outputURL: reOutputURL, flushNow: { 100 })
+let reOutputURL = reRoot.appendingPathComponent(runtimeEvidenceOutputFileName)
+let reCollector = makeRuntimeEvidenceRecorderForTesting(candidateSHA: reSHA, outputURL: reOutputURL, flushNow: { 100 })
 reCollector.recordLayoutTick(bubbleObstacles: 1, controlObstacles: 0, visibleObstacles: 1)
 reCollector.recordCapture(kind: .stats, visibility: .visible)
 reCollector.recordLayoutTick(bubbleObstacles: 1, controlObstacles: 0, visibleObstacles: 0)
@@ -1986,7 +1986,7 @@ let reEvilTarget = reRoot.appendingPathComponent("evil-target.json")
 try! "SENTINEL".data(using: .utf8)!.write(to: reEvilTarget)
 let reLinkURL = reRoot.appendingPathComponent("evidence-link.json")
 try! FileManager.default.createSymbolicLink(at: reLinkURL, withDestinationURL: reEvilTarget)
-let reLinkCollector = RuntimeEvidenceCollector.forTesting(candidateSHA: reSHA, outputURL: reLinkURL, flushNow: { 120 })
+let reLinkCollector = makeRuntimeEvidenceRecorderForTesting(candidateSHA: reSHA, outputURL: reLinkURL, flushNow: { 120 })
 reLinkCollector.recordLayoutTick(bubbleObstacles: 0, controlObstacles: 0, visibleObstacles: 0)
 reLinkCollector.flush()
 let reEvilContent = try! String(contentsOf: reEvilTarget, encoding: .utf8)
@@ -2009,9 +2009,9 @@ let rePSHA = "1234567890abcdef1234567890abcdef12345678"
 let rePROot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-prod-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 try? FileManager.default.removeItem(at: rePROot)
-let rePCollector = RuntimeEvidenceCollector.forTesting(
+let rePCollector = makeRuntimeEvidenceRecorderForTesting(
     candidateSHA: rePSHA,
-    outputURL: rePROot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
+    outputURL: rePROot.appendingPathComponent(runtimeEvidenceOutputFileName),
     flushNow: { rePTime })
 let rePMascot = mkw(563, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
 let rePCandidate = mkw(561, layer: 3, bubbleForCollapse)
@@ -2108,9 +2108,9 @@ rePScheduler.stop()
 let reCRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-control-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 try? FileManager.default.removeItem(at: reCRoot)
-let reCCollector = RuntimeEvidenceCollector.forTesting(
+let reCCollector = makeRuntimeEvidenceRecorderForTesting(
     candidateSHA: reSHA,
-    outputURL: reCRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
+    outputURL: reCRoot.appendingPathComponent(runtimeEvidenceOutputFileName),
     flushNow: { 21_000 })
 let reControlCandidate = mkw(566, layer: 3, CGRect(x: 140, y: 280, width: 60, height: 24))
 check("T-re6a 前置: 60x24候选→control kind",
@@ -2176,9 +2176,9 @@ var reJTime: TimeInterval = 25_000
 let reJRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-jitter-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 try? FileManager.default.removeItem(at: reJRoot)
-let reJCollector = RuntimeEvidenceCollector.forTesting(
+let reJCollector = makeRuntimeEvidenceRecorderForTesting(
     candidateSHA: reSHA,
-    outputURL: reJRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
+    outputURL: reJRoot.appendingPathComponent(runtimeEvidenceOutputFileName),
     flushNow: { reJTime })
 let reJCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
 let reJCap: BubbleCapturer = { _ in
@@ -2265,9 +2265,9 @@ var reITime: TimeInterval = 27_000
 let reIRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-inflight-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 try? FileManager.default.removeItem(at: reIRoot)
-let reICollector = RuntimeEvidenceCollector.forTesting(
+let reICollector = makeRuntimeEvidenceRecorderForTesting(
     candidateSHA: reSHA,
-    outputURL: reIRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
+    outputURL: reIRoot.appendingPathComponent(runtimeEvidenceOutputFileName),
     flushNow: { reITime })
 let reICaptureCalls = OSAllocatedUnfairLock(initialState: 0)
 let reIEntryGate = AsyncCaptureEntryGate()
@@ -2327,9 +2327,9 @@ check("T-re10c 接受的新捕获→outcome/visibility计入且visible不变无w
 let reFRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-flush-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 try? FileManager.default.removeItem(at: reFRoot)
-let reFURL = reFRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName)
+let reFURL = reFRoot.appendingPathComponent(runtimeEvidenceOutputFileName)
 var reFNow: TimeInterval = 100
-let reFCollector = RuntimeEvidenceCollector.forTesting(candidateSHA: reSHA, outputURL: reFURL, flushNow: { reFNow })
+let reFCollector = makeRuntimeEvidenceRecorderForTesting(candidateSHA: reSHA, outputURL: reFURL, flushNow: { reFNow })
 reFCollector.recordLayoutTick(bubbleObstacles: 1, controlObstacles: 0, visibleObstacles: 1)
 let reFFirstFlush = reFCollector.flush()
 check("T-re11a 首个layout证据→立即flush写盘一次",
@@ -2365,7 +2365,7 @@ var reFRetryNow: TimeInterval = 200
 let reFBlocker = reFRoot.appendingPathComponent("blocker")   // 常规文件：作为父路径使落盘失败
 try! Data("x".utf8).write(to: reFBlocker)
 let reFRetryURL = reFBlocker.appendingPathComponent("retry.json")
-let reFRetryCollector = RuntimeEvidenceCollector.forTesting(
+let reFRetryCollector = makeRuntimeEvidenceRecorderForTesting(
     candidateSHA: reSHA, outputURL: reFRetryURL, flushNow: { reFRetryNow })
 reFRetryCollector.recordIdentityChange()
 check("T-re11i-1 落盘失败→flush false且dirty保留",
@@ -2404,9 +2404,9 @@ let reOCap: BubbleCapturer = { _ in .stats(expandedS) }
 let reORoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-owner-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 try? FileManager.default.removeItem(at: reORoot)
-let reOCollector = RuntimeEvidenceCollector.forTesting(
+let reOCollector = makeRuntimeEvidenceRecorderForTesting(
     candidateSHA: reSHA,
-    outputURL: reORoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
+    outputURL: reORoot.appendingPathComponent(runtimeEvidenceOutputFileName),
     flushNow: { reOTime })
 let reOProbePanel = NSPanel(
     contentRect: NSRect(x: 0, y: 0, width: 200, height: 48),

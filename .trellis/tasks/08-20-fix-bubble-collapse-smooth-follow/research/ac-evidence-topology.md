@@ -178,3 +178,59 @@
 - 本候选不改变任何正常用户路径行为：障碍分类、alpha 阈值、candidate identity、capture cadence/generation、scheduler、插值语义、telemetry 字段/flush 行为、权限与 UI 均与基线一致；DockPanel/BubbleVisibility/FollowTickPlan/Follower/obstacle/capture/scheduler/interpolation 零改动。
 - 原始 image3 症状仍未解决也不宣称解决：全部 fake 注入仍是 plumbing-only；等待同一候选真机脱敏 runtime-evidence 采样后再判定分支。
 - 真机 TCC/ScreenCaptureKit、多屏、拖拽体感、Instruments、make app/候选归档全部未验证、未执行（属 Review 清零后的 QA 阶段）。
+
+---
+
+## v9 私有实现边界候选（Eighth break-loop 控制段）
+
+- 任务：fix-bubble-collapse-smooth-follow（v9，v8 第二轮 Review P1/P2 后的 runtime evidence 私有实现边界重做）。
+- 实现基线：`<v9-planning-base>`（worktree 初始 clean、HEAD 精确等于该提交、branch/worktree 唯一；完整 SHA 只保留在未跟踪的父会话派发记录，不写入被跟踪文件）。
+- 本候选性质：仅重做 runtime evidence 访问控制与布线守卫——`RuntimeEvidenceCollector` 改为 `private final` 并实现 internal `RuntimeEvidenceRecording` 协议（仅既有 record/snapshot/flush 能力，无 URL/path/sink）；生产文件（main.swift、BubbleVisibility.swift、FollowTickPlan.swift 的 FollowLayoutPass、DockPanel.swift）只保存 `any RuntimeEvidenceRecording` existential，经无地址参数的同文件 `makeRuntimeEvidenceRecorder(candidateSHA:flushNow:)` 取得；`makeRuntimeEvidenceRecorderForTesting(candidateSHA:outputURL:flushNow:)` 仅在 `#if PETDOCK_TESTING` 下存在；filename-only 常量 `runtimeEvidenceOutputFileName` 不暴露地址能力。record/flush/snapshot/字段/节流语义与全部产品分类/布局/调度/插值/权限行为零改动。
+- 防线分层声明：跨文件访问控制主证据是真实编译失败（Swift 编译器拒绝命名 file-private 类型），pytest 编译 probe 在每次隐私门禁自动执行；W1/W2/W4/W5 仅单一 token/布线 canary。Swift declaration/constructor inventory 已删除且不得以新形态回归。
+
+### 红基线（未修改 v8 树，隔离副本执行后完全恢复并丢弃）
+
+| 编号 | 临时改动 | 旧树预期 | 实际结果 |
+| --- | --- | --- | --- |
+| RB-C | 定义文件内加未 flag `convenience init`（String 派生任意 sink）并由外部生产文件调用 | release 编译通过且 privacy 全绿 | `swift build -c release` exit 0；旧 privacy 29 passed（任意生产 sink 在旧守卫下可表达） |
+| RB-D | 定义文件内加未 flag `static subscript`（选择任意 sink）并由外部生产文件调用 | 同上 | release exit 0；旧 privacy 29 passed |
+| RB-E | 第二个 swiftc recipe（test-data）加分离式 `-D PETDOCK_TESTING` | 旧 W5 只计连写形态，privacy 全绿 | 旧 privacy 29 passed（分离式 flag 布线逃逸） |
+
+### MC 编译层 mutation（v9 树，隔离副本，`swift build -c release` 必须 FAIL）
+
+| 编号 | 临时改动 | 实际失败 |
+| --- | --- | --- |
+| MC1 | 嵌套生产文件直接 `RuntimeEvidenceCollector(...)` | error: 'RuntimeEvidenceCollector' is inaccessible due to 'private' protection level, exit 1 |
+| MC2 | private collector 加 `convenience init`（String sink 形态）后重复 MC1 外部构造 | 同上错误, exit 1 —— v8 P1 洞在 v9 结构下被封死 |
+| MC3 | private collector 加 static property + static subscript + static method（均可选任意 sink）后外部逐一引用 | 同上错误（3 处引用全部拒绝）, exit 1 —— 任意成员形态不扩大跨文件 API |
+| MC4 | main.swift 生产 facade 调用临时加 `outputURL:` 实参 | error: extra argument 'outputURL' in call, exit 1 |
+| MC5 | main.swift 临时调用 `makeRuntimeEvidenceRecorderForTesting(...)` | error: cannot find 'makeRuntimeEvidenceRecorderForTesting' in scope, exit 1 |
+
+### MW 布线 mutation（v9 树，`make test-privacy` 必须 FAIL）
+
+| 编号 | 临时改动 | 命中 |
+| --- | --- | --- |
+| MW1 | Package.swift 加 `.define("PETDOCK_TESTING")` | W4 FAIL（1 failed, 27 passed） |
+| MW2 | test-data recipe 加连写 `-DPETDOCK_TESTING` | W5 FAIL（flag 计数 != 1 且 recipe 非 test-ui） |
+| MW3 | test-data recipe 加分离 `-D PETDOCK_TESTING` | W5 FAIL（token 解析捕获分离形态） |
+| MW4 | test-data recipe 行尾 dangling `-D` | W5 FAIL（dangling -D 拒绝） |
+
+- 每项 mutation 后完全恢复；恢复树与实现树逐字节一致后 clean gate 复跑 `make test-privacy` 28 passed。全部 RB/MC/MW 在隔离 /tmp 副本执行，结束后移入废纸篓，未污染 worktree。
+
+### v9 逐 AC 证据拓扑
+
+| AC / 边界 | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| v9-1 具体 collector 文件私有 + 协议 existential | static/absence（编译层）+ wiring | 外部生产文件命名/构造具体类型；具体类型加 convenience init / static subscript / property / method 后重复；生产 facade 传 `outputURL`；release 引用测试 facade | RB-C/RB-D 证明旧树可逃逸（release exit 0 + privacy 29 passed）；MC1–MC3 在 v9 树全部编译 FAIL；MC4/MC5 编译 FAIL | Swift 编译器（file-private 类型边界）+ `makeRuntimeEvidenceRecorder` 唯一生产入口（无地址参数） | 编译失败本身即所有者断言；main/BubbleVisibility/FollowLayoutPass/DockPanel 均只持有 `any RuntimeEvidenceRecording` | MC1–MC5 见上表；pytest 三个编译 probe 每次 `make test-privacy` 自动执行（28 passed） | 无 |
+| v9-2 测试 facade 仅存在于 flag 区域 | wiring（单一 token + 区域） | 定义文件外出现 `makeRuntimeEvidenceRecorderForTesting` token；token 移出 `#if PETDOCK_TESTING` 区域 | W1/W2 单一 token 与区域 canary；MC5 编译失败为 release 主证据 | `#if PETDOCK_TESTING` 词法区域（Package.swift 不定义该 flag） | token 只在定义文件且只在 flag 区域内出现 | `make test-privacy` W1/W2 PASS | 无 |
+| v9-3 flag 布线 token 感知 | wiring（shell token 解析） | Package.swift 加 define；第二 recipe 加连写/分离 flag；recipe 加 dangling `-D` | RB-E 证明旧 W5 只计连写（29 passed 逃逸）；MW1–MW4 在 v9 树全部 FAIL | `shlex.split` 解析每个 Makefile swiftc recipe 的完整 token 流（含 `-DNAME` 与 `-D NAME` 两种形态，拒绝 dangling `-D`） | `PETDOCK_TESTING` 全仓 Makefile swiftc 命令恰一次且位于 test-ui（编译 tests/main.swift 的 recipe）；Package.swift 无该 flag | `make test-privacy` W4/W5 PASS（token 解析覆盖全部 recipe） | 无 |
+| v9-4 生产消费者迁移不改行为 | behavior（既有回归） | 四个生产文件 evidence 参数/属性类型改为协议 existential；tests/main.swift 机械替换 factory/filename 引用 | 基线 `<v9-planning-base>` 既有 T-re1–T-re12 全部保持 | capturer → probe → scheduler → FollowLayoutPass → 真实 DockPanel.placeBelow（与基线同构，仅类型收窄为协议 existential） | T-re 断言/fixture/timing 零改动；test-ui 282 passed / 0 failed | `make test-ui` PASS（282/282） | 无 |
+| v9-5 门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告（release 0 warning、全套件、privacy、docs、diff-check） | 见交付报告 | 无 |
+| image3（原始 full-hide 症状） | plumbing-only（未采样） | — | — | — | — | 无任何 fix 宣称 | **仍 unresolved**：等待 Review 清零 + QA 归档精确候选后，由视觉 QA 执行真实图 1→图 2→图 3 并采集脱敏聚合 |
+
+### v9 边界声明
+
+- 本候选不改变任何正常用户路径行为：障碍分类、alpha 阈值、candidate identity、capture cadence/generation、scheduler、插值语义、telemetry 字段/flush 行为、权限与 UI 均与基线一致。
+- 原始 image3 症状仍未解决也不宣称解决：全部 fake 注入仍是 plumbing-only；等待同一候选真机脱敏 runtime-evidence 采样后再判定分支。
+- 真机 TCC/ScreenCaptureKit、多屏、拖拽体感、Instruments、make app/候选归档全部未验证、未执行（属 Review 清零后的 QA 阶段）。
+- 旧 W0/W3/W6/W7（private-init shape、URL token allowlist、production-factory shape、declaration inventory）已删除，不以新 regex/inventory 形态重钉；本文件 v8 段落中的 W6 引用仅是历史记录。
