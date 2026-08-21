@@ -301,7 +301,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         dock.hideIfNeeded()
                         detail.close()
                     }
-                    // 诊断聚合只在既有完整布局 tick 末尾落盘（无独立计时/捕获）。
+                    // 诊断聚合只在既有完整布局 tick 末尾评估落盘（无独立计时/捕获；
+                    // collector 内部 dirty 抑制：无新聚合证据的 display tick 不产生写 IO）。
                     runtimeEvidence?.flush()
                 }
             } else {

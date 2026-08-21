@@ -237,16 +237,21 @@ final class BubbleVisibilityProbe: Sendable {
             s.lastCaptureAt = time
             return (s.generation, s.cached, s.successfullyObservedWids, s.knownCandidates, true, identityChanged)
         }
-        guard shouldStart else { return }
+        // identity telemetry 必须在 capture gate 之前：候选非空且 known identity 变化时，
+        // 即使 capture 未 due 或 inFlight（shouldStart=false），H4b 的 identity 抖动也不能漏计。
         if identityChanged { evidence?.recordIdentityChange() }
+        guard shouldStart else { return }
         let cap = capturer
         let notify = onVisibilityChange
         // Task.detached：不捕获 self（仅捕获 Sendable 值 lock/cap/gen/prev/candidates/identity）→ 0 #SendableClosureCaptures warning。
         // 像素计算（cap → captureStats → computeAlphaStats）在后台线程执行。
         // evidence 只接收枚举计数（outcome kind + classified visibility），不接收 alpha 统计值。
+        // 计数延迟到 completion 的 generation+identity 接受校验之后：
+        // stale/过期 in-flight 结果不写 cache，也绝不进入真实统计。
         Task.detached { [lock, evidence] in
             var r: [CGWindowID: BubbleVisibility] = [:]
             var observedWids = Set<CGWindowID>()
+            var evidencePairs: [(RuntimeCaptureOutcomeKind, BubbleVisibility)] = []
             for c in candidates {
                 let outcome = await cap(c)
                 let classified = BubbleVisibilityClassifier.classify(
@@ -254,14 +259,14 @@ final class BubbleVisibilityProbe: Sendable {
                     previous: prev[c.wid] ?? .visible,
                     hasSuccessfulObservation: previouslyObserved.contains(c.wid)
                 )
-                if let evidence {
+                if evidence != nil {
                     let kind: RuntimeCaptureOutcomeKind
                     switch outcome {
                     case .stats: kind = .stats
                     case .targetMissing: kind = .targetMissing
                     case .unavailable: kind = .unavailable
                     }
-                    evidence.recordCapture(kind: kind, visibility: classified)
+                    evidencePairs.append((kind, classified))
                 }
                 if case .stats = outcome { observedWids.insert(c.wid) }
                 r[c.wid] = classified
@@ -269,17 +274,20 @@ final class BubbleVisibilityProbe: Sendable {
             let results = r   // var→let：lock 闭包只捕获不可变 Sendable 值
             let successfulWids = observedWids
             // generation 校验：旧 Task 回调（reset/候选切换后）仅清自己的 inFlight token，绝不写 cached。
-            let didChange = lock.withLock { s -> Bool in
+            let (didChange, accepted): (Bool, Bool) = lock.withLock { s -> (Bool, Bool) in
                 s.inFlight = false   // 始终清 inFlight（旧 Task 的责任，保证新 probe 能在下一 tick 启动）
                 guard s.generation == gen,
-                      s.knownCandidates == capturedCandidates else { return false } // generation/identity 过期 → 不写 cached/通知
+                      s.knownCandidates == capturedCandidates else { return (false, false) } // generation/identity 过期 → 不写 cached/通知/证据
                 let changed = results.contains { entry in
                     s.knownWids.contains(entry.key)
                         && (s.cached[entry.key] ?? .visible) != entry.value
                 }
                 s.cached = results
                 s.successfullyObservedWids.formUnion(successfulWids)
-                return changed
+                return (changed, true)
+            }
+            if accepted, let evidence {
+                for pair in evidencePairs { evidence.recordCapture(kind: pair.0, visibility: pair.1) }
             }
             if didChange {
                 evidence?.recordWakeCallback()

@@ -82,6 +82,10 @@ final class RuntimeEvidenceCollector: Sendable {
         var dockDyUpTo64Count = 0
         var dockDyAbove64Count = 0
         var lastDockDyBucket: DockDyBucket?
+        /// 自上次成功落盘后是否出现新的有意义聚合证据（accepted capture/identity/wake/
+        /// layout 状态变化/dy bucket 变化）。tickCount 等单调增长本身不算新证据，
+        /// 避免高频无变化 display tick 产生持续写 IO。
+        var dirty = false
     }
 
     internal let lock = OSAllocatedUnfairLock<State>(initialState: State())
@@ -96,8 +100,13 @@ final class RuntimeEvidenceCollector: Sendable {
     // MARK: - 生产 fact owner 调用点（全部为计数，无 IO、无副作用）
 
     /// FollowLayoutPass：本 tick 的 bubble/control 障碍数与最终可见障碍数。
+    /// 只有首个样本或三元组状态变化才标记 dirty；相同状态的重复 tick 不触发写盘。
     func recordLayoutTick(bubbleObstacles: Int, controlObstacles: Int, visibleObstacles: Int) {
         lock.withLock {
+            let firstLayoutSample = $0.tickCount == 0
+            let layoutStateChanged = $0.lastBubbleObstacleCount != bubbleObstacles
+                || $0.lastControlObstacleCount != controlObstacles
+                || $0.lastVisibleObstacleCount != visibleObstacles
             $0.tickCount += 1
             $0.bubbleObstacleTotal += bubbleObstacles
             $0.controlObstacleTotal += controlObstacles
@@ -105,10 +114,12 @@ final class RuntimeEvidenceCollector: Sendable {
             $0.lastBubbleObstacleCount = bubbleObstacles
             $0.lastControlObstacleCount = controlObstacles
             $0.lastVisibleObstacleCount = visibleObstacles
+            if firstLayoutSample || layoutStateChanged { $0.dirty = true }
         }
     }
 
-    /// BubbleVisibilityProbe：单次捕获的 outcome 与分类结果（枚举计数）。
+    /// BubbleVisibilityProbe：被当前 generation+identity 接受并写入 cache 的
+    /// outcome 与分类结果（枚举计数）；stale/过期结果绝不进入该方法。
     func recordCapture(kind: RuntimeCaptureOutcomeKind, visibility: BubbleVisibility) {
         lock.withLock {
             switch kind {
@@ -120,22 +131,31 @@ final class RuntimeEvidenceCollector: Sendable {
             case .visible: $0.visibilityVisibleCount += 1
             case .hidden: $0.visibilityHiddenCount += 1
             }
+            $0.dirty = true
         }
     }
 
     /// BubbleVisibilityProbe：候选集合/identity 变化导致的 generation 重建次数。
     func recordIdentityChange() {
-        lock.withLock { $0.identityChangeCount += 1 }
+        lock.withLock {
+            $0.identityChangeCount += 1
+            $0.dirty = true
+        }
     }
 
     /// BubbleVisibilityProbe：实际发出的 visibility-change wake callback 次数。
     func recordWakeCallback() {
-        lock.withLock { $0.wakeCallbackCount += 1 }
+        lock.withLock {
+            $0.wakeCallbackCount += 1
+            $0.dirty = true
+        }
     }
 
     /// DockPanel：实际写入 frame 相对本 tick 无障碍基础 frame 的匿名 dy bucket。
+    /// 仅 bucket 值变化时标记 dirty（同值重复写回不算新证据）。
     func recordDockDyBucket(_ bucket: DockDyBucket) {
         lock.withLock {
+            let dyBucketChanged = $0.lastDockDyBucket != bucket
             switch bucket {
             case .base: $0.dockDyBaseCount += 1
             case .upTo32: $0.dockDyUpTo32Count += 1
@@ -143,6 +163,7 @@ final class RuntimeEvidenceCollector: Sendable {
             case .above64: $0.dockDyAbove64Count += 1
             }
             $0.lastDockDyBucket = bucket
+            if dyBucketChanged { $0.dirty = true }
         }
     }
 
@@ -177,12 +198,26 @@ final class RuntimeEvidenceCollector: Sendable {
         }
     }
 
-    /// 原子写入私有 Diagnostics；失败（含 symlink 拒绝）只放弃本次输出。
-    func flush() {
+    /// 原子写入私有 Diagnostics；仅在存在未落盘的新聚合证据时执行。
+    /// 返回是否真正写盘；失败（含 symlink 拒绝）恢复 dirty 以便下一 tick 重试。
+    @discardableResult
+    func flush() -> Bool {
+        let shouldWrite = lock.withLock { s -> Bool in
+            guard s.dirty else { return false }
+            s.dirty = false
+            return true
+        }
+        guard shouldWrite else { return false }
         let payload = snapshot()
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
-            return
+            return false
         }
-        try? PrivateStorage.atomicWrite(data, to: outputURL)
+        do {
+            try PrivateStorage.atomicWrite(data, to: outputURL)
+            return true
+        } catch {
+            lock.withLock { $0.dirty = true }
+            return false
+        }
     }
 }

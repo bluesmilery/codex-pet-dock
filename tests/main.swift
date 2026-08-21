@@ -2163,6 +2163,121 @@ check("T-re8 RuntimeEvidence.swift无捕获/计时/墙钟API且仅经PrivateStor
       reGuardMatch == nil && reGuardSource.contains("PrivateStorage.atomicWrite"),
       reGuardMatch != nil ? "violations found" : "")
 
+// T-re9 (admission fix 1): not-due identity jitter —— capture cadence 未到也必须计 identity change。
+// H4b 探针不能因 capture gate（未 due）漏计抖动；事件由真实 probe 消费。
+var reJTime: TimeInterval = 25_000
+let reJRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-jitter-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reJRoot)
+let reJCollector = RuntimeEvidenceCollector(
+    candidateSHA: reSHA,
+    outputURL: reJRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName))
+let reJCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+let reJCap: BubbleCapturer = { _ in
+    reJCaptureCalls.withLock { $0 += 1 }
+    return .stats(expandedS)
+}
+let reJProbe = BubbleVisibilityProbe(
+    monotonicNow: { reJTime }, canCapture: { true }, capturer: reJCap, evidence: reJCollector)
+let reJStable = mkw(581, layer: 3, bubbleForCollapse)
+let reJJittered = mkw(581, layer: 3, CGRect(x: 80, y: 280, width: 345.3, height: 54))
+reJProbe.probe(candidates: [reJStable])
+_ = waitPumpingMain { !reJProbe.lock.withLock { $0.inFlight } }
+let reJAfterFirst = reJCollector.snapshot()
+check("T-re9a 前置: 首次probe→capture1次+identity1+stats1",
+      reJCaptureCalls.withLock { $0 } == 1
+        && (reJAfterFirst["identityChangeCount"] as? Int) == 1
+        && (reJAfterFirst["captureStatsCount"] as? Int) == 1, "")
+reJTime = 25_000.05   // 距上次捕获 0.05s < 0.1s cadence → capture 不启动
+reJProbe.probe(candidates: [reJJittered])
+let reJAfterNotDue = reJCollector.snapshot()
+check("T-re9b not-due jitter→identity计1但capture不加（gate前计数）",
+      (reJAfterNotDue["identityChangeCount"] as? Int) == 2
+        && (reJAfterNotDue["captureStatsCount"] as? Int) == 1
+        && reJCaptureCalls.withLock { $0 } == 1,
+      "identity=\(reJAfterNotDue["identityChangeCount"] ?? -1) "
+        + "calls=\(reJCaptureCalls.withLock { $0 })")
+
+// T-re10 (admission fix 1+2): in-flight identity replacement —— single-flight 期间 identity 抖动
+// 必须计数；旧 generation 的 stale 完成结果不得污染 outcome/visibility/wake 统计。
+var reITime: TimeInterval = 27_000
+let reIRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-inflight-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reIRoot)
+let reICollector = RuntimeEvidenceCollector(
+    candidateSHA: reSHA,
+    outputURL: reIRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName))
+let reICaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+let reICap: BubbleCapturer = { _ in
+    reICaptureCalls.withLock { $0 += 1 }
+    try? await Task.sleep(nanoseconds: 120_000_000)
+    return .stats(expandedS)
+}
+let reIStable = mkw(591, layer: 3, bubbleForCollapse)
+let reIJittered = mkw(591, layer: 3, CGRect(x: 80, y: 280, width: 345.5, height: 54))
+let reIProbe = BubbleVisibilityProbe(
+    monotonicNow: { reITime }, canCapture: { true }, capturer: reICap, evidence: reICollector)
+reIProbe.probe(candidates: [reIStable])   // 慢捕获启动，保持 inFlight
+reITime = 27_000.01
+reIProbe.probe(candidates: [reIJittered]) // in-flight 期间 identity 替换（single-flight 合并）
+let reIAfterReplacement = reICollector.snapshot()
+check("T-re10a in-flight jitter→identity计1且不启动第二捕获",
+      (reIAfterReplacement["identityChangeCount"] as? Int) == 2
+        && reICaptureCalls.withLock { $0 } == 1
+        && reIProbe.lock.withLock { $0.inFlight },
+      "identity=\(reIAfterReplacement["identityChangeCount"] ?? -1) "
+        + "calls=\(reICaptureCalls.withLock { $0 })")
+_ = waitPumpingMain { !reIProbe.lock.withLock { $0.inFlight } }
+let reIAfterStale = reICollector.snapshot()
+check("T-re10b stale完成被拒绝→outcome/visibility/wake均不计入",
+      (reIAfterStale["captureStatsCount"] as? Int) == 0
+        && (reIAfterStale["visibilityVisibleCount"] as? Int) == 0
+        && (reIAfterStale["wakeCallbackCount"] as? Int) == 0,
+      "stats=\(reIAfterStale["captureStatsCount"] ?? -1) "
+        + "visible=\(reIAfterStale["visibilityVisibleCount"] ?? -1) "
+        + "wake=\(reIAfterStale["wakeCallbackCount"] ?? -1)")
+reITime = 27_001   // 新 generation 下 due → 接受的捕获必须计数
+reIProbe.probe(candidates: [reIJittered])
+_ = waitPumpingMain { !reIProbe.lock.withLock { $0.inFlight } }
+let reIAfterAccepted = reICollector.snapshot()
+check("T-re10c 接受的新捕获→outcome/visibility计入且visible不变无wake",
+      (reIAfterAccepted["captureStatsCount"] as? Int) == 1
+        && (reIAfterAccepted["visibilityVisibleCount"] as? Int) == 1
+        && (reIAfterAccepted["wakeCallbackCount"] as? Int) == 0
+        && reICaptureCalls.withLock { $0 } == 2,
+      "stats=\(reIAfterAccepted["captureStatsCount"] ?? -1) "
+        + "visible=\(reIAfterAccepted["visibilityVisibleCount"] ?? -1)")
+
+// T-re11 (admission fix 3): flush dirty 抑制 —— 无新聚合证据的 tick 不写盘。
+let reFRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-flush-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reFRoot)
+let reFURL = reFRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName)
+let reFCollector = RuntimeEvidenceCollector(candidateSHA: reSHA, outputURL: reFURL)
+reFCollector.recordLayoutTick(bubbleObstacles: 1, controlObstacles: 0, visibleObstacles: 1)
+let reFFirstFlush = reFCollector.flush()
+check("T-re11a 首个layout证据→flush写盘一次",
+      reFFirstFlush && FileManager.default.fileExists(atPath: reFURL.path), "")
+var reFUnchangedWrites = 0
+for _ in 0..<100 {
+    reFCollector.recordLayoutTick(bubbleObstacles: 1, controlObstacles: 0, visibleObstacles: 1)
+    if reFCollector.flush() { reFUnchangedWrites += 1 }
+}
+let reFWritten = try! JSONSerialization.jsonObject(with: Data(contentsOf: reFURL)) as! [String: Any]
+check("T-re11b 100个无变化tick→0次写盘（flush全false+文件tickCount停更）",
+      reFUnchangedWrites == 0 && (reFWritten["tickCount"] as? Int) == 1,
+      "writes=\(reFUnchangedWrites) fileTicks=\(reFWritten["tickCount"] ?? -1)")
+reFCollector.recordDockDyBucket(.upTo64)
+check("T-re11c 新dy bucket→写盘", reFCollector.flush(), "")
+reFCollector.recordDockDyBucket(.upTo64)
+check("T-re11d 同值dy bucket→不写", !reFCollector.flush(), "")
+reFCollector.recordLayoutTick(bubbleObstacles: 1, controlObstacles: 0, visibleObstacles: 0)
+check("T-re11e layout state变化→写盘", reFCollector.flush(), "")
+reFCollector.recordCapture(kind: .stats, visibility: .visible)
+reFCollector.recordIdentityChange()
+reFCollector.recordWakeCallback()
+check("T-re11f accepted capture/identity/wake→写盘", reFCollector.flush(), "")
+
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)
 let staleCap: BubbleCapturer = { _ in
