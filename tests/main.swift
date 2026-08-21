@@ -1354,7 +1354,6 @@ struct ProductionProbeCadenceResult {
     let captureStarts: [TimeInterval]
     let firedTimerIntervals: [TimeInterval]
     let remainingActiveTimerIntervals: [TimeInterval]
-    let wallClockSamples: [TimeInterval]
     let tickCount: Int
     let captureCallCount: Int
 }
@@ -1362,17 +1361,14 @@ struct ProductionProbeCadenceResult {
 func productionProbeCadence(
     preProbeOffsets: [TimeInterval],
     postProbeOffsets: [TimeInterval] = [],
-    keepFirstCaptureInFlight: Bool = false,
-    wallJumps: [TimeInterval] = []
+    keepFirstCaptureInFlight: Bool = false
 ) -> ProductionProbeCadenceResult {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(0))
-    let wallClock = OSAllocatedUnfairLock(initialState: TimeInterval(1_700_000_000))
     var probeAttempts: [TimeInterval] = []
     var captureStarts: [TimeInterval] = []
     var lastObservedCapture = -TimeInterval.greatestFiniteMagnitude
     var timers: [TestFollowTickTimer] = []
     var firedIntervals: [TimeInterval] = []
-    var wallClockSamples: [TimeInterval] = []
     var ticks = 0
     let captureCalls = OSAllocatedUnfairLock(initialState: 0)
     let releaseFirstCapture = OSAllocatedUnfairLock(initialState: false)
@@ -1412,10 +1408,6 @@ func productionProbeCadence(
                 lastObservedCapture = capturedAt
                 captureStarts.append(capturedAt)
             }
-            if tickIndex < wallJumps.count {
-                wallClock.withLock { $0 += wallJumps[tickIndex] }
-            }
-            wallClockSamples.append(wallClock.withLock { $0 })
             if tickIndex < postProbeOffsets.count {
                 let postProbeOffset = postProbeOffsets[tickIndex]
                 clock.withLock { $0 += postProbeOffset }
@@ -1466,7 +1458,6 @@ func productionProbeCadence(
         captureStarts: captureStarts,
         firedTimerIntervals: firedIntervals,
         remainingActiveTimerIntervals: activeIntervals,
-        wallClockSamples: wallClockSamples,
         tickCount: ticks,
         captureCallCount: captureCalls.withLock { $0 }
     )
@@ -1558,26 +1549,40 @@ check("T-sch4e reset/空候选/权限false均不残留retry hint",
       "reset=\(String(describing: hintAfterReset)) empty=\(String(describing: hintAfterEmpty)) "
         + "permission=\(String(describing: hintAfterPermissionLoss))")
 
-let wallClockBaseline = productionProbeCadence(
-    preProbeOffsets: [0.02, 0.01, 0],
-    postProbeOffsets: [0, 0.02, 0],
-    wallJumps: [0, 0, 0]
+// T-sch4f (v5 source guard): cadence 生产文件不得引入墙上时间输入。
+// break-loop 4 结论：局部 wall fake 未被 scheduler/probe 消费，不能证明墙钟独立性；
+// cadence 生产契约本就不接受墙钟，因此用可执行 source/API guard 直接扫描
+// cadence-owning 生产文件（scheduler/probe/Follower 时间语义/插值时钟域），
+// 出现 Date/CFAbsoluteTime 等墙钟 API 即失败。不为测试向生产添加第二时钟。
+let cadenceGuardRepoRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+let cadenceGuardFiles = [
+    "Sources/PetDock/FollowTickPlan.swift",
+    "Sources/PetDock/BubbleVisibility.swift",
+    "Sources/PetDock/Follower.swift",
+    "Sources/PetDock/DockPanel.swift"
+]
+let wallClockAPIPattern = try! NSRegularExpression(
+    pattern: "\\bDate\\b|\\bNSDate\\b|CFAbsoluteTime|timeIntervalSince|DispatchWallTime|gettimeofday"
 )
-let wallClockJumped = productionProbeCadence(
-    preProbeOffsets: [0.02, 0.01, 0],
-    postProbeOffsets: [0, 0.02, 0],
-    wallJumps: [86_400, -172_800, 86_400]
-)
-check("T-sch4f wall前跳/后跳不改变monotonic phase、recapture与retry",
-      wallClockBaseline.wallClockSamples != wallClockJumped.wallClockSamples
-        && cadenceTimesEqual(wallClockBaseline.probeAttempts, wallClockJumped.probeAttempts)
-        && cadenceTimesEqual(wallClockBaseline.captureStarts, wallClockJumped.captureStarts)
-        && cadenceTimesEqual(wallClockBaseline.firedTimerIntervals, wallClockJumped.firedTimerIntervals)
-        && wallClockBaseline.tickCount == wallClockJumped.tickCount
-        && wallClockBaseline.captureCallCount == wallClockJumped.captureCallCount,
-      "baselineWall=\(wallClockBaseline.wallClockSamples) jumpedWall=\(wallClockJumped.wallClockSamples) "
-        + "baselineAttempts=\(wallClockBaseline.probeAttempts) jumpedAttempts=\(wallClockJumped.probeAttempts) "
-        + "baselineCaptures=\(wallClockBaseline.captureStarts) jumpedCaptures=\(wallClockJumped.captureStarts)")
+var cadenceGuardViolations: [String] = []
+var cadenceGuardReadFiles = 0
+for cadenceGuardRelativePath in cadenceGuardFiles {
+    let cadenceGuardURL = cadenceGuardRepoRoot.appendingPathComponent(cadenceGuardRelativePath)
+    guard let cadenceGuardSource = try? String(contentsOf: cadenceGuardURL, encoding: .utf8) else {
+        cadenceGuardViolations.append("\(cadenceGuardRelativePath): unreadable")
+        continue
+    }
+    cadenceGuardReadFiles += 1
+    let cadenceGuardRange = NSRange(cadenceGuardSource.startIndex..., in: cadenceGuardSource)
+    if wallClockAPIPattern.firstMatch(in: cadenceGuardSource, range: cadenceGuardRange) != nil {
+        cadenceGuardViolations.append(cadenceGuardRelativePath)
+    }
+}
+check("T-sch4f cadence owner源码无墙钟API（source guard）",
+      cadenceGuardReadFiles == cadenceGuardFiles.count && cadenceGuardViolations.isEmpty,
+      "read=\(cadenceGuardReadFiles)/\(cadenceGuardFiles.count) violations=\(cadenceGuardViolations.joined(separator: ", "))")
 
 // T-bv39: 生产 FollowLayoutPass 必须贯穿候选分类→probe cache→可见障碍→frame sink。
 // 已有 stable one-shot 尚未触发时，visible→hidden wake 应提前执行且只执行一次完整 tick。
@@ -1773,6 +1778,116 @@ for cycle in 0..<3 {
     if cycle < 2 { redProbe.probe(candidates: []) }
 }
 check("T-bv39f5b repeated full hide/show无stale obstacle且回基础位", repeatedTransitionsOK, "")
+
+// T-bv42 (v5): authoritative targetMissing 必须穿过真实生产组合：
+// onVisibilityChange → FollowTickScheduler coalescer → 完整 FollowLayoutPass → 实际 DockPanel.placeBelow/frame。
+// 起点 .stats(expanded) 且已排好未到期的 stable one-shot；targetMissing 后只允许一次提前 tick、
+// 旧 stable timer 失效、最终零障碍且真实 panel frame 回基础位；hidden 不变不得重复 wake。
+var missTime: TimeInterval = 15_000
+var missClock: TimeInterval = 0
+let missDock = DockPanel()
+let missOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(expandedS))
+let missCap: BubbleCapturer = { _ in missOutcome.withLock { $0 } }
+let missTicks = OSAllocatedUnfairLock(initialState: 0)
+let missOnMain = OSAllocatedUnfairLock(initialState: false)
+let missObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+var missTimers: [TestFollowTickTimer] = []
+let missMascot = mkw(523, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
+let missCandidate = mkw(521, layer: 3, bubbleForCollapse)
+let missDockBaseX = petForCollapse.origin.x + (petForCollapse.width - 200) / 2
+let missAvoidAppKitFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: missDockBaseX, y: avoidY, width: 200, height: 48))
+let missBaseAppKitFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: missDockBaseX, y: baseY, width: 200, height: 48))
+func missFrameNear(_ actual: NSRect, _ expected: NSRect) -> Bool {
+    // setFrame 有像素对齐：位置容差 < 1.0（AppKit 约定），尺寸精确。
+    abs(actual.origin.x - expected.origin.x) < 1.0
+        && abs(actual.origin.y - expected.origin.y) < 1.0
+        && actual.width == expected.width
+        && actual.height == expected.height
+}
+var missProbe: BubbleVisibilityProbe!
+let missScheduler = FollowTickScheduler(
+    runTick: {
+        missTicks.withLock { $0 += 1 }
+        missOnMain.withLock { $0 = Thread.isMainThread }
+        let placed = FollowLayoutPass.placeDock(
+            mascot: missMascot,
+            candidates: [missMascot, missCandidate],
+            bubbleProbe: missProbe,
+            frameSink: { pet, obstacles in
+                missObstacleCounts.withLock { $0.append(obstacles.count) }
+                return missDock.placeBelow(
+                    petQuartzRect: pet,
+                    avoiding: obstacles,
+                    visibleScreen: nil,
+                    movementChanged: false,
+                    monotonicNow: missTime
+                )
+            }
+        )
+        return placed ? .stable : .hidden
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { missClock },
+    stableDelayHint: { missProbe.takePendingRetryDelay() },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        missTimers.append(timer)
+        return timer
+    }
+)
+missProbe = BubbleVisibilityProbe(
+    monotonicNow: { missTime },
+    canCapture: { true },
+    capturer: missCap,
+    onVisibilityChange: missScheduler.visibilityChangeCallback
+)
+missProbe.probe(candidates: [missCandidate])
+_ = waitPumpingMain { !missProbe.lock.withLock { $0.inFlight } }
+check("T-bv42a 初始targetMissing链前置: expanded结果不调度", missTicks.withLock { $0 } == 0, "")
+missScheduler.start()
+missScheduler.requestWake()
+_ = waitPumpingMain { missTicks.withLock { $0 } == 1 }
+let missStableTimerBeforeWake = missTimers.last
+check("T-bv42b expanded→实际panel避让frame+未到期stable one-shot",
+      missFrameNear(missDock.frame, missAvoidAppKitFrame)
+        && missObstacleCounts.withLock { $0 } == [1]
+        && missStableTimerBeforeWake?.repeats == false
+        && missStableTimerBeforeWake?.invalidated == false,
+      "frame=\(missDock.frame) expected=\(missAvoidAppKitFrame) obstacles=\(missObstacleCounts.withLock { $0 })")
+
+missOutcome.withLock { $0 = .targetMissing }
+missTime = 15_001
+missProbe.probe(candidates: [missCandidate])
+let missWakePump = Date().addingTimeInterval(5)
+while (missProbe.lock.withLock({ $0.inFlight })
+       || missTicks.withLock({ $0 }) < 2) && Date() < missWakePump {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+}
+RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+let missActiveTimersAfterWake = missTimers.filter { !$0.invalidated }
+check("T-bv42c targetMissing→callback→coalescer仅一次提前完整tick",
+      missTicks.withLock { $0 } == 2
+        && missOnMain.withLock { $0 }
+        && missStableTimerBeforeWake?.invalidated == true
+        && missActiveTimersAfterWake.count == 1
+        && missActiveTimersAfterWake.first?.repeats == false,
+      "ticks=\(missTicks.withLock { $0 }) onMain=\(missOnMain.withLock { $0 }) "
+        + "oldStableInvalidated=\(missStableTimerBeforeWake?.invalidated ?? false) "
+        + "activeTimers=\(missActiveTimersAfterWake.count)")
+check("T-bv42d 零障碍+实际DockPanel.frame回基础位",
+      missObstacleCounts.withLock { $0 } == [1, 0]
+        && missFrameNear(missDock.frame, missBaseAppKitFrame),
+      "frame=\(missDock.frame) expected=\(missBaseAppKitFrame) obstacles=\(missObstacleCounts.withLock { $0 })")
+
+missTime = 15_002
+missProbe.probe(candidates: [missCandidate])
+_ = waitPumpingMain { !missProbe.lock.withLock { $0.inFlight } }
+check("T-bv42e hidden不变不重复wake", missTicks.withLock { $0 } == 2, "ticks=\(missTicks.withLock { $0 })")
+missScheduler.stop()
 
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)

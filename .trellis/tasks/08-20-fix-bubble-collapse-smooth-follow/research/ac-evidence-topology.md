@@ -1,0 +1,44 @@
+# AC Evidence Topology — v5 evidence-only campaign
+
+- 任务：fix-bubble-collapse-smooth-follow（v5，第四次 break-loop 后 evidence-only 复盘）。
+- 产品基线：`585b9a4b4e2eef291755d5bc8971294e32feafa9`（完整 SHA，本候选 Sources/ 与其逐字节一致，`git diff 24b9732 -- Sources/` 为空）。
+- 测试态：基线之上叠加治理/规划 HEAD `cac75c395d73df85cf71cf4f1d43741ba95fdd29`，再加本候选的 test-only 改动（`Tests/main.swift` 与本文件）；产品代码零改动。
+- 基线结论：两条新证据路径（T-sch4f source guard、T-bv42 生产组合回归）在未修改 24b9732 产品树上直接通过 → 按“基线合同”判定为 coverage-only gap，不做任何产品行为修改。
+- 冻结候选完整 SHA 在交付报告中单独给出；候选 SHA 变化后本表结论一并失效。
+
+## 用户症状与验收标准证据拓扑
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S1 消息卡片仍在但 expanded→collapsed 后底座不复位 | behavior（生产组合） | fake capturer 返回 `.stats(expanded)` 后改 `.stats(collapsed)`；probe 单调时钟 11_000→11_001 越过 cadence | 24b9732 基线通过（既有回归） | capturer → `BubbleVisibilityClassifier` → cache 变化 → `onVisibilityChange` → `FollowTickScheduler.visibilityChangeCallback`（coalescer wake）→ 主线程完整 tick → `FollowLayoutPass.placeDock` → `Geometry.safeDockFrame` | T-bv39c/d：仅一次提前完整 tick、主线程执行、旧 stable timer 失效、障碍 [1,0]、y 回 baseY | `make test-ui` PASS（T-bv39a–e） | 真实像素收起、真实 SCK 时延与体感未验证 |
+| S2 全部消息/控制隐藏后底座保持旧避让间距 | behavior（生产组合，AC2b 证据 owner） | `.stats(expanded)` 建立成功观察 + 未到期 stable one-shot 后，capturer 改返回权威 `.targetMissing`；probe 时钟 15_000→15_001 | 24b9732 基线通过（本轮新增 T-bv42；v4 的 T-bv39f2 helper 路径降级为分类补充证据） | capturer → classifier（hasSuccessfulObservation=true → hidden）→ cache 变化 → `onVisibilityChange` → scheduler coalescer `requestWake` → 主线程 drain → 完整 `FollowLayoutPass.placeDock` → **真实 `DockPanel.placeBelow`** | T-bv42c/d：仅一次提前 tick（ticks=2）、onMain=true、旧 stable timer invalidated、新 one-shot 唯一、障碍 [1,0]、**实际 `missDock.frame` 回基础 frame**（像素对齐容差 <1.0） | `make test-ui` PASS：T-bv42a–e 全绿（frame 期望值由 `Geometry.appKitRectFromQuartz` 独立计算） | 真实 CG 候选残留窗口与 SCK 清单时序、真机 full-hide 未验证 |
+| S3 拖动跟随跳变/不连续 | behavior（纯值 + 真实 panel sink） | 60/120/不规则节拍采样、retarget、障碍/隐藏/无 screen 扰动；注入单调时间 | 24b9732 基线通过（既有回归） | `DockFrameInterpolator.update/frame(at:)` ← `DockPanel.placeBelow(movementChanged:monotonicNow:)` | T-ip1–7（32ms 线性、无过冲、只追最新目标、精确终点）；T-ip8–10 真实 DockPanel frame sink；T-ip11 无 screen 每帧 snap | `make test-ui` PASS（T-ip1–11） | 60Hz/高刷真实拖拽手感、Instruments CPU/内存未验证 |
+| AC1 单调时钟 cadence 上限 + 墙钟独立性 | behavior + static/absence（source guard） | 注入单调时钟驱动 phase-aligned/off-grid/工作跨 deadline/missed deadline/in-flight；guard 扫描 cadence owner 源码 | 24b9732 基线通过；无效的局部 wall-jump fixture 已按 break-loop 4 移除 | scheduler tick/probe cadence/retry 全部消费同一注入单调时钟；guard 直接读取 `FollowTickPlan.swift`、`BubbleVisibility.swift`、`Follower.swift`、`DockPanel.swift` 源文本 | T-sch1/1c–1h、T-sch4a–d（`max(tickStartedAt+0.1, workCompletedAt)`、latest-only、无 backlog）；T-sch4f：出现 `Date`/`NSDate`/`CFAbsoluteTime`/`timeIntervalSince`/`DispatchWallTime`/`gettimeofday` 即 FAIL | `make test-ui` PASS；guard 可失败性已验证：临时注入 `Date()` → FAIL（violations=Follower.swift）→ 移除后 PASS，Sources/ diff 复核为空 | 系统真实 NTP 跳变下的运行表现未验证（契约由 guard + 行为回归固化） |
+| AC2 分类变化唤醒执行完整布局（宠物不动也回基础 frame） | behavior（生产组合） | stable 调度已建立、宠物 rect 不变，仅气泡 cache visible→hidden | 24b9732 基线通过 | wake → coalescer → 完整 tick → `FollowLayoutPass` 重读 `bubbleProbe.visibility` 并重算无障碍 frame | T-bv39c/d（sink 障碍 [1,0]、y=baseY）；T-bv42d（真实 panel frame） | `make test-ui` PASS | 真实 run-loop 排序（事件跟踪/模态）未验证 |
+| AC2b 见 S2 | behavior（生产组合） | 见 S2 | 见 S2 | 见 S2 | 见 S2 | 见 S2 | 见 S2 |
+| AC3 重复转换/密集 callback 不丢最终状态且 pending ≤1 | behavior | 连续 wake（running 期间到达）、重复 expanded↔missing 循环、hidden 不变重复 probe | 24b9732 基线通过 | `FollowTickCoalescer.requestWake/requestBeat` 状态机消费全部注入事件 | T-bv38d/e/f1–f3（最多一个 pending、一次 follow-up、无过期 tick）；T-bv39f5b（3 轮 full hide/show 收敛）；T-bv42e（hidden 不变 ticks 保持 2） | `make test-ui` PASS | 真实高频 display 回调压力未验证 |
+| AC4 display link + macOS13 fallback + screen 存活恢复 | behavior（注入 factory） | display-link factory 返回可控 link；screen 变化触发 wake；60→120→60 能力切换 | 24b9732 基线通过 | `FollowTickScheduler.startMovingSourceIfNeeded` 消费 factory/eligibility；DockPanel screen-change 通知 → 同一 wake | T-sch2a/b（fallback 重读屏幕能力）；T-sch3a–c（active link → 失 screen → fallback → 恢复，macOS14 以下跳过分支） | `make test-ui` PASS | 真实 CADisplayLink 跨屏/VRR 回调、macOS13 真机未验证 |
+| AC5 stable 时长语义与采样频率解耦 | behavior（纯函数，注入时间序列） | 60/120/不规则采样时刻 + 0.5px 累计亚阈值位移 | 24b9732 基线通过 | `Follower.decide(pet:stationaryAnchor:lastMaterialChangeAt:now:)` 消费注入 now | F18/F19（同一 elapsed 阈值进 stable）；F21–23（累计位移不误入 stable）；F16（4/60s 语义） | `make test-ui` PASS | 无 |
+| AC5b 32ms 插值时间线与安全 snap | behavior（纯值 + panel sink） | 见 S3 | 见 S3 | 见 S3 | 见 S3 | 见 S3 | 真实体感拖尾未验证 |
+| AC6 既有保守/卫生回归不破坏 | behavior | TCC false、capture unavailable、never-observed targetMissing、reset/空候选、旧 generation、同 WID 身份变化 | 24b9732 基线通过 | `BubbleVisibilityProbe` lock/generation/knownWids/single-flight 全链消费注入扰动 | T-bv38a–c（TCC false 保守）；T-bv39f3/f4/f5a（保守语义）；T-bv40（旧 generation 不通知）；T-bv41a–c（身份变化失效）；T-sch4e（reset/空/权限无残留 hint） | `make test-ui` PASS | 真实 TCC 中途变化未验证 |
+| AC7 硬门禁 | build/docs/static | 候选完整树（test-only 改动 + 本文件） | 基线 24b9732 之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | release 0 warning；docs 0 finding；全套件全绿；diff 无 whitespace 错误 | `swift build -c release` Build complete!（0 warning）；`make docs-check` 14 files 0 findings；`make test-docs` 10 OK；`make PYTHON=<miniconda-python> test` 全绿（UI 244 passed / 0 failed）；`git diff --check 24b9732..HEAD` 通过 | 无 |
+| AC8 模型/推理配置 | process/dispatch record | 父会话派发记录 + task.json meta | 本次实现 owner = zhipu/glm-5.3 + max（父会话解析，未降级） | 派发合同（本 worktree 唯一实现负责人） | 派发记录含任务名/角色/worktree/分支/base/范围/验收；本报告为该 owner 交付 | 见交付报告 | 正式 Review/QA 子 Agent 尚未派发，其模型预检在各自派发前执行 |
+| AC9 开发候选产物 | 真机/QA（未启动） | — | — | — | — | 未执行 `make app`（按规则仅 Review 清零后由 QA 执行） | QA 未启动；候选归档、签名、来源验证全部未验证 |
+| AC10 真机验收矩阵 | 真机 QA（未启动） | — | — | — | — | 未运行任何 .app | expanded→collapsed、full-hide、60Hz/高刷拖拽、多屏、TCC/ScreenCaptureKit、Instruments 全部未验证 |
+
+## Fake / clock / event 消费合同（逐项证明被 SUT 读取）
+
+| 注入物 | 被测生产对象实际消费点 | 证明 |
+| --- | --- | --- |
+| 单调时钟闭包（scheduler） | `FollowTickScheduler.monotonicNow()` 在 `performTick`/`scheduleStableTick` 读取 | T-sch1c–1h 的 deadline/latest-only 行为随注入时间变化 |
+| 单调时钟闭包（probe） | `BubbleVisibilityProbe.monotonicNow()` 在 `probe`/`takePendingRetryDelay` 读取 | T-sch4a–d 的 capture 时刻/剩余等待随注入时间变化 |
+| fake capturer（stats/targetMissing/unavailable） | `BubbleVisibilityProbe.probe` 的 `Task.detached` 逐候选调用并经 generation 校验写 cache | T-bv39/T-bv41/T-bv42 的分类、通知与失效行为依赖其返回值 |
+| visibility 事件 | 生产构造点 `onVisibilityChange: scheduler.visibilityChangeCallback`（与 main.swift 同构） | T-bv39c/T-bv42c 的 tick 计数只能由该回调驱动（测试从未手工调用 runTick 路径） |
+| fake timer / display-link factory | `FollowTickScheduler.makeTimer/makeDisplayLink` 创建 source 并在其回调请求 beat | T-sch1–4 的 fire/invalidate 计数直接反映 factory 产物生命周期 |
+| 障碍几何 fixture | `PetTracker.obstaclesNear` → `FollowLayoutPass` → `DockPanel.placeBelow` 真实消费 | T-bv42b/d 的实际 panel frame 随障碍集变化 |
+| 墙钟扰动（已移除） | 无生产消费者 → 按 break-loop 4 判定为无效证据并删除 | 替换为 T-sch4f source guard（可执行、可失败） |
+
+## 边界声明
+
+- 自动证据不覆盖：真实 TCC/ScreenCaptureKit 像素流、真实 CG/SCK 生命周期错位、多屏负坐标、高刷/VRR 真实回调、拖拽体感、Instruments 开销——全部标记未验证，留待真机 QA。
+- 本候选不包含产品代码改动；任何后续产品变更都会使本表及全部测试结论失效并需要重新冻结。
