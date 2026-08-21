@@ -948,13 +948,26 @@ def _swiftc_conditional_defines(tokens: list[str], line_number: int) -> list[str
 
 
 def test_w5_makefile_testing_flag_is_wired_once_in_test_ui_recipe() -> None:
-    """W5 wiring: shell-token scan of every Makefile swiftc command.
+    """W5 wiring: whole-Makefile token count plus a shell-token scan of swiftc.
 
-    Joined (-DNAME) and separated (-D NAME) conditional-compilation flags are
-    both recognized and every recipe rejects a dangling -D.  PETDOCK_TESTING
-    must be defined exactly once across all Makefile swiftc commands and must
-    live in the test-ui recipe that compiles tests/main.swift.
+    PETDOCK_TESTING is an unsplittable stable identifier, so the whole
+    Makefile (variables, comments and recipes alike) must contain it exactly
+    once.  This closes make-variable indirection: a define hidden inside a
+    $(VAR) reference expands at build time but still counts here, and moving
+    the sole occurrence into a variable leaves the direct swiftc token scan
+    empty.  The remaining scan then proves the single occurrence is a legal
+    joined (-DNAME) or separated (-D NAME) define on the test-ui swiftc
+    command, and every recipe still rejects a dangling -D.  No make-syntax
+    parsing is attempted; anything but the one direct wiring fails closed.
     """
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    joined_hits = re.findall(r"(?<![A-Za-z0-9_])-DPETDOCK_TESTING(?![A-Za-z0-9_])", makefile)
+    separate_hits = re.findall(r"(?<![A-Za-z0-9_])PETDOCK_TESTING(?![A-Za-z0-9_])", makefile)
+    global_count = len(joined_hits) + len(separate_hits)
+    assert global_count == 1, (
+        "PETDOCK_TESTING must appear exactly once in the whole Makefile; "
+        f"found {global_count} (variable/comment/indirect occurrences fail closed)"
+    )
     lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
     testing_wires: list[tuple[str | None, int]] = []
     for target, line_index, tokens in _makefile_swiftc_commands():

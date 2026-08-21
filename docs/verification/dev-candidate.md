@@ -73,6 +73,8 @@ runtime 聚合诊断默认关闭：不提供启动参数时不创建诊断文件
 
 上述编译层合同由 `make test-privacy` 内的真实编译 probe 持续验证：每次隐私门禁都会在无测试 flag 的 release 组合上编译三个探针——外部文件命名/构造具体 collector、生产 facade 传入 `outputURL` 地址参数、release 源引用测试专用 facade——三者都必须编译失败才算通过。具体类型内新增任何 initializer、subscript、property 或 method 都不会改变该边界：类型本身文件私有，成员不会因此对其他生产文件可见。测试 fixture 如需命名证据文件，只能使用不含任何目录/路径能力的 filename 常量。
 
+`PETDOCK_TESTING` 的 flag 布线采用双层守卫且不解析 Make 语法：`PETDOCK_TESTING` 是不可分割的稳定 identifier，整个 Makefile（变量定义、注释、任意 recipe）按 identifier 边界计数必须恰好出现一次——藏进 make 变量再由其他 recipe 引用时，构建期展开会生效但计数层已经失败；把唯一出现移入变量间接引用时，计数为 1 但 direct swiftc token 扫描看不到真实 `-D`，同样失败。随后 shell token guard 继续证明这唯一出现是 test-ui swiftc 命令上合法的 `-DNAME` 或 `-D NAME` 形态，并拒绝悬空 `-D`。任何变量、注释或间接布线形态都 fail-closed。
+
 采样在既有 follow tick 内更新，不新建持续捕获流或计时器。落盘采用 dirty 抑制加最小 0.5 秒单调节流（时钟由生产 follow 单调时钟注入，诊断文件自身不读取系统时间）：首个证据立即写出；其后仅在被当前 generation/identity 接受的捕获、identity 变化、wake、layout 状态变化或 dy bucket 变化产生新证据、且距上次写盘尝试至少 0.5 秒时写盘，窗口内的持续抖动合并为到期后的一次写；写盘失败保留 dirty 并受同一节流约束。无变化的显示 tick 不产生写 IO。该机制只验证 instrumentation：自动测试中注入的 fake outcome 仍标为 plumbing-only；在真实图 1→图 2→图 3 操作中取得同一候选的脱敏聚合之前，不得宣称 full-hide 症状已修复或根因已确认。
 
 ## 开发候选产物归档

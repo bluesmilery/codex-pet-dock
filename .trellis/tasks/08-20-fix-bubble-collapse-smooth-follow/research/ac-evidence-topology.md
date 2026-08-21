@@ -223,7 +223,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | v9-1 具体 collector 文件私有 + 协议 existential | static/absence（编译层）+ wiring | 外部生产文件命名/构造具体类型；具体类型加 convenience init / static subscript / property / method 后重复；生产 facade 传 `outputURL`；release 引用测试 facade | RB-C/RB-D 证明旧树可逃逸（release exit 0 + privacy 29 passed）；MC1–MC3 在 v9 树全部编译 FAIL；MC4/MC5 编译 FAIL | Swift 编译器（file-private 类型边界）+ `makeRuntimeEvidenceRecorder` 唯一生产入口（无地址参数） | 编译失败本身即所有者断言；main/BubbleVisibility/FollowLayoutPass/DockPanel 均只持有 `any RuntimeEvidenceRecording` | MC1–MC5 见上表；pytest 三个编译 probe 每次 `make test-privacy` 自动执行（28 passed） | 无 |
 | v9-2 测试 facade 仅存在于 flag 区域 | wiring（单一 token + 区域） | 定义文件外出现 `makeRuntimeEvidenceRecorderForTesting` token；token 移出 `#if PETDOCK_TESTING` 区域 | W1/W2 单一 token 与区域 canary；MC5 编译失败为 release 主证据 | `#if PETDOCK_TESTING` 词法区域（Package.swift 不定义该 flag） | token 只在定义文件且只在 flag 区域内出现 | `make test-privacy` W1/W2 PASS | 无 |
-| v9-3 flag 布线 token 感知 | wiring（shell token 解析） | Package.swift 加 define；第二 recipe 加连写/分离 flag；recipe 加 dangling `-D` | RB-E 证明旧 W5 只计连写（29 passed 逃逸）；MW1–MW4 在 v9 树全部 FAIL | `shlex.split` 解析每个 Makefile swiftc recipe 的完整 token 流（含 `-DNAME` 与 `-D NAME` 两种形态，拒绝 dangling `-D`） | `PETDOCK_TESTING` 全仓 Makefile swiftc 命令恰一次且位于 test-ui（编译 tests/main.swift 的 recipe）；Package.swift 无该 flag | `make test-privacy` W4/W5 PASS（token 解析覆盖全部 recipe） | 无 |
+| v9-3 flag 布线 token 感知（含 admission 修复） | wiring（全局 identifier 计数 + shell token 解析，不解析 Make 语法） | Package.swift 加 define；第二 recipe 加连写/分离 flag；recipe 加 dangling `-D`；变量定义+其他 recipe 引用；唯一 token 移入变量由 test-ui 间接引用 | RB-E 证明旧 W5 只计连写（29 passed 逃逸）；MW1–MW4 全部 FAIL；admission 实测证明变量展开绕过（旧 W5 28 passed）后 admission-MW5/MW6 修复 FAIL | 第一层：`PETDOCK_TESTING` 是不可分割稳定 identifier，整个 Makefile 按 identifier 边界全局计数恰 1（变量/注释/间接引用 fail-closed）；第二层：`shlex.split` 解析 swiftc recipe token 流（`-DNAME`/`-D NAME`，拒绝 dangling `-D`），证明唯一出现是 test-ui 的合法 direct flag | `PETDOCK_TESTING` 整个 Makefile 恰一次、为 test-ui swiftc direct `-D` 布线；Package.swift 无该 flag | `make test-privacy` W4/W5 PASS（28 passed）；MW1–MW4 + admission-MW5/MW6 六项 mutation 全 FAIL→恢复后 PASS | 无 |
 | v9-4 生产消费者迁移不改行为 | behavior（既有回归） | 四个生产文件 evidence 参数/属性类型改为协议 existential；tests/main.swift 机械替换 factory/filename 引用 | 基线 `<v9-planning-base>` 既有 T-re1–T-re12 全部保持 | capturer → probe → scheduler → FollowLayoutPass → 真实 DockPanel.placeBelow（与基线同构，仅类型收窄为协议 existential） | T-re 断言/fixture/timing 零改动；test-ui 282 passed / 0 failed | `make test-ui` PASS（282/282） | 无 |
 | v9-5 门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告（release 0 warning、全套件、privacy、docs、diff-check） | 见交付报告 | 无 |
 | image3（原始 full-hide 症状） | plumbing-only（未采样） | — | — | — | — | 无任何 fix 宣称 | **仍 unresolved**：等待 Review 清零 + QA 归档精确候选后，由视觉 QA 执行真实图 1→图 2→图 3 并采集脱敏聚合 |
@@ -234,3 +234,18 @@
 - 原始 image3 症状仍未解决也不宣称解决：全部 fake 注入仍是 plumbing-only；等待同一候选真机脱敏 runtime-evidence 采样后再判定分支。
 - 真机 TCC/ScreenCaptureKit、多屏、拖拽体感、Instruments、make app/候选归档全部未验证、未执行（属 Review 清零后的 QA 阶段）。
 - 旧 W0/W3/W6/W7（private-init shape、URL token allowlist、production-factory shape、declaration inventory）已删除，不以新 regex/inventory 形态重钉；本文件 v8 段落中的 W6 引用仅是历史记录。
+
+### v9 pre-Review admission 修复批次（W5 make-variable indirection）
+
+- 背景：主管 pre-Review admission 在隔离 HEAD 副本实测发现 W5 只解析 swiftc recipe 行的字面 token——`TEST_DATA_EXTRA_FLAGS := -D PETDOCK_TESTING` 加 test-data `$(TEST_DATA_EXTRA_FLAGS)` 引用时，`make` 展开后第二个 flag 实际生效，但旧 W5 仍 28 passed（变量展开绕过）。本批次为 formal Review 前修复，不计 Review round；首个 v9 候选 `<v9-first-candidate>` 及其全部先前结论失效，完整 SHA 只保留在未跟踪的父会话派发记录。
+- 修复合同（`tests/test_runtime_privacy.py` W5，不引入 Make 语法 parser）：利用 `PETDOCK_TESTING` 是不可分割稳定 identifier，对整个 Makefile 做 identifier 边界全局计数（joined `-DPETDOCK_TESTING` 与 separated `-D PETDOCK_TESTING` 两种固定宽度 lookbehind 分别计数求和），必须恰好 1——变量定义、注释、其他 recipe 任何出现都 fail-closed；随后既有 shlex token guard 继续证明这唯一出现是 test-ui swiftc 的合法 `-DNAME`/`-D NAME` 并拒绝 dangling `-D`。
+
+| 编号 | 临时改动（隔离副本） | `make -n` 展开确认 | privacy 结果 |
+| --- | --- | --- | --- |
+| admission-MW5 | `TEST_DATA_EXTRA_FLAGS := -D PETDOCK_TESTING` + test-data `$(TEST_DATA_EXTRA_FLAGS)` 引用（主管实测形态） | test-data 展开后含 1 处 flag（实际生效） | W5 FAIL（全局计数=2，1 failed/27 passed） |
+| admission-MW6 | 唯一 token 移入 `TEST_UI_EXTRA_FLAGS := -DPETDOCK_TESTING`，test-ui 改 `$(TEST_UI_EXTRA_FLAGS)` 直写删除 | test-ui 展开后含 1 处 flag（实际生效） | W5 FAIL（全局=1 但 direct token 扫描为空，1 failed/27 passed） |
+| MW2 复验 | test-data 直写连写 `-DPETDOCK_TESTING` | — | W5 FAIL（保持既有覆盖） |
+| MW3 复验 | test-data 直写分离 `-D PETDOCK_TESTING` | — | W5 FAIL（保持既有覆盖） |
+| MW4 复验 | test-data 行尾 dangling `-D` | — | W5 FAIL（保持既有覆盖） |
+
+- 全部 mutation 后完全恢复；恢复树与实现树逐字节一致后 clean gate `make test-privacy` 28 passed。mutation 均在隔离 /tmp 副本执行，结束后移入废纸篓，未污染 worktree。
