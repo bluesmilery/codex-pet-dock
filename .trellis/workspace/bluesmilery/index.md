@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-08-20
+- **Total Sessions**: 8
+- **Last Active**: 2026-08-21
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~197 | Active |
+| `journal-1.md` | ~226 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-08-21 | 完成底座统计与详情卡视觉优化 | `bc3c52f`, `f547229`, `ff098a4`, `22fad6d`, `835588f`, `f81d27e`, `66750f4`, `9556ba0`, `2db5466` | `dev` |
 | 7 | 2026-08-20 | 调整子 Agent 模型选择规则 | `cd38b03` | `dev` |
 | 6 | 2026-08-20 | 恢复 Trellis 官方 Git 管理策略 | `09991023f5e75e873f6c7957834f99145c9b72e3`, `566c1921a34f1e021a989f55786034bec29755b1`, `d82f6b28e149348fef56a05963390d9e7c11dd1c`, `3fa834980db46cb00c20d0dc8182234cb6aadfff` | `dev` |
 | 5 | 2026-08-19 | 修复录屏权限与底座跟随 | `6e5081269af5f58969dd170ae84a06ef6cd9168e`, `255cb9e9722f635f3ac3978978c748bb6fce8271`, `8d23119b3dafd1066f8c83e8ca9763080bdfa614`, `eb0f25c496dde35a3d3bacfeb03c87592f865b6a` | `dev` |

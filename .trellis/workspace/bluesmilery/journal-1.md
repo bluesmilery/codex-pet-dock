@@ -195,3 +195,32 @@ Hardened Trellis path/runtime boundaries, private diagnostics and logs, child-pr
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: 完成底座统计与详情卡视觉优化
+
+**Date**: 2026-08-21
+**Task**: 完成底座统计与详情卡视觉优化
+**Branch**: `dev`
+
+### Summary
+
+完成 Week Tokens 下部垂直居中、详情卡居中与紧凑双列表格；修复点击贴边 clamp 和动态 note 高度。候选 fdef0e09 经 Review 清零、完整自动门禁和真机展开收起重开视觉 QA 后集成 dev；同时补充活跃子 Agent 不催促及五分钟轮询规则。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bc3c52f` | (see git log) |
+| `f547229` | (see git log) |
+| `ff098a4` | (see git log) |
+| `22fad6d` | (see git log) |
+| `835588f` | (see git log) |
+| `f81d27e` | (see git log) |
+| `66750f4` | (see git log) |
+| `9556ba0` | (see git log) |
+| `2db5466` | (see git log) |
+
+### Status
+
+[OK] **Completed**
