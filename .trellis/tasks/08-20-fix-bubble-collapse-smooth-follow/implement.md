@@ -5,8 +5,8 @@
 - Product base: the committed HEAD of the current `replan_base_ref` recorded in `task.json`. Immediately before dispatch, the main Agent resolves that ref to a full immutable commit SHA, verifies the worktree is clean, and records the full SHA in the assignment/preflight prompt. The tracked plan does not embed its own self-referential commit hash.
 - Delivery path: L2.
 - Per the user's latest task-level override, implementation, formal code Review, repair recheck and automated gate QA use `zhipu/glm-5.3 + max`; visual/real-device QA that reads the screen and operates the candidate App uses `kimi/k3 + max`. Unavailable routing stops the corresponding dispatch without model downgrade. Each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
-- The controlling instructions for the current campaign are under **Sixth break-loop replan after v6 second Review**. Earlier Preconditions text, ordered-work, break-loop sections and Rollout descriptions are historical where incompatible; none overrides the sixth replan.
-- Current product scope is evidence-hardening only: final-owner read-back, async-safe test gate, test compile warning gate, recursive privacy guard, exact 40-hex provenance, AC Evidence Topology and directly affected docs. No normal obstacle classification, layout, scheduler, capture, interpolation or permission behavior may change.
+- The controlling instructions for the current campaign are under **Seventh break-loop replan after v7 second Review**. Earlier Preconditions text, ordered-work, break-loop sections and Rollout descriptions are historical where incompatible; none overrides the seventh replan.
+- Current product scope is compiler-enforced runtime-evidence sink wiring only: private initializer, fixed-sink production factory, compile-flagged test factory, small token/wiring canaries, compile mutations, AC Evidence Topology and directly affected docs. No normal obstacle classification, telemetry schema/flush behavior, layout, scheduler, capture, interpolation or permission behavior may change.
 
 ## Historical ordered work (superseded by the fourth replan)
 
@@ -120,6 +120,19 @@ The v6 second formal Review ended with P0=0/P1=0/P2=4, so the campaign is closed
 6. Do not alter telemetry fields, flush cadence, capture/generation semantics, obstacle classification, alpha thresholds, scheduler, interpolation, permissions or UI behavior. Existing image3 tests remain plumbing-only.
 7. Update AC Evidence Topology with each baseline/mutation, production consumer, final owner and actual command result. Apply `trellis-check`, run release/test/docs/privacy/diff gates, freeze a new SHA and hand off to a fresh full formal Review campaign.
 8. Review clear → fresh zhipu automated QA builds/archives exact candidate → fresh `kimi/k3 + max` visual QA performs image 1→2→3 and main independently verifies process path, operation sequence and evidence. No image3 fix claim before runtime sampling.
+
+## Seventh break-loop replan after v7 second Review
+
+The v7 second formal Review ended with P0=0/P1=0/P2=2, so v7 is closed without QA and no third patch is allowed. Start a fresh v8 campaign from the committed v8 planning baseline:
+
+1. Preflight one fresh `zhipu/glm-5.3 + max` implementation owner in a unique clean worktree at the exact planning SHA. Do not reuse v7 implementation/Review agents or approvals.
+2. Before implementation, reproduce both old-guard holes on the approved base: an unflagged definition-file factory accepting a URL and a comment-split constructor must leave the v7 privacy gate green. Record them as red baselines proving the old defense layer is hollow, then remove all constructor-spelling regex, alias/metatype/typed-init enumeration, comment normalization and constructor-argument parsing.
+3. In `RuntimeEvidence.swift`, make the designated initializer `private`. Add a same-file `production(candidateSHA:flushNow:)` factory with no URL parameter and a fixed `PrivateStorage.diagnosticsURL` + filename sink. Add `forTesting(candidateSHA:outputURL:flushNow:)` only inside `#if PETDOCK_TESTING`; do not move files or add `@testable`/new targets.
+4. Change `main.swift` to the production factory. Add `-DPETDOCK_TESTING` only to the existing test-ui swiftc recipe and rewrite existing runtime-evidence test fixtures to the test factory without changing their assertions or timing.
+5. Replace the deleted regex family with W0–W6 compiler-first canaries from `break-loop-7-2026-08-22.md`: line-anchored declaration shape/count for private-init and production factory (accidental drift only), test-factory token location and flag region, release Package absence, exactly one test-ui flag wiring, and a pinned identifier-boundary `URL|NSURL|CFURL` allowlist outside the test region. Keep aggregate-only/privacy field guards and exact ASCII SHA tests; no textual canary may be reported as the access-control proof.
+6. Record release compile mutations for direct, explicit/comment-split and test-factory construction plus an invalid production `outputURL:` argument; record wiring mutations for Package flag, duplicate/moved Makefile flag, outside-region URL API and unwrapped test factory. For private-init removal, use the same external constructor probe as a contrast: correct tree fails compilation, removing `private` makes the probe compile while W0 fails, and restoration returns to compile-fail/W0-pass. The main admission must inspect compiler evidence and wiring canaries rather than only test counts.
+7. Run trellis-check, release 0 warning, full tests/docs/privacy/diff/task gates and repeated test-ui, update AC Evidence Topology, freeze a new SHA, then start a fresh formal Review campaign. Any source change invalidates all prior evidence.
+8. Review clear → fresh zhipu automated QA builds/archives the exact candidate → fresh `kimi/k3 + max` visual QA performs image 1→2→3 and records the same candidate's privacy-safe runtime aggregate. Until that sampling, image3 remains unresolved and all fake outcome tests remain plumbing-only.
 
 ## Review focus
 

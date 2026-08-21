@@ -148,6 +148,14 @@ Rendering code may format fields, but it must not redefine the payload contract.
 
 **Rule**: For flags, identifiers, enum strings and persisted formats, compare `docs wording → parser predicate → boundary cases`. Tests must challenge the documented boundary rather than mirror the implementation's current range.
 
+### Mistake 11: A Language-Level Invariant Is Enforced By Text Scanning
+
+**Bad**: A regex claims no other Swift code can construct a privacy-sensitive type. Each Review adds another spelling for `.init`, alias, metatype, comment trivia or file exclusion, but construction has no unavoidable multi-token text form.
+
+**Good**: Make the initializer private, expose a production factory whose signature cannot accept the forbidden value, and keep any test-only factory behind a compile flag absent from release. Use small token/wiring canaries only for the flag and API shape, while compiler mutations prove external construction fails.
+
+**Rule**: If a prohibited behavior has no unavoidable single token, move enforcement to access control, types or the runtime owner. Do not repair lexical non-convergence by writing a larger regex or homemade parser.
+
 ---
 
 ## Checklist for Cross-Layer Features
@@ -179,6 +187,8 @@ After implementation:
 - [ ] Verified telemetry reads back the final owner after the side effect instead of reusing a requested/target value
 - [ ] Verified every source guard covers its claimed recursive scope and has a mutation FAIL/PASS record
 - [ ] Compared each documented exact input contract against parser acceptance and boundary tests
+- [ ] Assigned each absence invariant to the compiler, a single-token guard, wiring shape or runtime behavior before writing a source scan
+- [ ] Included independent compile-layer and wiring-layer mutations for privacy-sensitive API surfaces
 
 ---
 

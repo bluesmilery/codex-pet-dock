@@ -124,6 +124,12 @@ v6 第二轮正式 Review 报告四个实质 P2，因此该 campaign 关闭且�
 
 v7 只允许修复上述 instrumentation/test/gate/docs 边界：`DockPanel` 读回 owner frame、test-only async-safe gate、test-ui warnings-as-errors、递归 constructor/sink guard 与 mutation、40-hex parser/docs/tests。禁止修改 obstacle kind、alpha 阈值、candidate identity、capture outcome、scheduler、Follower、插值、权限或任何用户可见行为。完成这些修复后仍需重新冻结、完整 Review、自动 QA，再由 Kimi 视觉 QA 采样真实图 3。
 
+## Seventh break-loop v8 compiler-enforced sink contract
+
+v7 第二轮正式 Review 报告两个实质 P2：定义文件豁免允许同文件 factory/singleton，comment trivia 可分割 constructor token。该 campaign 已关闭且不得 QA 或第三轮补丁。根因不是少枚举两个语法，而是用文本扫描承担 Swift 访问控制不变量；constructor regex、去注释和括号解析均不可继续扩展。
+
+v8 将 designated initializer 改为 `private`，同文件 production factory 只接收 candidate SHA/单调时钟并固定私有 Diagnostics sink；自定义测试 sink 仅由 `PETDOCK_TESTING` 包裹的同文件 factory 暴露，flag 只允许出现在 test-ui swiftc recipe，SwiftPM release 不定义。外部构造、`.init`、alias/comment 形态与调用点传 URL 以 release 编译失败证明；文本 guard 只保留单一 token、API shape 与 flag 布线 canary。除构造/测试接线外，不修改 telemetry、障碍、捕获、调度、插值、权限或 UI 行为；image3 仍等待同一候选的真实 runtime 采样。
+
 ## Rollout and rollback
 
 `24b9732` 的最终 Review 结论为 P0=0/P1=0/P2=2，问题均为证据没有穿过生产边界，QA 未启动且旧结论不可复用。当时的统一 `zhipu/glm-5.3 + max` 分工已由 Fifth contract 的“自动角色 zhipu、视觉 QA kimi”取代；派发仍须预检对应模型与 worktree，失败即停派、不换模型。若基线证据暴露范围外根因，或需要预测/持续 SCStream，必须再次回到规划。

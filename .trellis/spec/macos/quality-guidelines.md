@@ -61,7 +61,7 @@
 - **所有者回读合同**：telemetry 若声称记录最终 owner，必须在副作用完成后从 owner 回读状态；不得把传给 `setFrame` / write / action 的请求值、target 或 helper 结果重命名为 actual。测试须能区分 requested value 与 owner read-back。
 - **基线合同**：先在批准的未修改基线上运行关键症状测试。基线 fail 才支持行为修复；基线 pass 说明是覆盖缺口，应补证据但不得为制造红测而绕过生产组合或继续猜测式改代码。
 - **缺失合同**：要证明“不依赖墙上时间”“不调用禁用 API”等不存在性，使用行为测试加可执行 source/API guard；不得注入一个生产代码从未读取的禁用依赖来宣称通过。
-- **Guard 范围合同**：source/API guard 的枚举范围必须覆盖其声称保护的完整 production tree（有子目录时递归），并精确断言关键 wiring/sink，而不只计数同名符号。每个关键 guard 至少记录一次临时 mutation FAIL → 撤销后 PASS；没有可失败性证据只能算人工静态检查。
+- **Guard 分层合同**：先判断不变量属于编译器/访问控制、单一 token、布线 shape 还是运行行为。若违规行为没有不可避免的单一 token（例如 Swift 构造语法可经 alias、inference、metatype 或 comment trivia 改写），必须用访问控制/类型签名和编译失败证明，不得用 regex、去注释或自制 parser 枚举语法。source/API guard 只保护其可靠表达的完整 production scope，并精确断言 wiring；每个 privacy 关键面至少记录一条编译层与一条布线层 mutation FAIL → 撤销后 PASS。
 - **边界合同**：TCC、ScreenCaptureKit 像素、多屏负坐标、真实拖拽手感等无法可靠隔离的部分明确留给真机 QA，自动证据不得越界宣称。
 - **真机 outcome 合同**：外部窗口、TCC 或 ScreenCaptureKit 决定行为的症状，真机 QA 除 UI 结果外还必须绑定同一候选的脱敏生产 outcome 证据；只有 UI 截图或只注入 fake outcome 均不足以证明修复触发了真实分支。
 - **持久化合同**：表格写入当前 task 的 `research/ac-evidence-topology.md` 并包含在冻结候选提交中；主 Agent 将该路径和完整候选 SHA 一并交给全新 Reviewer。Reviewer 必须从候选树读取，不能依赖聊天里的旧副本。
@@ -125,7 +125,7 @@ enum DockDyBucket { case base, upTo32, upTo64, above64 }
 ### 3. Contracts
 
 - 诊断默认关闭，仅在显式 QA/诊断模式下启用，并绑定完整候选 SHA 与真实操作步骤。
-- 当前仓库 runtime evidence 的完整候选 SHA 合同是恰好 40 个小写十六进制字符；文档、parser 与边界测试必须同一提交保持一致，缩写或任意长度区间不得用于 exact-candidate provenance。
+- 当前仓库 runtime evidence 的完整候选 SHA 合同是恰好 40 个 ASCII 小写十六进制字符（`0-9` / `a-f`）；文档、parser 与边界测试必须同一提交保持一致，缩写、Unicode hex 或任意长度区间不得用于 exact-candidate provenance。
 - 只聚合 count、enum 与相对基础 frame 的 bucket；禁止记录窗口标识、进程标识、标题、owner、绝对坐标、颜色、文字或图像。
 - 每个症状 AC 必须注明 `runtime trigger source → observed kind/outcome → injected regression trigger` 的对应关系；未取得对应关系时回归测试标为 plumbing-only。
 - `unavailable` 等保守失败语义不得因 UI 期望而重解释为 authoritative absence。
