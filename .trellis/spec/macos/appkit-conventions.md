@@ -27,11 +27,13 @@ appKitOriginY = mainScreenHeight - quartzOriginY - height
 - 所有 UI 操作（setFrame / orderOut / addSubview）在**主线程**。后台 Task 完成后 `DispatchQueue.main.async` 切回。
 - `NSPanel` 用 `.nonactivatingPanel` + `.hudWindow` 行为，`collectionBehavior` 含 `.fullScreenAuxiliary`（不被全屏遮挡）。
 - `setFrame` 会做像素对齐：断言位置容差用 `< 1.0` 而非 `< 0.01`（如 836.5 → 836.0）。
+- `setFrame` 的请求值不等于最终 owner 状态。诊断若记录“实际 frame”，必须在 `setFrame` 返回后读取 `panel.frame` / `window.frame`，并用该回读值分类或序列化；请求 frame 只可作为 target，不得冒充 actual。边界测试需构造 requested 与 owner read-back 可跨 bucket 的 fractional fixture，并配 source mutation guard。
 
 ## 并发
 
 - `PetDockDataService` 单 serial queue + `refreshInFlight` 合并（`maxConcurrent == 1`）。
 - completion 回调经 main 派发；测试用 `waitPumpingMain`（pump RunLoop）避免主线程死锁，**勿用** `XCTestExpectation`。
+- async capturer / provider fixture 使用 async continuation 或等价非阻塞 gate；不得在 async closure 中调用 `DispatchSemaphore.wait()` 或依赖固定 `Task.sleep` 窗口。独立 `swiftc` 测试入口必须把 compiler warning 当 error。
 - `BubbleVisibilityProbe` 用 `OSAllocatedUnfairLock` + generation 校验保证 single-flight。
 - `LineReader` 用 `readabilityHandler`（GCD）替代阻塞 `availableData`，`stop()` 有限时间返回不挂起。
 

@@ -140,6 +140,14 @@ Rendering code may format fields, but it must not redefine the payload contract.
 
 **Rule**: Separate two questions: “Can the production pipeline handle this outcome?” and “Does the real user action produce this outcome?” Until both are proven, label the test plumbing-only and do not use it to justify a product fix or symptom acceptance.
 
+### Mistake 10: Documentation, Parser, And Test Define Different Exact Inputs
+
+**Bad**: Documentation requires a full immutable identifier, while the parser accepts arbitrary short/long hexadecimal strings and tests bless a short example. Every layer is internally green, but provenance is not exact.
+
+**Good**: Write one boundary table from the user-facing contract, then make parser acceptance and positive/negative tests use the same lengths, casing and alphabet. Change all three in one commit.
+
+**Rule**: For flags, identifiers, enum strings and persisted formats, compare `docs wording → parser predicate → boundary cases`. Tests must challenge the documented boundary rather than mirror the implementation's current range.
+
 ---
 
 ## Checklist for Cross-Layer Features
@@ -168,6 +176,9 @@ After implementation:
 - [ ] Mapped event-driven acceptance tests from source callback through coalescing/transport to the final owner-observable sink
 - [ ] Confirmed each injected kind/outcome/failure has an equivalent runtime observation for the exact user symptom and candidate SHA
 - [ ] Labeled complete production-composition tests as plumbing-only when trigger equivalence is still unknown
+- [ ] Verified telemetry reads back the final owner after the side effect instead of reusing a requested/target value
+- [ ] Verified every source guard covers its claimed recursive scope and has a mutation FAIL/PASS record
+- [ ] Compared each documented exact input contract against parser acceptance and boundary tests
 
 ---
 

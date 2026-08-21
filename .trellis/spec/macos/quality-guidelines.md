@@ -7,6 +7,7 @@
 ## 硬门禁
 
 - `swift build -c release` **0 warning**（不是「忽略 warning」，是 0）。
+- 独立 `swiftc` 编译的测试入口同样必须 0 warning，并在命令层启用 warnings-as-errors；`make test` 通过但编译输出含 warning 不得送审。
 - `make docs-check` 与 `make test-docs` 必须通过；它们离线检查公开 Markdown 的本地链接、目录完整性、旧路径和隐私残留。
 - `make test` 全绿 = docs gate + `test-privacy` + test-ui + test-data + test-shell 五个独立入口；测试数字和证据以 [dev 候选验收](../../../docs/verification/dev-candidate.md) 与测试源码为准，文档测试另计。
 - `build/PetDock.app` 只作为可覆盖的 staging；开发候选须按 [产物归档规则](../../../docs/verification/dev-candidate.md#开发候选产物归档) 创建全新、提交绑定的 `YYYY-MM-DD-HHmmss-<label>-<shortSHA>` 本地目录，并验证签名与来源。
@@ -27,6 +28,7 @@
 - fake outcome 即使被完整生产组合消费，也只有在同一症状的真实 runtime 证据确认其 kind / outcome 语义等价时，才能作为症状 AC 的主证据；否则只能标为 plumbing-only。
 - 事件驱动 UI 链路若要求唤醒/合并/frame 写回，集成测试必须经过生产 callback、scheduler/coalescer 和实际 frame owner；手工调用 Geometry/helper 只能作为相邻单元测试。
 - 对生产设计明确排除的依赖（例如 cadence 不接受墙钟），使用行为测试加可执行 source/API guard 固化“无该依赖”的契约；不要为了测试注入而向生产增加无业务用途的依赖。
+- async 测试 fixture 必须用 continuation、actor 或其他 async-safe gate 挂起任务；禁止在 async closure 中用 semaphore wait、sleep 窗口或阻塞 cooperative executor 来制造确定性。
 
 ## 验收证据拓扑合同
 
@@ -56,8 +58,10 @@
 - **组合合同**：测试不得手动调用本应由上游 callback 或 scheduler 触发的下游 helper 来冒充整条链路。
 - **触发等价合同**：测试注入的 kind、outcome、failure provenance 或状态分布必须有同一真实症状的脱敏 runtime 证据支持。生产组合完整但 trigger 语义未经确认时，只能证明 plumbing 能力，不得宣称症状 AC 已通过。
 - **所有者合同**：断言必须落到真实最终所有者，例如实际 `DockPanel.frame`、持久化状态或对外 action；只断言目标 frame、helper 返回值或临时 sink 不代表产品状态已更新。
+- **所有者回读合同**：telemetry 若声称记录最终 owner，必须在副作用完成后从 owner 回读状态；不得把传给 `setFrame` / write / action 的请求值、target 或 helper 结果重命名为 actual。测试须能区分 requested value 与 owner read-back。
 - **基线合同**：先在批准的未修改基线上运行关键症状测试。基线 fail 才支持行为修复；基线 pass 说明是覆盖缺口，应补证据但不得为制造红测而绕过生产组合或继续猜测式改代码。
 - **缺失合同**：要证明“不依赖墙上时间”“不调用禁用 API”等不存在性，使用行为测试加可执行 source/API guard；不得注入一个生产代码从未读取的禁用依赖来宣称通过。
+- **Guard 范围合同**：source/API guard 的枚举范围必须覆盖其声称保护的完整 production tree（有子目录时递归），并精确断言关键 wiring/sink，而不只计数同名符号。每个关键 guard 至少记录一次临时 mutation FAIL → 撤销后 PASS；没有可失败性证据只能算人工静态检查。
 - **边界合同**：TCC、ScreenCaptureKit 像素、多屏负坐标、真实拖拽手感等无法可靠隔离的部分明确留给真机 QA，自动证据不得越界宣称。
 - **真机 outcome 合同**：外部窗口、TCC 或 ScreenCaptureKit 决定行为的症状，真机 QA 除 UI 结果外还必须绑定同一候选的脱敏生产 outcome 证据；只有 UI 截图或只注入 fake outcome 均不足以证明修复触发了真实分支。
 - **持久化合同**：表格写入当前 task 的 `research/ac-evidence-topology.md` 并包含在冻结候选提交中；主 Agent 将该路径和完整候选 SHA 一并交给全新 Reviewer。Reviewer 必须从候选树读取，不能依赖聊天里的旧副本。
@@ -72,6 +76,8 @@
 | fake 已变化，但被测对象没有读取该 fake | 拒绝送审 |
 | 生产组合完整，但 fake kind/outcome 未被真实 runtime 证据确认等价 | plumbing-only；不得作为症状 AC 主证据 |
 | 只断言计算出的目标值，未断言实际窗口/状态所有者 | 拒绝送审 |
+| telemetry 在副作用后仍消费请求值，未从最终 owner 回读 | 拒绝送审 |
+| source guard 未覆盖完整递归范围、关键 sink 或没有 mutation 失败证据 | 不得作为 absence/privacy 主证据 |
 | 基线已通过关键症状测试 | 记录为覆盖补强，不做无证据产品改动 |
 | 只能真机验证且已明确列为未验证 | 可进入正式 Review，但 QA 前不得宣称完成 |
 | 真机 UI 通过，但外部观察驱动的生产 outcome 未记录 | QA 不准入；补同一候选的脱敏 outcome 证据 |
@@ -119,6 +125,7 @@ enum DockDyBucket { case base, upTo32, upTo64, above64 }
 ### 3. Contracts
 
 - 诊断默认关闭，仅在显式 QA/诊断模式下启用，并绑定完整候选 SHA 与真实操作步骤。
+- 当前仓库 runtime evidence 的完整候选 SHA 合同是恰好 40 个小写十六进制字符；文档、parser 与边界测试必须同一提交保持一致，缩写或任意长度区间不得用于 exact-candidate provenance。
 - 只聚合 count、enum 与相对基础 frame 的 bucket；禁止记录窗口标识、进程标识、标题、owner、绝对坐标、颜色、文字或图像。
 - 每个症状 AC 必须注明 `runtime trigger source → observed kind/outcome → injected regression trigger` 的对应关系；未取得对应关系时回归测试标为 plumbing-only。
 - `unavailable` 等保守失败语义不得因 UI 期望而重解释为 authoritative absence。
@@ -132,6 +139,7 @@ enum DockDyBucket { case base, upTo32, upTo64, above64 }
 | UI 已复位，但 outcome/visibility 计数缺失 | 仅症状观察，不能证明根因分支 |
 | outcome 为 unavailable，但测试注入 targetMissing | 触发不等价，禁止据此改 hidden 策略 |
 | telemetry 含任何禁止字段 | 隐私门禁失败，候选不得交付 |
+| 文档要求 full SHA，但 parser/test 接受缩写或其他长度 | provenance 合同不一致，拒绝 QA 准入 |
 
 ### 5. Good / Base / Bad Cases
 

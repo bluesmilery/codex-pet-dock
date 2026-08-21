@@ -118,6 +118,12 @@ v5 的生产组合回归与自动门禁全部通过，但同一候选在真实�
 
 真实图 1→图 2→图 3 操作完成后，以同一候选的时间窗汇总更新根因后验。只有观测明确支持某一生产分支，才为该分支补生产等价红测并实施最小修复；若证据仍分散，不调整 alpha 阈值、不把 unavailable 解释为 hidden、不修改 control 几何，也不放宽 generation/single-flight 隔离。
 
+## Sixth break-loop v7 evidence-hardening contract
+
+v6 第二轮正式 Review 报告四个实质 P2，因此该 campaign 关闭且不得进入 QA，也不得做第三轮补丁。四项均属于诊断证据可信度，不改变真实图 3 根因后验：owner dy 必须在 `setFrame` 后从真实 panel read-back；async capturer test gate 必须用 continuation 挂起而非 semaphore 阻塞；privacy guard 必须递归覆盖 production tree 并精确证明私有 sink；candidate provenance 必须是当前仓库恰好 40 位的小写 full SHA。
+
+v7 只允许修复上述 instrumentation/test/gate/docs 边界：`DockPanel` 读回 owner frame、test-only async-safe gate、test-ui warnings-as-errors、递归 constructor/sink guard 与 mutation、40-hex parser/docs/tests。禁止修改 obstacle kind、alpha 阈值、candidate identity、capture outcome、scheduler、Follower、插值、权限或任何用户可见行为。完成这些修复后仍需重新冻结、完整 Review、自动 QA，再由 Kimi 视觉 QA 采样真实图 3。
+
 ## Rollout and rollback
 
 `24b9732` 的最终 Review 结论为 P0=0/P1=0/P2=2，问题均为证据没有穿过生产边界，QA 未启动且旧结论不可复用。当时的统一 `zhipu/glm-5.3 + max` 分工已由 Fifth contract 的“自动角色 zhipu、视觉 QA kimi”取代；派发仍须预检对应模型与 worktree，失败即停派、不换模型。若基线证据暴露范围外根因，或需要预测/持续 SCStream，必须再次回到规划。

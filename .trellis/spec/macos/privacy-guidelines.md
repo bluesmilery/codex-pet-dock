@@ -21,6 +21,8 @@
 - 允许：聚合后的 obstacle kind 数量、capture outcome / visibility enum 数量、identity-change / wake callback 计数、visible obstacle 数量，以及 dock 相对本 tick 无障碍基础 frame 的匿名 bucket（`base`、`(0,32]`、`(32,64]`、`>64`）。
 - 禁止：WID/PID、title、owner、绝对/精确坐标、screen 名称、颜色、文字、图像、逐像素值、会话内容或可关联到单个真实窗口的事件序列。
 - 若需落盘，只能写入 PetDock 私有 0700/0600 目录，并优先输出时间窗聚合；截图、OCR 或 alpha 原始内容不得落盘。诊断产物进入 task/spec 前必须转成稳定占位符与枚举摘要。
+- runtime evidence 的 production constructor guard 必须递归扫描完整 `Sources/PetDock/**/*.swift`，证明唯一生产构造点，并精确断言 sink 为 `PrivateStorage.diagnosticsURL` 加固定 evidence 文件名；只扫描顶层或只确认 collector 自身调用 `PrivateStorage.atomicWrite` 不足以证明私有 sink。
+- 上述 guard 必须有两类 mutation 证据：嵌套 production source 临时增加第二构造点时 FAIL；production sink 临时改为非 Diagnostics 路径时 FAIL。mutation 撤销后复跑 PASS，临时值不得提交。
 
 ## 数据读取边界
 

@@ -12,3 +12,4 @@
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-4-2026-08-21.md","reason":"verify the new campaign closes both evidence-only final Review findings"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-5-2026-08-21.md","reason":"verify exact-candidate trigger equivalence and prevent another plumbing-only acceptance"}
 {"file":".trellis/spec/macos/documentation-guidelines.md","reason":"verify diagnostic evidence is not reported as real-device acceptance"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-6-2026-08-22.md","reason":"verify owner read-back, async-safe gate, recursive privacy guard and exact provenance"}

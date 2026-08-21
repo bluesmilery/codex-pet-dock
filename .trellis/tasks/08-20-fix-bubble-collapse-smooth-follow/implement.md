@@ -2,11 +2,11 @@
 
 ## Preconditions
 
-- Product base: the committed HEAD of the stable v6 planning ref recorded in `task.json`. Immediately before dispatch, the main Agent resolves that ref to a full immutable commit SHA, verifies the worktree is clean, and records the full SHA in the assignment/preflight prompt. The tracked plan does not embed its own self-referential commit hash.
+- Product base: the committed HEAD of the current `replan_base_ref` recorded in `task.json`. Immediately before dispatch, the main Agent resolves that ref to a full immutable commit SHA, verifies the worktree is clean, and records the full SHA in the assignment/preflight prompt. The tracked plan does not embed its own self-referential commit hash.
 - Delivery path: L2.
 - Per the user's latest task-level override, implementation, formal code Review, repair recheck and automated gate QA use `zhipu/glm-5.3 + max`; visual/real-device QA that reads the screen and operates the candidate App uses `kimi/k3 + max`. Unavailable routing stops the corresponding dispatch without model downgrade. Each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
-- The controlling instructions for the current campaign are under **Fifth break-loop replan after real-device v5 failure**. Earlier Preconditions text, ordered-work, break-loop sections and Rollout descriptions are retained only where compatible; none overrides the fifth replan.
-- Current product scope is runtime-diagnostic first: a default-off privacy-safe aggregate, its tests/privacy guards, AC Evidence Topology Table, task/spec and directly affected facts. The first v6 candidate must not change normal obstacle classification or layout behavior. Product behavior may change only after exact-candidate runtime evidence identifies the real trigger branch and an equivalent production-chain baseline regression fails.
+- The controlling instructions for the current campaign are under **Sixth break-loop replan after v6 second Review**. Earlier Preconditions text, ordered-work, break-loop sections and Rollout descriptions are historical where incompatible; none overrides the sixth replan.
+- Current product scope is evidence-hardening only: final-owner read-back, async-safe test gate, test compile warning gate, recursive privacy guard, exact 40-hex provenance, AC Evidence Topology and directly affected docs. No normal obstacle classification, layout, scheduler, capture, interpolation or permission behavior may change.
 
 ## Historical ordered work (superseded by the fourth replan)
 
@@ -107,6 +107,19 @@ The v5 frozen candidate passed its automated gates and formal Review but failed 
 7. A fresh `zhipu/glm-5.3 + max` read-only formal Reviewer must clear P0/P1/P2 on the exact diagnostic SHA. Only then may a fresh `zhipu/glm-5.3 + max` automated QA Agent build/archive an exact diagnostic candidate.
 8. After automated QA, a fresh `kimi/k3 + max` visual QA Agent closes the currently running failed candidate, launches the exact diagnostic candidate, performs the user's image 1→2→3 flow, and records only the allowed aggregate plus UI outcome. The main Agent independently verifies the exact process path, operation sequence and captured UI evidence. Repeat enough times to distinguish transient from stable branch behavior.
 9. Replan from the observed branch. Add a production-equivalent baseline regression; only a failing baseline authorizes the smallest behavior change. Any change creates a new SHA and restarts full Review/QA and three-round real-device validation.
+
+## Sixth break-loop replan after v6 second Review
+
+The v6 second formal Review ended with P0=0/P1=0/P2=4, so the campaign is closed without QA and no third patch/Review round is allowed. Start a fresh v7 implementation campaign from the committed v7 planning baseline:
+
+1. Preflight one fresh `zhipu/glm-5.3 + max` implementation owner in a unique clean worktree at the exact planning SHA. Do not reuse v6 implement/Review agents or approvals.
+2. In `DockPanel.placeBelow`, keep the requested/interpolated frame for the existing `setFrame` call, then read the actual panel frame back after the side effect and use only that owner value for dy telemetry. Add a fractional boundary regression and a source mutation guard that fail if telemetry is changed back to the request value.
+3. Replace the async capturer semaphore wait with a test-only continuation/async-safe gate that suspends without blocking an executor and resumes exactly once. Add warnings-as-errors to the existing test-ui `swiftc` command; record a semaphore mutation compile failure and run test-ui repeatedly without warnings.
+4. Change the runtime constructor privacy guard to recursively enumerate `Sources/PetDock/**/*.swift`, prove the sole production constructor remains in main, and assert its output is `PrivateStorage.diagnosticsURL` plus the fixed evidence filename. Record nested-constructor and non-private-sink mutation failures.
+5. Tighten runtime evidence provenance to exactly 40 lowercase hex characters. Update parser comments, positive/negative boundary tests and directly affected docs together; reject 7/39/41/64, uppercase and non-hex values.
+6. Do not alter telemetry fields, flush cadence, capture/generation semantics, obstacle classification, alpha thresholds, scheduler, interpolation, permissions or UI behavior. Existing image3 tests remain plumbing-only.
+7. Update AC Evidence Topology with each baseline/mutation, production consumer, final owner and actual command result. Apply `trellis-check`, run release/test/docs/privacy/diff gates, freeze a new SHA and hand off to a fresh full formal Review campaign.
+8. Review clear → fresh zhipu automated QA builds/archives exact candidate → fresh `kimi/k3 + max` visual QA performs image 1→2→3 and main independently verifies process path, operation sequence and evidence. No image3 fix claim before runtime sampling.
 
 ## Review focus
 

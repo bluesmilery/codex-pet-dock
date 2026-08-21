@@ -28,9 +28,9 @@
     "subagent_reasoning": "max",
     "visual_qa_model": "kimi/k3",
     "visual_qa_reasoning": "max",
-    "break_loop_count": "5",
-    "review_campaign": "v6_runtime_diagnostic_planning",
-    "replan_base_ref": "codex/fix-bubble-collapse-smooth-follow-v6-plan",
+    "break_loop_count": "6",
+    "review_campaign": "v7_evidence_hardening_planning",
+    "replan_base_ref": "codex/fix-bubble-collapse-smooth-follow-v7-plan",
     "dispatch_base_policy": "resolve ref to full SHA in untracked assignment record",
     "interpolation_duration_ms": "32"
   }
