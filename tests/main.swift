@@ -1910,7 +1910,7 @@ check("T-re1b 恰好40位小写hex→enabled",
       RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=0123456789abcdef0123456789abcdef01234567"])
         == "0123456789abcdef0123456789abcdef01234567", "")
 check("T-re1c 缩写与边界长度(7/39/41/64)→disabled",
-      RuntimeEvidenceFlag.parseCandidateSHA(["-other", "--runtime-evidence=abcdef0"]) == nil
+      RuntimeEvidenceFlag.parseCandidateSHA(["-other", "--runtime-evidence=" + String(repeating: "a", count: 7)]) == nil
         && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "a", count: 39)]) == nil
         && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "a", count: 41)]) == nil
         && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "a", count: 64)]) == nil, "")
@@ -1918,6 +1918,9 @@ check("T-re1d 大写/非hex/裸flag→disabled",
       RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "ABCDEF", count: 6) + "ABCD"]) == nil
         && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "g", count: 40)]) == nil
         && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence"]) == nil, "")
+check("T-re1e 全角Unicode hex→disabled（ASCII-only合同）",
+      RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "０", count: 40)]) == nil
+        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "ａ", count: 40)]) == nil, "")
 
 // T-re2/T-re3: 白名单序列化、禁止字段、record 不落盘、flush 私有权限
 let reSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -2398,12 +2401,11 @@ let reOTime: TimeInterval = 23_000
 var reOClock: TimeInterval = 0
 let reODock = DockPanel()
 let reOCap: BubbleCapturer = { _ in .stats(expandedS) }
-let reOSHA = "fedcba0987654321fedcba0987654321fedcba09"
 let reORoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-owner-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 try? FileManager.default.removeItem(at: reORoot)
 let reOCollector = RuntimeEvidenceCollector(
-    candidateSHA: reOSHA,
+    candidateSHA: reSHA,
     outputURL: reORoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
     flushNow: { reOTime })
 let reOProbePanel = NSPanel(

@@ -67,7 +67,7 @@ runtime 聚合诊断默认关闭：不提供启动参数时不创建诊断文件
 <candidate>/Contents/MacOS/PetDock --runtime-evidence=<candidate-full-sha>
 ```
 
-输出写入 PetDock 私有 Diagnostics（`~/Library/Application Support/PetDock/Diagnostics/runtime-evidence.json`；目录 0700、文件 0600、no-follow fail-closed），内容只包含白名单内的聚合计数：tick 数、bubble/control 障碍数、capture outcome / visibility 枚举计数、identity-change / wake callback 计数、可见障碍数，以及实际底座 frame 相对本 tick 无障碍基础 frame 的匿名 dy bucket（base / (0,32] / (32,64] / >64）。文件中的 `candidateSHA` 绑定 QA 启动时显式提供的候选 SHA；该值必须通过解析器与边界测试的同一合同：恰好 40 个小写十六进制字符（当前仓库 Git SHA-1 完整对象 SHA），7/39/41/64 位缩写或区间、大写与非十六进制输入一律解析失败并保持诊断关闭。该 SHA 只允许出现在私有诊断产物中，不写入被跟踪文件。
+输出写入 PetDock 私有 Diagnostics（`~/Library/Application Support/PetDock/Diagnostics/runtime-evidence.json`；目录 0700、文件 0600、no-follow fail-closed），内容只包含白名单内的聚合计数：tick 数、bubble/control 障碍数、capture outcome / visibility 枚举计数、identity-change / wake callback 计数、可见障碍数，以及实际底座 frame 相对本 tick 无障碍基础 frame 的匿名 dy bucket（base / (0,32] / (32,64] / >64）。文件中的 `candidateSHA` 绑定 QA 启动时显式提供的候选 SHA；该值必须通过解析器与边界测试的同一合同：恰好 40 个 ASCII 小写十六进制字符（0-9/a-f，当前仓库 Git SHA-1 完整对象 SHA），7/39/41/64 位缩写或区间、大写、非十六进制与全角等 Unicode 形态一律解析失败并保持诊断关闭。该 SHA 只允许出现在私有诊断产物中，不写入被跟踪文件。
 
 采样在既有 follow tick 内更新，不新建持续捕获流或计时器。落盘采用 dirty 抑制加最小 0.5 秒单调节流（时钟由生产 follow 单调时钟注入，诊断文件自身不读取系统时间）：首个证据立即写出；其后仅在被当前 generation/identity 接受的捕获、identity 变化、wake、layout 状态变化或 dy bucket 变化产生新证据、且距上次写盘尝试至少 0.5 秒时写盘，窗口内的持续抖动合并为到期后的一次写；写盘失败保留 dirty 并受同一节流约束。无变化的显示 tick 不产生写 IO。该机制只验证 instrumentation：自动测试中注入的 fake outcome 仍标为 plumbing-only；在真实图 1→图 2→图 3 操作中取得同一候选的脱敏聚合之前，不得宣称 full-hide 症状已修复或根因已确认。
 

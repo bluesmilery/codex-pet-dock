@@ -856,10 +856,23 @@ def test_runtime_evidence_is_disabled_without_explicit_flag() -> None:
     main = (ROOT / "Sources" / "PetDock" / "main.swift").read_text(encoding="utf-8")
     assert "RuntimeEvidenceFlag.parseCandidateSHA(CommandLine.arguments)" in main
     assert "init(runtimeEvidenceSHA: String? = nil)" in main
-    # The sole production constructor must sink exactly into the private
-    # Diagnostics URL plus the fixed evidence filename (whitespace-normalized).
-    whitespace_free = "".join(main.split())
+    # The sole production constructor's outputURL argument must be exactly the
+    # private Diagnostics URL plus the fixed evidence filename.  The assertion
+    # is anchored inside the constructor argument region so a matching
+    # expression anywhere else in main.swift cannot satisfy the sink contract.
+    marker = "RuntimeEvidenceCollector("
+    arguments_start = main.index(marker) + len(marker)
+    depth = 1
+    index = arguments_start
+    while index < len(main) and depth:
+        if main[index] == "(":
+            depth += 1
+        elif main[index] == ")":
+            depth -= 1
+        index += 1
+    assert depth == 0, "unbalanced constructor arguments"
+    arguments = "".join(main[arguments_start : index - 1].split())
     assert (
-        "PrivateStorage.diagnosticsURL.appendingPathComponent(RuntimeEvidenceCollector.outputFileName)"
-        in whitespace_free
+        "outputURL:PrivateStorage.diagnosticsURL"
+        ".appendingPathComponent(RuntimeEvidenceCollector.outputFileName)" in arguments
     )

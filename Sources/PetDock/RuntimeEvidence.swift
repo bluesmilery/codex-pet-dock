@@ -45,11 +45,14 @@ enum RuntimeEvidenceFlag {
         return nil
     }
 
-    /// 精确候选 provenance 合同：恰好 40 个小写十六进制字符（Git SHA-1 完整对象 SHA）。
-    /// 7 位缩写、39/41/64 位、大写或非 hex 一律拒绝并保持诊断关闭。
+    /// 精确候选 provenance 合同：恰好 40 个 ASCII 小写十六进制字节（0-9/a-f，Git SHA-1 完整对象 SHA）。
+    /// 7 位缩写、39/41/64 位、大写、非 hex 及全角等 Unicode 形态一律拒绝并保持诊断关闭。
     static func isCandidateSHA(_ value: String) -> Bool {
-        value.count == 40
-            && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+        value.utf8.count == 40
+            && value.utf8.allSatisfy { byte in
+                (byte >= 0x30 && byte <= 0x39)   // ASCII '0'...'9'
+                    || (byte >= 0x61 && byte <= 0x66)   // ASCII 'a'...'f'
+            }
     }
 }
 
