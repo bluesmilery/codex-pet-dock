@@ -2,7 +2,7 @@
 
 ## Scope and boundaries
 
-当前 v5 campaign 从精确产品候选 `585b9a4b4e2eef291755d5bc8971294e32feafa9` 继续，先只补墙钟 absence guard 与 `targetMissing` 生产组合证据。只有批准基线上的真实生产链测试失败时，才修改被证明有缺陷的最小生产边界；现有窗口选择/障碍几何、0.1 秒 cadence、FollowTickScheduler、Follower 稳定判定、插值语义、数据刷新、主题和权限请求策略保持不变。
+当前 v6 campaign 从未通过真机验收的 v5 冻结候选继续。v5 已证明 `.targetMissing` 能穿过真实生产组合，却没有证明用户 full-hide 会产生该 trigger；本轮先构建默认关闭的隐私安全 runtime 诊断边界，取得真实 kind/outcome/identity 分支后才允许修改被证明有缺陷的最小产品边界。现有窗口选择/障碍几何、alpha 阈值、0.1 秒 cadence、FollowTickScheduler、Follower 稳定判定、插值语义、数据刷新、主题和权限请求策略在诊断阶段保持不变。
 
 ## Root-cause model
 
@@ -92,6 +92,8 @@ Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布
 
 ## Fourth break-loop evidence contract
 
+本节及其后的旧 Rollout 描述仅保留为历史；当前 campaign 由 **Fifth break-loop runtime trigger contract** 控制，不得继续按本节执行候选范围或验收结论。
+
 第二轮正式 Review 对 `24b9732` 的产品静态结论为 P0=0/P1=0，但发现两个测试没有穿过其声称覆盖的生产边界。新 campaign 以该 SHA 为产品基线，先补证据，不预设生产代码必须变化。
 
 墙钟独立性不再用未被 SUT 读取的局部变量模拟。cadence 的生产契约是“只接受单调时钟”，因此证据由两部分组成：现有可注入单调时间线继续覆盖 phase/off-grid/overrun/retry；新增可执行 source/API guard 直接扫描负责 cadence 的生产文件并在出现墙钟 API 时失败。不得为了让测试有 wall provider 而向生产 scheduler/probe 携带无业务用途的第二时钟。
@@ -99,6 +101,20 @@ Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布
 `targetMissing` 集成测试必须从 typed capturer 结果开始，经 `BubbleVisibilityProbe.onVisibilityChange`、`FollowTickScheduler.visibilityChangeCallback`、coalesced main tick 和 `FollowLayoutPass`，最终调用一个未展示的真实 `DockPanel.placeBelow` 并断言其 `frame`。测试还要证明 stable one-shot 被提前失效、只产生一次 follow-up tick，重复 `targetMissing` 不积累 wake。现有 helper-only fixture 保留用于分类邻接态，但不再承担 AC2b 的端到端证明。
 
 如果这两个测试在 `24b9732` 上直接通过，则下一候选仅包含测试、task/spec 和必要事实文档；如果真实红测暴露生产接线错误，才做该边界内的最小修复。任何需要启动 App、修改 TCC 或引入新时钟框架的方案都重新回到规划。
+
+## Fifth break-loop runtime trigger contract
+
+v5 的生产组合回归与自动门禁全部通过，但同一候选在真实图 3 full-hide 后仍保留旧 dy。该结果否定了“生产组合通过即可证明症状修复”，尚不能在 `.stats`、`.targetMissing`、`.unavailable`、`.control` bypass 或 candidate identity 反复变化之间确定唯一根因。
+
+本轮第一候选仅增加默认关闭的聚合诊断，不改变正常分类和布局策略。诊断边界靠近各自事实 owner：
+
+- `FollowLayoutPass` 汇总本 tick 的 bubble/control 数量与最终 visible obstacle 数量；
+- `BubbleVisibilityProbe` 汇总 capture outcome、classified visibility、candidate identity generation 变化与 visibility-change callback 次数；
+- `DockPanel` 或完整布局调用边界只计算实际 frame 相对同 tick 无障碍基础 frame 的 dy bucket，不输出坐标。
+
+聚合采用固定 enum/count，不携带 WID/PID、标题、owner、screen、精确 bounds/frame、alpha 原始值、颜色、文字、图像或单窗口事件序列。诊断只能通过显式 QA 开关启用，写入 PetDock 私有目录时强制目录 0700、文件 0600 并使用 no-follow 打开语义；关闭时不得创建文件或增加 capture/timer。
+
+真实图 1→图 2→图 3 操作完成后，以同一候选的时间窗汇总更新根因后验。只有观测明确支持某一生产分支，才为该分支补生产等价红测并实施最小修复；若证据仍分散，不调整 alpha 阈值、不把 unavailable 解释为 hidden、不修改 control 几何，也不放宽 generation/single-flight 隔离。
 
 ## Rollout and rollback
 

@@ -8,6 +8,7 @@ Delivery Path: L2
 
 ## Background
 
+- v5 冻结候选通过自动测试与独立 Review，但主 Agent 按用户图 1→图 2→图 3 的真实操作复验后，图 3 仍保留旧避让间距，因此该候选未 accepted。其生产组合测试注入了 `.targetMissing`，只能证明管道能够处理该 outcome，不能证明真实 full-hide 会产生同一种 trigger。
 - 精确候选 `91a8fe6ba915f84e35f232943fd1c1c3a558063d` 已实现 0.1 秒气泡探测、统一单调时钟、latest-only 调度、macOS 14+ display link、macOS 13 Timer fallback 和基于时长的 stable 判定，并通过当时的自动 Review/QA。
 - 用户真机验证区分出两条状态链：消息卡片仍存在时 expanded→collapsed 能正确复位；控制按钮和全部消息窗口一起隐藏后，底座仍跟随宠物移动，却保持旧避让间距。该候选因此未 accepted、未合入 `dev`，其 Review/QA 结论不可复用。
 - 当前捕获边界用 `BubbleAlphaStats?` 同时表示窗口不在一次成功取得的 ScreenCaptureKit 清单中、清单获取失败和截图失败；所有 `nil` 都保守 `.visible`。这能解释“CGWindowList 几何短暂残留、SCK 已无目标”时旧障碍被持续保活，但仍须先由批准基线上的生产链症状证据与几何误识别假设区分。
@@ -36,6 +37,8 @@ Delivery Path: L2
 
 ### R3 测试、文档与隐私
 
+- 在再次修改分类、候选 identity、control 障碍或 alpha 阈值前，先用同一诊断候选和用户原始操作采集脱敏聚合：bubble/control 障碍数量、capture outcome / visibility 数量、identity-change / wake callback 计数、visible obstacle 数量与相对无障碍基础 frame 的匿名 dy bucket。诊断默认关闭，不记录窗口/进程标识、标题、owner、绝对坐标、颜色、文字、图像、逐像素值或可关联到单个窗口的事件序列。
+- 只有真实 runtime kind/outcome/identity 分支与回归 trigger 建立等价关系后，才允许实施该分支内的最小产品修复；否则候选仅用于诊断，不得宣称症状已修复。
 - 先在批准产品基线上运行穿过真实生产组合的调度/状态机症状测试；基线失败才实施最小行为修复，基线通过则只补覆盖证据，不制造红测或继续猜测式修改产品代码。
 - `Docs Impact: update`：同步中英文 README 和相关架构/验证文档中 2 Hz、60 Hz、零延迟等已经改变或容易误导的说明。
 - 只在内存处理匿名 alpha 比例；不保存图像、不 OCR、不记录颜色、文字、真实 WID/PID/坐标或会话内容。
@@ -45,7 +48,8 @@ Delivery Path: L2
 
 - [ ] AC1：统一可控单调时钟下，visible 气泡下一次可调度探测的启动时间不晚于 `max(tickStartedAt + 0.1s, workCompletedAt)`；覆盖 phase-aligned、off-grid wake、工作跨 deadline 和 missed deadline。跨期时工作完成后立即保留一个 latest-only tick，不把当前 tick 工作或 single-flight capture 在途时间计作调度等待，且空候选、无权限、in-flight 和 unavailable 捕获仍保持既有边界。墙钟独立性必须形成真实可失败证据：若 cadence 生产接口本身不接受墙钟，则用单调行为回归加可执行 source/API guard 禁止 cadence 文件引入 `Date` / `CFAbsoluteTime` 等墙钟输入；仅修改被测链不读取的局部 wall fake 不算覆盖，也不得为测试向生产链添加无业务用途的第二时钟。
 - [ ] AC2：集成调度 harness 证明已有 stable/moving 调度被分类变化唤醒后会执行一次完整 tick；宠物不动也从避让 frame 回到基础 frame。
-- [ ] AC2b：集成 harness 覆盖“成功捕获 expanded 候选 → CG 候选仍短暂存在但后续一次成功 SCK 清单已无目标 → hidden 通知 → scheduler coalesced wake → 一次完整布局无障碍 → 实际 `DockPanel.frame` 回到基础 frame”；stable timer 到期前只提前执行一个 latest-only tick，不得以手工调用布局 helper 或只断言 `Geometry.safeDockFrame` 作为唯一证据。目标从未成功观察、清单失败或截图失败的相邻用例仍保持保守避让。
+- [ ] AC2b：先以同一冻结诊断候选在真实图 3 操作中确认 `runtime trigger source → observed obstacle kind/capture outcome/visibility/identity behavior`。随后集成 harness 注入等价 trigger，穿过真实 `BubbleVisibilityProbe → visibility callback → scheduler coalescer → FollowLayoutPass → DockPanel.placeBelow`，并直接断言实际 `DockPanel.frame` 回到基础 frame；无法确认等价时该测试只能标为 plumbing-only。相邻 unavailable/从未成功观察等保守用例不得被放宽。
+- [ ] AC2c：诊断模式默认关闭，关闭时不创建诊断文件、不增加 capture 或 timer；显式启用时只产生隐私白名单内的时间窗聚合，输出目录/文件权限分别为 0700/0600，文件以 no-follow 语义打开，且 `make test-privacy` 拒绝禁止字段、symlink 跟随和非私有落盘。诊断候选本身不改变正常用户路径的障碍分类或布局行为。
 - [ ] AC3：重复可见性转换和密集 display callbacks 最终状态不丢失，且任意时刻待执行主线程 tick 数不超过 1。
 - [ ] AC4：macOS 14+ moving 使用与窗口所在屏幕同步的公开 display link；窗口失去 screen 时由 screen-change 事件恢复到 fallback，screen 恢复后可重新启用 display link；macOS 13 回退按 `NSScreen` 能力选择周期且不使用已弃用 `CVDisplayLink`。
 - [ ] AC5：同一静止时间序列在 60 Hz、120 Hz 和不规则节拍下进入 stable 的时间语义一致；检测到实质位移立即回到 moving。

@@ -2,11 +2,11 @@
 
 ## Preconditions
 
-- Product base: exact candidate `585b9a4b4e2eef291755d5bc8971294e32feafa9`, plus the approved break-loop 4 and evidence-topology governance commits in a fresh v5 worktree.
+- Product base: the committed HEAD of the stable v6 planning ref recorded in `task.json`. Immediately before dispatch, the main Agent resolves that ref to a full immutable commit SHA, verifies the worktree is clean, and records the full SHA in the assignment/preflight prompt. The tracked plan does not embed its own self-referential commit hash.
 - Delivery path: L2.
 - Per the user's latest task-level override, every implementation, formal Review, repair recheck and QA sub-agent for this task uses `zhipu/glm-5.3 + max`; unavailable routing stops dispatch without model downgrade. Each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
-- The controlling instructions for the current campaign are under **Fourth break-loop replan after evidence-only final Review findings**. Earlier ordered-work and break-loop sections are retained as history and do not override the fourth replan.
-- Current product scope is evidence-only first: tests, executable source/API guard, AC Evidence Topology Table, task/spec and directly affected facts. Product code may change only if the unmodified `24b9732` production-chain test fails, and then only at the proven boundary.
+- The controlling instructions for the current campaign are under **Fifth break-loop replan after real-device v5 failure**. Earlier Preconditions text, ordered-work, break-loop sections and Rollout descriptions are retained only where compatible; none overrides the fifth replan.
+- Current product scope is runtime-diagnostic first: a default-off privacy-safe aggregate, its tests/privacy guards, AC Evidence Topology Table, task/spec and directly affected facts. The first v6 candidate must not change normal obstacle classification or layout behavior. Product behavior may change only after exact-candidate runtime evidence identifies the real trigger branch and an equivalent production-chain baseline regression fails.
 
 ## Historical ordered work (superseded by the fourth replan)
 
@@ -93,6 +93,20 @@ The Review campaign `0e6439b` -> `585b9a4b4e2eef291755d5bc8971294e32feafa9` is c
 4. Keep adjacent conservative cases for never-observed targetMissing and unavailable capture. The helper-level Geometry fixture may remain, but it cannot be the AC2b evidence owner.
 5. Run the two tests against unmodified `24b9732` first. If they pass, make no product-code change. If one fails, change only the proven production boundary and add the red/green evidence; do not reopen scheduler architecture, alpha thresholds, permissions, geometry, interpolation semantics, or clock design.
 6. Apply `trellis-check`, map every AC to `source event -> production consumer -> observable`, run all hard gates, freeze a new SHA, and start a new Review campaign. No Review/QA evidence from `24b9732` is reusable.
+
+## Fifth break-loop replan after real-device v5 failure
+
+The v5 frozen candidate passed its automated gates and formal Review but failed the user's real image 3 full-hide flow: the cards and controls disappeared while the dock retained the old avoidance gap. The v5 `.targetMissing` regression therefore remains plumbing-only. Start a fresh campaign from the committed v6 planning baseline:
+
+1. Preflight a fresh `zhipu/glm-5.3 + max` implementation owner, unique clean branch/worktree and exact base commit. The first v6 implementation is diagnostic-only; do not reuse v5 implementation/Review/QA agents or their approvals.
+2. Before editing, read `break-loop-5-2026-08-21.md` and the updated AppKit, privacy, quality and cross-layer specs. Search existing diagnostics/private-storage owners before adding code; keep each metric at its production fact owner.
+3. Add the smallest default-off runtime evidence aggregate covering obstacle kind counts, capture outcome / visibility counts, identity-change / wake callback counts, visible obstacle count and anonymous dock dy bucket relative to the no-obstacle base frame. No identifier, title, owner, screen, exact coordinate, alpha value, color, text, image or per-window event sequence may enter the model or output.
+4. Enabling must be explicit and QA-only. Disabled mode creates no file and no extra capture/timer. If persisted, use the existing private Application Support boundary with 0700 directory, 0600 no-follow file semantics; add executable privacy guards for field names, permissions and disabled behavior.
+5. Add tests that prove every aggregate input is consumed by the production owner and that the output cannot distinguish a real window. These tests validate instrumentation only; they must not be labeled as proof of the image 3 fix.
+6. Apply `trellis-check`, run targeted tests plus `swift build -c release`, `make test`, docs/privacy gates and diff checks, update AC Evidence Topology with diagnostic-only/manual gaps, commit and freeze the diagnostic SHA.
+7. A fresh read-only formal Reviewer must clear P0/P1/P2 on the exact diagnostic SHA. Only then may a fresh QA Agent build/archive an exact diagnostic candidate.
+8. Main Agent closes the currently running failed candidate, launches the exact diagnostic candidate, performs the user's image 1→2→3 flow, and records only the allowed aggregate plus UI outcome. Repeat enough times to distinguish transient from stable branch behavior.
+9. Replan from the observed branch. Add a production-equivalent baseline regression; only a failing baseline authorizes the smallest behavior change. Any change creates a new SHA and restarts full Review/QA and three-round real-device validation.
 
 ## Review focus
 

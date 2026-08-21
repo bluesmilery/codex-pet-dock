@@ -10,3 +10,5 @@
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-2-2026-08-20.md","reason":"verify monotonic clock unification and wall-jump cadence regressions"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-3-2026-08-20.md","reason":"verify full-hide lifecycle distinction, conservative failure semantics and bounded interpolation"}
 {"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-4-2026-08-21.md","reason":"verify the new campaign closes both evidence-only final Review findings"}
+{"file":".trellis/tasks/08-20-fix-bubble-collapse-smooth-follow/research/break-loop-5-2026-08-21.md","reason":"verify exact-candidate trigger equivalence and prevent another plumbing-only acceptance"}
+{"file":".trellis/spec/macos/documentation-guidelines.md","reason":"verify diagnostic evidence is not reported as real-device acceptance"}
