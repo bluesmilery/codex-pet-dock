@@ -115,3 +115,53 @@
 - 原始 image3 症状（全部消息/控制隐藏后底座保持旧避让间距）仍未修复也未宣称修复：v7 全部 fake 注入（含 T-re12）仍是 plumbing-only；真实 runtime kind/outcome/identity 分支未采样，等待同一候选的真机脱敏 runtime-evidence。
 - 本机显示环境（整数点量化）无法行为性区分 requested 与 owner dy bucket，T-re12a 如实标注 coverage-gap；该缺口由 T-re12b source guard 的 M1 mutation FAIL/PASS 证据承担可失败性，不伪造红证据。
 - 真机 TCC/ScreenCaptureKit、多屏、拖拽体感、Instruments、.app 构建/归档全部未验证、未执行（make app 属 Review 清零后的 QA 阶段）。
+
+---
+
+## v8 编译器优先 runtime evidence sink 候选（Seventh break-loop 控制段）
+
+- 任务：fix-bubble-collapse-smooth-follow（v8，v7 第二轮 Review 两项 P2 构造守卫逃逸后的结构性重做）。
+- 实现基线：`<v8-planning-base>`（worktree 初始 clean、HEAD 精确等于该提交、branch/worktree 唯一）。
+- 本候选性质：仅重做 runtime evidence 构造/布线边界——designated initializer 改 `private`、同文件无地址参数 `production(candidateSHA:flushNow:)` 工厂（sink 固定 PrivateStorage.diagnosticsURL + 证据文件名）、`#if PETDOCK_TESTING` 包裹的同文件 `forTesting` 工厂、Makefile test-ui swiftc 单点 `-DPETDOCK_TESTING`（Package.swift 无 flag）、W0–W6 单一 token/shape/布线 canary 替换 v7 构造 regex 家族，及同步文档与本表。record/flush/snapshot/字段/节流语义与全部产品分类/布局/调度/插值/权限行为零改动。
+- 防线分层声明：访问控制主证据是 release 编译失败（编译器拒绝），不是文本 canary；W0/W6 仅 accidental-drift，W1–W5 仅单一 token/declaration/布线计数。主 admission 必须检查编译器证据与布线 canary，不得只看测试计数。
+
+### 红基线（未修改 v7 树，先于任何 v8 改动，临时改动均完全还原）
+
+| 编号 | 临时改动 | 旧树预期 | 实际结果 |
+| --- | --- | --- | --- |
+| RB-A | RuntimeEvidence.swift 内加未 flag `static func`（接收任意落盘地址参数）并由 main.swift 调用（保留原唯一构造点） | `make test-privacy` 仍全绿（定义文件豁免洞） | 22 passed, exit 0 —— 任意生产 sink 在旧守卫下可表达 |
+| RB-B | 嵌套生产文件加 `RuntimeEvidenceCollector /*rb*/ (` 注释分隔构造 | 同上（注释 trivia 洞） | 22 passed, exit 0 —— 空白归一化对注释分隔形态失效 |
+
+### MA 编译层 mutation（v8 树，`swift build -c release` 必须 FAIL）
+
+| 编号 | 临时改动 | 实际失败 |
+| --- | --- | --- |
+| MA1 | 嵌套生产文件直接 `RuntimeEvidenceCollector(...)` | error: 'RuntimeEvidenceCollector' initializer is inaccessible due to 'private' protection level, exit 1 |
+| MA2 | 嵌套生产文件显式 `.init(...)` | 同上（同文件工厂专属语义对语法变体一次封死）, exit 1 |
+| MA3 | 嵌套生产文件注释分隔 `RuntimeEvidenceCollector /*ma*/ (` | 同上（r2 洞 B 形态不再相关）, exit 1 |
+| MA4 | main.swift `production(...)` 临时加 `outputURL:` 实参 | error: extra argument 'outputURL' in call, exit 1 —— 任意 sink 在生产调用点不可表达 |
+| MA5 | 嵌套生产文件调用 `forTesting(...)` | release: error: type 'RuntimeEvidenceCollector' has no member 'forTesting', exit 1；同时 W1 privacy FAIL（1 failed, 27 passed）|
+
+### MA 布线/shape mutation（`make test-privacy` 必须 FAIL）
+
+| 编号 | 临时改动 | 命中 |
+| --- | --- | --- |
+| MA6 | Package.swift 加 `.define("PETDOCK_TESTING")` | W4 FAIL（1 failed, 27 passed）|
+| MA7-A | Makefile flag 复制到 test-data swiftc 行（两处 flag） | W5 FAIL（flag 计数 != 1）|
+| MA7-B | Makefile flag 从 test-ui 移到 test-data（单处但错位） | W5 FAIL（行不含 tests/main.swift 且不在 test-ui recipe 内）|
+| MA8 | RuntimeEvidence.swift 区域外加落盘地址型参数工厂（洞 A 的 v8 复刻） | W3 identifier-boundary URL allowlist FAIL |
+| MA9 | 删除 `#if PETDOCK_TESTING`/`#endif` 包裹（forTesting 裸露） | W2 + W3 双 FAIL |
+| MA10 | 三态对照（保留 MA1 外部直接构造 probe） | A 正确 private 树：release 编译 FAIL；B 临时去掉 `private`：同一 probe 变为可编译（breach 实证访问控制是主防线）且 W0 FAIL；C 恢复：probe 再次编译 FAIL 且 W0 PASS（28 passed）|
+
+### 行为/回归与门禁证据
+
+- T-re1–T-re12 断言、fixture 与时序零改动；tests/main.swift 仅 9 处构造改为 `forTesting(...)`。test-ui 282/282，连续 3 次全绿（run1/2/3 均 282 passed, 0 failed）。
+- privacy gate：v7 22 passed → v8 28 passed（删 1 个构造 regex 测试，新增 W0–W6 共 7 个；aggregate-only 与既有合同测试原样保留）。
+- 门禁：`git diff --check` 通过；`swift build -c release` 0 warning；`make PYTHON=<project-python> test`（docs-check + test-docs + test-privacy + test-ui + test-data + test-shell）全绿；`task.py validate` 全绿；added-line 隐私扫描按文件名+计数报告，0 残留；无生成产物 staged。
+- 生产工厂真实落盘不在 test-ui 内行为化（不写真实私有目录）：由编译层（无地址参数）+ W6/源审 + QA 真机（`--runtime-evidence=<candidate-full-sha>` 后检查私有 Diagnostics 文件出现且权限正确）分层验证。
+
+### v8 边界声明
+
+- 本候选不改变任何正常用户路径行为：障碍分类、alpha 阈值、candidate identity、capture cadence/generation、scheduler、插值语义、telemetry 字段/flush 行为、权限与 UI 均与基线一致；DockPanel/BubbleVisibility/FollowTickPlan/Follower/obstacle/capture/scheduler/interpolation 零改动。
+- 原始 image3 症状仍未解决也不宣称解决：全部 fake 注入仍是 plumbing-only；等待同一候选真机脱敏 runtime-evidence 采样后再判定分支。
+- 真机 TCC/ScreenCaptureKit、多屏、拖拽体感、Instruments、make app/候选归档全部未验证、未执行（属 Review 清零后的 QA 阶段）。

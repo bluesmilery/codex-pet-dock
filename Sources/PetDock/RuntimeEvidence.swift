@@ -103,7 +103,7 @@ final class RuntimeEvidenceCollector: Sendable {
     /// 连续聚合证据（如每 tick identity 抖动）在窗口内合并写盘的最小间隔。
     static let minimumFlushInterval: TimeInterval = 0.5
 
-    init(
+    private init(
         candidateSHA: String,
         outputURL: URL,
         flushNow: @escaping @Sendable () -> TimeInterval
@@ -112,6 +112,37 @@ final class RuntimeEvidenceCollector: Sendable {
         self.outputURL = outputURL
         self.flushNow = flushNow
     }
+
+    /// 生产工厂：唯一生产构造入口。不接受输出地址参数，sink 固定为
+    /// PetDock 私有 Diagnostics 证据文件；任意生产落盘位置在调用点不可表达。
+    static func production(
+        candidateSHA: String,
+        flushNow: @escaping @Sendable () -> TimeInterval
+    ) -> RuntimeEvidenceCollector {
+        RuntimeEvidenceCollector(
+            candidateSHA: candidateSHA,
+            outputURL: PrivateStorage.diagnosticsURL
+                .appendingPathComponent(outputFileName),
+            flushNow: flushNow
+        )
+    }
+
+    /// 测试专用工厂：仅 test-ui 编译（-DPETDOCK_TESTING）下存在；
+    /// release（SwiftPM，Package.swift 不定义该 flag）词法阶段即排除。
+    /// 测试自定义临时 sink 只能经此入口，release 不可见。
+#if PETDOCK_TESTING
+    static func forTesting(
+        candidateSHA: String,
+        outputURL: URL,
+        flushNow: @escaping @Sendable () -> TimeInterval
+    ) -> RuntimeEvidenceCollector {
+        RuntimeEvidenceCollector(
+            candidateSHA: candidateSHA,
+            outputURL: outputURL,
+            flushNow: flushNow
+        )
+    }
+#endif
 
     // MARK: - 生产 fact owner 调用点（全部为计数，无 IO、无副作用）
 

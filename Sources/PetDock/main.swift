@@ -84,10 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 显式 QA 诊断开关（--runtime-evidence=<sha>）：默认 nil → 全链路 evidence 为 nil，
         // 不创建诊断文件、不增加捕获/计时开销；启用时输出绑定 QA 提供的候选 SHA。
         if let runtimeEvidenceSHA {
-            runtimeEvidence = RuntimeEvidenceCollector(
+            runtimeEvidence = RuntimeEvidenceCollector.production(
                 candidateSHA: runtimeEvidenceSHA,
-                outputURL: PrivateStorage.diagnosticsURL
-                    .appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
                 flushNow: followMonotonicNow
             )
         } else {

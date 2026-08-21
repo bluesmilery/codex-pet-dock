@@ -839,74 +839,114 @@ def test_runtime_evidence_source_is_aggregate_only() -> None:
     assert "PrivateStorage.atomicWrite" in source
 
 
-def test_runtime_evidence_is_disabled_without_explicit_flag() -> None:
-    """The collector must only be constructed from the QA-provided candidate SHA."""
+RUNTIME_EVIDENCE_SWIFT = ROOT / "Sources" / "PetDock" / "RuntimeEvidence.swift"
+
+
+def _runtime_evidence_source_lines() -> list[str]:
+    return RUNTIME_EVIDENCE_SWIFT.read_text(encoding="utf-8").splitlines()
+
+
+def _runtime_evidence_test_flag_region(lines: list[str]) -> tuple[int, int]:
+    opens = [i for i, line in enumerate(lines) if line == "#if PETDOCK_TESTING"]
+    closes = [i for i, line in enumerate(lines) if line == "#endif"]
+    assert len(opens) == 1, opens
+    assert len(closes) == 1, closes
+    assert opens[0] < closes[0]
+    return opens[0], closes[0]
+
+
+# v8 guard layering: access control itself is proven by release compile
+# mutations (external construction and factory misuse fail to compile).  The
+# text tests below are accidental-drift and wiring canaries only, never the
+# primary access-control evidence.
+
+
+def test_w0_runtime_evidence_private_init_shape_is_pinned() -> None:
+    """W0 drift canary: exactly one line-anchored private init declaration."""
+    shapes = [
+        line for line in _runtime_evidence_source_lines()
+        if re.match(r"^\s*private init\(", line)
+    ]
+    assert len(shapes) == 1, shapes
+    assert shapes[0].strip() == "private init("
+
+
+def test_w6_runtime_evidence_production_factory_shape_is_pinned() -> None:
+    """W6 drift canary: exactly one line-anchored production factory declaration."""
+    shapes = [
+        line for line in _runtime_evidence_source_lines()
+        if re.match(r"^\s*static func production\(", line)
+    ]
+    assert len(shapes) == 1, shapes
+    assert shapes[0].strip() == "static func production("
+
+
+def test_w1_test_factory_token_is_confined_to_definition_file() -> None:
+    """W1 single-token absence: forTesting may only appear in RuntimeEvidence.swift."""
     production_root = ROOT / "Sources" / "PetDock"
-    # Only the collector's own definition file at the package root is exempt;
-    # a nested file that merely shares its name is still scanned.
-    assert (production_root / "RuntimeEvidence.swift").is_file()
-
-    # Whitespace-free matching is the anti-bypass core: newlines and alignment
-    # cannot split a token sequence.  The typealias binding regex is bounded by
-    # declaration keywords plus ';'/'{' so an unrelated alias can never be
-    # joined with an unrelated collector annotation further down the file.
-    direct_form = "RuntimeEvidenceCollector("
-    factory_form = "RuntimeEvidenceCollector.init"
-    typealias_binding = re.compile(
-        r"typealias\w+="
-        r"(?:(?!static|func|class|struct|enum|protocol|extension|let|var|import)[^;{}])*?"
-        r"RuntimeEvidenceCollector"
+    definition = RUNTIME_EVIDENCE_SWIFT.read_text(encoding="utf-8")
+    assert "forTesting" in definition
+    offenders = sorted(
+        str(path.relative_to(production_root))
+        for path in production_root.rglob("*.swift")
+        if path != RUNTIME_EVIDENCE_SWIFT and "forTesting" in path.read_text(encoding="utf-8")
     )
-    direct_counts: dict[str, int] = {}
-    violations: list[str] = []
-    for path in production_root.rglob("*.swift"):
-        relative = path.relative_to(production_root)
-        if relative == Path("RuntimeEvidence.swift"):
-            continue
-        source = path.read_text(encoding="utf-8")
-        flat = "".join(source.split())
-        direct = flat.count(direct_form)
-        direct_counts[str(relative)] = direct
+    assert offenders == [], offenders
 
-        file_violations = []
-        if direct and relative != Path("main.swift"):
-            file_violations.append("direct-construction")
-        if factory_form in flat:
-            file_violations.append("constructor-factory-reference")
-        if "RuntimeEvidenceCollector.self" in flat:
-            file_violations.append("metatype")
-        if typealias_binding.search(flat):
-            file_violations.append("typealias-alias")
-        if ":RuntimeEvidenceCollector" in flat and re.search(r"(?<!super)\.init\(", flat):
-            file_violations.append("typed-inferred-init")
-        if file_violations:
-            violations.append(f"{relative}:{','.join(file_violations)}")
 
-    assert not violations, violations
-    assert sum(direct_counts.values()) == 1, direct_counts
-    assert direct_counts.get("main.swift") == 1, direct_counts
+def test_w2_test_factory_lives_in_exactly_one_flag_region() -> None:
+    """W2 wiring: one #if PETDOCK_TESTING/#endif pair, forTesting only inside it."""
+    lines = _runtime_evidence_source_lines()
+    open_index, close_index = _runtime_evidence_test_flag_region(lines)
+    inside = set(range(open_index + 1, close_index))
+    inside_hits = [i for i in sorted(inside) if "forTesting" in lines[i]]
+    outside_hits = [
+        i for i, line in enumerate(lines)
+        if "forTesting" in line and i not in inside
+    ]
+    assert inside_hits, "test factory declaration missing from flag region"
+    assert outside_hits == [], [lines[i] for i in outside_hits]
 
-    main = (production_root / "main.swift").read_text(encoding="utf-8")
-    assert "RuntimeEvidenceFlag.parseCandidateSHA(CommandLine.arguments)" in main
-    assert "init(runtimeEvidenceSHA: String? = nil)" in main
-    # The sole production constructor's outputURL argument must be exactly the
-    # private Diagnostics URL plus the fixed evidence filename.  The assertion
-    # is anchored inside the constructor argument region so a matching
-    # expression anywhere else in main.swift cannot satisfy the sink contract.
-    main_flat = "".join(main.split())
-    assert main_flat.count(direct_form) == 1
-    assert factory_form not in main_flat
-    open_paren = main_flat.index(direct_form) + len(direct_form) - 1
-    depth, index = 1, open_paren + 1
-    while index < len(main_flat) and depth:
-        if main_flat[index] == "(":
-            depth += 1
-        elif main_flat[index] == ")":
-            depth -= 1
-        index += 1
-    assert depth == 0, "unbalanced constructor arguments"
-    arguments = main_flat[open_paren + 1 : index - 1]
-    assert (
-        "outputURL:PrivateStorage.diagnosticsURL"
-        ".appendingPathComponent(RuntimeEvidenceCollector.outputFileName)" in arguments
-    )
+
+def test_w3_url_api_surface_outside_test_region_is_pinned() -> None:
+    """W3 canary: identifier-boundary URL/NSURL/CFURL allowlist outside the region."""
+    lines = _runtime_evidence_source_lines()
+    open_index, close_index = _runtime_evidence_test_flag_region(lines)
+    url_token = re.compile(r"(?<![A-Za-z0-9_])(?:URL|NSURL|CFURL)(?![A-Za-z0-9_])")
+    hits = [
+        line.strip()
+        for index, line in enumerate(lines)
+        if (index < open_index or index > close_index) and url_token.search(line)
+    ]
+    # diagnosticsURL/outputURL are distinct identifiers and never match the
+    # identifier-boundary pattern; only the two type annotations count.
+    assert hits == [
+        "private let outputURL: URL",
+        "outputURL: URL,",
+    ], hits
+
+
+def test_w4_release_package_has_no_testing_flag() -> None:
+    """W4 wiring: the release Package.swift must not define PETDOCK_TESTING."""
+    package = (ROOT / "Package.swift").read_text(encoding="utf-8")
+    assert "PETDOCK_TESTING" not in package
+
+
+def test_w5_makefile_testing_flag_is_wired_once_in_test_ui_recipe() -> None:
+    """W5 wiring: exactly one -DPETDOCK_TESTING on the test-ui swiftc line."""
+    lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    flagged = [i for i, line in enumerate(lines) if "-DPETDOCK_TESTING" in line]
+    assert len(flagged) == 1, flagged
+    line = lines[flagged[0]]
+    assert "swiftc" in line, line
+    assert "tests/main.swift" in line, line
+
+    targets = [
+        i for i, candidate in enumerate(lines)
+        if re.match(r"^[A-Za-z][A-Za-z0-9_-]*:(?:\s|$)", candidate)
+    ]
+    test_ui = [i for i in targets if lines[i].startswith("test-ui:")]
+    assert len(test_ui) == 1, test_ui
+    following = [i for i in targets if i > test_ui[0]]
+    recipe_end = following[0] if following else len(lines)
+    assert test_ui[0] < flagged[0] < recipe_end
