@@ -1553,6 +1553,8 @@ check("T-sch4e reset/空候选/权限false均不残留retry hint",
 // break-loop 4 结论：局部 wall fake 未被 scheduler/probe 消费，不能证明墙钟独立性；
 // cadence 生产契约本就不接受墙钟，因此用可执行 source/API guard 直接扫描
 // cadence-owning 生产文件（scheduler/probe/Follower 时间语义/插值时钟域），
+// 以及生产默认单调时钟 provider 所在的 main.swift（followMonotonicNow 注入上述全部消费者；
+// 该闭包改用墙钟时，注入行为测试不会失败，必须由本 guard 拦截），
 // 出现 Date/CFAbsoluteTime 等墙钟 API 即失败。不为测试向生产添加第二时钟。
 let cadenceGuardRepoRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
@@ -1561,7 +1563,8 @@ let cadenceGuardFiles = [
     "Sources/PetDock/FollowTickPlan.swift",
     "Sources/PetDock/BubbleVisibility.swift",
     "Sources/PetDock/Follower.swift",
-    "Sources/PetDock/DockPanel.swift"
+    "Sources/PetDock/DockPanel.swift",
+    "Sources/PetDock/main.swift"
 ]
 let wallClockAPIPattern = try! NSRegularExpression(
     pattern: "\\bDate\\b|\\bNSDate\\b|CFAbsoluteTime|timeIntervalSince|DispatchWallTime|gettimeofday"
