@@ -26,6 +26,10 @@ Trellis Context Loading Protocol:
 Rules:
 - Read before write. Follow `.trellis/spec/` guidance relevant to the task.
 - Keep changes focused on the requested scope.
+- Persist an AC Evidence Topology Table at `<active-task>/research/ac-evidence-topology.md` and include it in the frozen candidate commit. For every acceptance criterion and user-reported symptom, record the evidence type and approved product-baseline full SHA. For behavior evidence, trace the test trigger/perturbation through the actual production consumer and any callback/scheduler path to the final state owner and observable assertion; for build/docs/static/absence evidence, record the matching direct command or executable guard.
+- A helper, pure-function result, manually invoked downstream callback, or local frame sink cannot by itself prove an end-to-end user symptom. Include at least one regression through the real production composition for each reported symptom.
+- Verify every injected fake, clock, event, failure, and callback is consumed by the system under test. For an absence contract, use behavior tests plus an executable source/API guard; do not mutate an unused forbidden dependency.
+- Run the symptom regression on the approved unmodified product baseline before changing product code. Record the full baseline SHA, command/result, and whether the checkout was clean or carried an exact test-only patch/commit with its changed paths. A fail is a behavior defect; a pass is a coverage-only evidence gap and must not trigger speculative product changes.
 - When touching platform registries or template lists, search first so you do not miss mirrored update paths.
 - If you modify `.trellis/scripts/`, keep `packages/cli/src/templates/trellis/scripts/` in sync.
 - Do not make destructive git changes unless explicitly asked.
@@ -33,5 +37,6 @@ Rules:
 Before finishing, summarize:
 - Files changed
 - Tests/checks run
+- Candidate SHA and persisted AC Evidence Topology Table path, with columns: symptom/AC; evidence type; trigger/perturbation; product-baseline full SHA and test state; baseline result; production consumer/path; final owner/assertion or direct guard; command/result; manual-only gap
 - Remaining risks or follow-ups
 """

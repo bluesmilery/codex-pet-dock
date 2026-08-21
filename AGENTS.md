@@ -46,7 +46,8 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - 派发前必须预检：`luna` + `max` 实际可用、base commit 正确、分支与 worktree 唯一、worktree 初始状态干净，并且不存在负责同一任务的活跃子 Agent；任一项不满足则不启动。
 - 子 Agent 状态统一为 `planning → working → waiting_input / blocked → review → qa → accepted → cleanup`；状态必须由实际活动和交付证据驱动，`idle` 仅表示当前无活动，绝不表示完成。
 - 并发数量不得超过当前运行时上限，主 Agent 占用一个并发槽位；只有任务边界和依赖均独立时才可并行。
-- L2 开发按审查、实现、独立 Review、QA 分阶段进行；实现子 Agent 先写失败测试，再做最小修复。
+- L2 开发按审查、实现、独立 Review、QA 分阶段进行；实现子 Agent 先在批准基线上运行真实症状回归：基线失败才做最小行为修复，基线通过则只补覆盖证据，不制造红测或猜测式修改产品代码。
+- 用户原始症状和每条行为验收标准必须建立“证据拓扑”：`触发/扰动 → 实际生产消费者 → 调度/回调链 → 最终状态所有者的可观察结果`。helper、纯函数或局部 frame sink 测试只能补充，不能替代穿过真实生产组合的回归证据；测试中的 fake/clock/event 必须确实被被测系统消费。构建、文档、静态约束等非行为 AC 仍须逐条提供与其类型匹配的直接证据。
 - 实现者不得 Review 自己的提交；独立 Review 和 QA 必须使用全新子 Agent，并针对明确的完整 commit SHA 验证。
 - Review 子 Agent 只读审查，不直接修复；发现问题后退回该任务的实现子 Agent，修复产生新 commit 后原 Review 结论立即失效，必须对新 SHA 重新 Review。
 - 子 Agent 的 `idle` 状态或口头结论不代表完成；交付必须包含修改文件、关键 diff、执行命令、实际结果、失败项、未验证项和 commit。
@@ -67,6 +68,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 - `swift build -c release` **0 warning** 是硬前提。
 - `make test` 全绿（test-ui + test-data + test-shell）。
+- 正式 Review 前，主 Agent 必须逐条核验 AC 证据、基线来源/结果和适用的最终状态所有者；只核对测试名称、通过数量或 helper 输出不得放行。首轮 Reviewer 必须重新审计同一证据文件并一次性报告断链、未消费 fake、缺失的 absence guard 和仅局部覆盖。
 - 独立 Review 按可操作 P0 / P1 / P2 分类清零。
 - 所有验收结论必须绑定完整 commit SHA；目标 commit 发生变化后，之前的 Review、测试和 QA 结论不得复用。
 - 只有完成独立 Review 和 QA、满足全部门禁并进入 `accepted` 状态的 commit，才可作为集成到 `dev` 的候选。
