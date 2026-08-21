@@ -10,7 +10,7 @@ Delivery Path: L2
 
 - 精确候选 `91a8fe6ba915f84e35f232943fd1c1c3a558063d` 已实现 0.1 秒气泡探测、统一单调时钟、latest-only 调度、macOS 14+ display link、macOS 13 Timer fallback 和基于时长的 stable 判定，并通过当时的自动 Review/QA。
 - 用户真机验证区分出两条状态链：消息卡片仍存在时 expanded→collapsed 能正确复位；控制按钮和全部消息窗口一起隐藏后，底座仍跟随宠物移动，却保持旧避让间距。该候选因此未 accepted、未合入 `dev`，其 Review/QA 结论不可复用。
-- 当前捕获边界用 `BubbleAlphaStats?` 同时表示窗口不在一次成功取得的 ScreenCaptureKit 清单中、清单获取失败和截图失败；所有 `nil` 都保守 `.visible`。这能解释“CGWindowList 几何短暂残留、SCK 已无目标”时旧障碍被持续保活，但仍须先由红测与几何误识别假设区分。
+- 当前捕获边界用 `BubbleAlphaStats?` 同时表示窗口不在一次成功取得的 ScreenCaptureKit 清单中、清单获取失败和截图失败；所有 `nil` 都保守 `.visible`。这能解释“CGWindowList 几何短暂残留、SCK 已无目标”时旧障碍被持续保活，但仍须先由批准基线上的生产链症状证据与几何误识别假设区分。
 - 当前移动路径在每次显示节拍完成布局后直接调用 `NSPanel.setFrame`；高刷新率减少了跳变间隔，但没有位置插值。用户已批准最大 32ms 的显式线性插值拖尾。
 
 ## Requirements
@@ -36,7 +36,7 @@ Delivery Path: L2
 
 ### R3 测试、文档与隐私
 
-- 先增加会在当前实现失败的调度/状态机测试，再实施最小修复。
+- 先在批准产品基线上运行穿过真实生产组合的调度/状态机症状测试；基线失败才实施最小行为修复，基线通过则只补覆盖证据，不制造红测或继续猜测式修改产品代码。
 - `Docs Impact: update`：同步中英文 README 和相关架构/验证文档中 2 Hz、60 Hz、零延迟等已经改变或容易误导的说明。
 - 只在内存处理匿名 alpha 比例；不保存图像、不 OCR、不记录颜色、文字、真实 WID/PID/坐标或会话内容。
 - 所有 UI frame 操作留在主线程；release build 保持 0 warning。

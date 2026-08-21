@@ -10,20 +10,20 @@
 ## Ordered work
 
 1. Dispatch preflight: verify a real `kimi/k3 + max` task payload completes, the existing `codex/fix-bubble-collapse-smooth-follow-v2` worktree is clean/unique at the recorded planning HEAD, Git identity is public, and no duplicate implementation owner is active. A probe-only success is insufficient; failure stops dispatch without model substitution.
-2. Typed-capture red tests in `Tests/main.swift`:
-   - successful `.stats(visible)` for a WID followed by `.targetMissing` while the same CG candidate remains must currently preserve one obstacle/stale avoided Y and fail;
+2. Run typed-capture production-chain tests in `Tests/main.swift` against the approved product baseline before product edits; record the full baseline SHA and exact test-only state. If the baseline already passes, classify this as a coverage-only gap and skip speculative product changes:
+   - successful `.stats(visible)` for a WID followed by `.targetMissing` while the same CG candidate remains must reach the actual panel/frame owner; a baseline failure may preserve one obstacle/stale avoided Y;
    - `.targetMissing` without prior successful stats remains visible;
    - `.unavailable` from TCC/list/screenshot failure remains visible;
    - generation reset, candidate disappearance and in-flight completion cannot revive stale state.
-3. Implement the smallest `BubbleCaptureObservation` (or equivalent) in `BubbleVisibility.swift`: `.stats`, `.targetMissing`, `.unavailable`, plus a per-generation set of successfully observed WIDs. Do not add a generic error hierarchy or expose ScreenCaptureKit objects.
-4. Extend the production `FollowLayoutPass → visibility cache → Geometry → frame sink` test through expanded → authoritative missing → hidden wake; assert final obstacle count zero, base frame, exactly one latest-only follow-up, and repeated hide/show convergence.
-5. Linear-interpolation red tests for a pure `DockFrameInterpolator` in `Tests/main.swift`:
+3. Only if that production-chain baseline test fails because capture states cannot be distinguished, implement the smallest `BubbleCaptureObservation` (or equivalent) in `BubbleVisibility.swift`: `.stats`, `.targetMissing`, `.unavailable`, plus a per-generation set of successfully observed WIDs. Do not add a generic error hierarchy or expose ScreenCaptureKit objects.
+4. Exercise the production composition through `visibility callback → scheduler coalescer → complete FollowLayoutPass → actual DockPanel.frame` for expanded → authoritative missing → hidden wake; assert the real panel reaches the base frame, exactly one latest-only follow-up runs, and repeated hide/show converges. Geometry/helper results may be supplementary assertions only.
+5. Linear-interpolation baseline tests for a pure `DockFrameInterpolator` in `Tests/main.swift`; only a demonstrated baseline failure justifies the behavior change:
    - 0ms, 16ms and 32ms samples lie exactly on the segment and 32ms returns target;
    - 60 Hz, 120 Hz and irregular beats share the same monotonic duration semantics;
    - retarget starts from the current sampled frame, only the latest target survives, and no coordinate overshoots;
    - obstacle/screen/hidden safety transitions snap and reset;
    - continuous moving cadence completes the final segment before the existing 66.7ms stable threshold.
-6. Add `DockFrameInterpolator` within `DockPanel.swift`; keep all state and `setFrame` calls on main. `placeBelow` accepts only the minimal movement intent/time inputs. First placement and non-movement target changes snap; movement retargets over at most 32ms.
+6. Only if the approved baseline demonstrates the interpolation behavior gap, add `DockFrameInterpolator` within `DockPanel.swift`; keep all state and `setFrame` calls on main. `placeBelow` accepts only the minimal movement intent/time inputs. First placement and non-movement target changes snap; movement retargets over at most 32ms.
 7. Wire `main.swift` with existing `Follower.shouldSetFrame` and the shared monotonic clock. Do not change scheduler source selection, cadence, Follower thresholds, obstacle geometry, alpha thresholds or data/UI behavior.
 8. Update only directly affected README/architecture facts. Record actual test counts after execution; do not duplicate candidate artifact instructions.
 9. The implementation owner applies the `trellis-check` skill/checklist, fixes mechanical/spec issues, runs targeted tests and all hard gates, commits with public identity, freezes the full SHA, and reports diff, commands, actual results, failures and unverified runtime items.
@@ -36,7 +36,7 @@
 The review campaign for `ee759ca` → `6e3536a` is closed and invalid. Before producing a new candidate, the same implementation owner must:
 
 1. Cherry-pick the main-session break-loop/spec commit into the implementation branch.
-2. Add red tests for an off-grid wake whose work crosses the nearest stable deadline, plus work exceeding the interval; assert the next tick starts no later than `max(tickStartedAt + stableInterval, workCompletedAt)`. When work overruns, assert exactly one latest-only tick starts immediately after completion without another full-interval delay.
+2. Run baseline-discriminating tests for an off-grid wake whose work crosses the nearest stable deadline, plus work exceeding the interval; assert the next tick starts no later than `max(tickStartedAt + stableInterval, workCompletedAt)`. When work overruns, assert exactly one latest-only tick starts immediately after completion without another full-interval delay. Change product behavior only if the approved baseline fails.
 3. Remove carried stable phase state if no longer necessary; calculate stable delay from each tick's monotonic start and schedule immediate latest-only work when the deadline is already missed.
 4. Add an injectable screen-liveness lifecycle test: active display link → visible window loses screen and screen-change wake fires → display link invalidates and Timer fallback starts → screen restores and display link can be selected again.
 5. Expose only the minimum DockPanel state/event needed: real `panel.screen != nil` eligibility plus screen-change callback. Do not add a general notification abstraction.
@@ -47,7 +47,7 @@ The review campaign for `ee759ca` → `6e3536a` is closed and invalid. Before pr
 The Review campaign ending at `539009e` is closed and invalid. Before producing another candidate, the same implementation owner must:
 
 1. Cherry-pick the main-session second break-loop/spec commit into the implementation branch.
-2. Add red regressions proving the existing `Date()` cadence changes when wall time jumps forward/backward while a separate monotonic clock advances normally; include both premature recapture and delayed retry counterexamples.
+2. Run baseline-discriminating regressions for wall-time jumps while a separate monotonic clock advances normally, and add an executable guard banning wall-clock APIs from cadence owners. Include premature-recapture and delayed-retry counterexamples only if the approved baseline actually exhibits them; an already-passing baseline is a coverage-only gap.
 3. Convert BubbleVisibility cadence state (`lastCapture`, pending retry deadline and comparisons) to the same injected monotonic clock domain used by the scheduler, with production default `ProcessInfo.systemUptime`. Do not bridge wall `Date` into elapsed-time arithmetic.
 4. Keep the absolute due-instant retry contract and dynamic consumption from the prior fix; verify `.020 → .110 → .120` and post-probe overrun `.130` regressions still pass under the unified monotonic clock.
 5. Preserve reset/empty/TCC false/in-flight/generation hygiene, single Timer source, latest-only coalescing, display-link recovery and capture-rate cap. Do not introduce a clock framework or unrelated timestamp refactor.
@@ -58,11 +58,11 @@ The Review campaign ending at `539009e` is closed and invalid. Before producing 
 The Review/QA-approved candidate `91a8fe6ba915f84e35f232943fd1c1c3a558063d` failed real-device acceptance and is not reusable. Before another candidate:
 
 1. Start from `d8538a5` in the clean `codex/fix-bubble-collapse-smooth-follow-v2` worktree. Preflight `kimi/k3 + max`; do not substitute a model if routing is unavailable.
-2. Add a red production-chain regression where a bubble remains in the CG candidate set but a successfully fetched SCK window list no longer contains its WID. Prove the old optional-nil contract preserves one obstacle and stale avoided Y. Add the adjacent failure case where SCK list/capture is unavailable and conservative visible remains required.
-3. If and only if the red test distinguishes the observed states, replace the optional capture payload with the smallest typed outcome (`stats`, `targetMissing`, `unavailable` or equivalent). Only `targetMissing` may classify hidden; retain generation, identity, known-candidate and strict single-flight guards before notification/cache writes.
+2. Run a production-chain regression where a bubble remains in the CG candidate set but a successfully fetched SCK window list no longer contains its WID. The test must traverse hidden notification, coalesced scheduling, a complete tick and the actual `DockPanel.frame`; record whether the approved baseline preserves one obstacle/stale avoided Y or already passes. Add the adjacent failure case where SCK list/capture is unavailable and conservative visible remains required.
+3. If and only if the approved baseline production-chain test fails because it cannot distinguish the observed states, replace the optional capture payload with the smallest typed outcome (`stats`, `targetMissing`, `unavailable` or equivalent). Only `targetMissing` may classify hidden; retain generation, identity, known-candidate and strict single-flight guards before notification/cache writes. If the baseline passes, keep product code unchanged and close only the evidence gap.
 4. Extend the full `FollowLayoutPass → Geometry → frame sink` harness through hidden notification and assert the final obstacle set is empty and the dock returns to base frame. Repeated full hide/show cycles must not accumulate wakes or stale targets.
-5. Use the user-approved 32ms maximum window for red pure tests at 60 Hz, 120 Hz and irregular beats: latest-target retargeting, no overshoot, no history queue, exact final snap, and immediate safety snap. Then wire the smallest main-thread interpolation owner at the DockPanel/frame boundary.
-6. Do not change alpha thresholds, CG obstacle geometry, permissions, capture cadence, scheduler source architecture, or introduce prediction, spring animation, implicit AppKit animation or continuous SCStream unless the discriminating red test disproves the typed-outcome hypothesis and planning is reopened.
+5. Use the user-approved 32ms maximum window for baseline pure tests at 60 Hz, 120 Hz and irregular beats: latest-target retargeting, no overshoot, no history queue, exact final snap, and immediate safety snap. Wire the smallest main-thread interpolation owner at the DockPanel/frame boundary only for a demonstrated behavior gap.
+6. Do not change alpha thresholds, CG obstacle geometry, permissions, capture cadence, scheduler source architecture, or introduce prediction, spring animation, implicit AppKit animation or continuous SCStream unless the production-chain baseline evidence disproves the typed-outcome hypothesis and planning is reopened.
 7. Apply `trellis-check`, rerun every hard gate, freeze a new SHA and begin a new full Review campaign. The prior `d8538a5` Review/QA evidence is invalid after any change.
 
 ## Required validation
