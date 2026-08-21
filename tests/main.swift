@@ -1584,20 +1584,33 @@ check("T-sch4f cadence owner源码无墙钟API（source guard）",
       cadenceGuardReadFiles == cadenceGuardFiles.count && cadenceGuardViolations.isEmpty,
       "read=\(cadenceGuardReadFiles)/\(cadenceGuardFiles.count) violations=\(cadenceGuardViolations.joined(separator: ", "))")
 
-// T-bv39: 生产 FollowLayoutPass 必须贯穿候选分类→probe cache→可见障碍→frame sink。
+// 实际 panel frame 断言 helper：setFrame 有像素对齐，位置容差 < 1.0（AppKit 约定），尺寸精确。
+func dockFrameNear(_ actual: NSRect, _ expected: NSRect) -> Bool {
+    abs(actual.origin.x - expected.origin.x) < 1.0
+        && abs(actual.origin.y - expected.origin.y) < 1.0
+        && actual.width == expected.width
+        && actual.height == expected.height
+}
+
+// T-bv39: 生产 FollowLayoutPass 必须贯穿候选分类→probe cache→可见障碍→实际 DockPanel frame 所有者。
 // 已有 stable one-shot 尚未触发时，visible→hidden wake 应提前执行且只执行一次完整 tick。
 var transitionTime: TimeInterval = 11_000
 var transitionClock: TimeInterval = 0
 let transitionStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(expandedS))
 let transitionTicks = OSAllocatedUnfairLock(initialState: 0)
 let transitionOnMain = OSAllocatedUnfairLock(initialState: false)
-let transitionLayoutY = OSAllocatedUnfairLock<CGFloat?>(initialState: nil)
 let transitionObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
 var transitionTimers: [TestFollowTickTimer] = []
 let transitionCap: BubbleCapturer = { _ in transitionStats.withLock { $0 } }
 var transitionProbe: BubbleVisibilityProbe!
 let transitionMascot = mkw(503, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
 let transitionCandidate = mkw(501, layer: 3, bubbleForCollapse)
+let transitionDock = DockPanel()
+let transitionDockBaseX = petForCollapse.origin.x + (petForCollapse.width - 200) / 2
+let transitionAvoidAppKitFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: transitionDockBaseX, y: avoidY, width: 200, height: 48))
+let transitionBaseAppKitFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: transitionDockBaseX, y: baseY, width: 200, height: 48))
 let transitionScheduler = FollowTickScheduler(
     runTick: {
         transitionTicks.withLock { $0 += 1 }
@@ -1608,12 +1621,13 @@ let transitionScheduler = FollowTickScheduler(
             bubbleProbe: transitionProbe,
             frameSink: { pet, obstacles in
                 transitionObstacleCounts.withLock { $0.append(obstacles.count) }
-                let y = Geometry.safeDockFrame(
-                    pet: pet, avoiding: obstacles,
-                    dockSize: dockSizeBV, gap: gapBV, screen: nil
-                ).frame?.origin.y
-                transitionLayoutY.withLock { $0 = y }
-                return y != nil
+                return transitionDock.placeBelow(
+                    petQuartzRect: pet,
+                    avoiding: obstacles,
+                    visibleScreen: nil,
+                    movementChanged: false,
+                    monotonicNow: transitionTime
+                )
             }
         )
         return placed ? .stable : .hidden
@@ -1644,11 +1658,11 @@ transitionScheduler.start()
 transitionScheduler.requestWake()
 _ = waitPumpingMain { transitionTicks.withLock { $0 } == 1 }
 let stableTimerBeforeWake = transitionTimers.last
-check("T-bv39b 生产布局链初始visible→sink收到1个障碍并避让",
-      transitionLayoutY.withLock { $0 } == avoidY
+check("T-bv39b 生产布局链初始visible→实际panel避让frame",
+      dockFrameNear(transitionDock.frame, transitionAvoidAppKitFrame)
         && transitionObstacleCounts.withLock { $0 } == [1]
         && stableTimerBeforeWake?.repeats == false,
-      "y=\(transitionLayoutY.withLock { $0 } ?? -1) obstacles=\(transitionObstacleCounts.withLock { $0 })")
+      "frame=\(transitionDock.frame) expected=\(transitionAvoidAppKitFrame) obstacles=\(transitionObstacleCounts.withLock { $0 })")
 
 transitionStats.withLock { $0 = .stats(collapsedS) }
 transitionTime = 11_001
@@ -1664,10 +1678,10 @@ check("T-bv39c stable source未到期时wake仅提前执行一次生产tick",
         && transitionOnMain.withLock { $0 }
         && stableTimerBeforeWake?.invalidated == true,
       "ticks=\(transitionTicks.withLock { $0 })")
-check("T-bv39d pet不变+生产链hidden cache→sink无障碍并复位",
-      transitionLayoutY.withLock { $0 } == baseY
+check("T-bv39d pet不变+生产链hidden cache→实际panel无障碍并复位基础frame",
+      dockFrameNear(transitionDock.frame, transitionBaseAppKitFrame)
         && transitionObstacleCounts.withLock { $0 } == [1, 0],
-      "y=\(transitionLayoutY.withLock { $0 } ?? -1) obstacles=\(transitionObstacleCounts.withLock { $0 })")
+      "frame=\(transitionDock.frame) expected=\(transitionBaseAppKitFrame) obstacles=\(transitionObstacleCounts.withLock { $0 })")
 
 transitionTime = 11_002
 transitionProbe.probe(candidates: [transitionCandidate])
@@ -1799,13 +1813,6 @@ let missAvoidAppKitFrame = Geometry.appKitRectFromQuartz(
     CGRect(x: missDockBaseX, y: avoidY, width: 200, height: 48))
 let missBaseAppKitFrame = Geometry.appKitRectFromQuartz(
     CGRect(x: missDockBaseX, y: baseY, width: 200, height: 48))
-func missFrameNear(_ actual: NSRect, _ expected: NSRect) -> Bool {
-    // setFrame 有像素对齐：位置容差 < 1.0（AppKit 约定），尺寸精确。
-    abs(actual.origin.x - expected.origin.x) < 1.0
-        && abs(actual.origin.y - expected.origin.y) < 1.0
-        && actual.width == expected.width
-        && actual.height == expected.height
-}
 var missProbe: BubbleVisibilityProbe!
 let missScheduler = FollowTickScheduler(
     runTick: {
@@ -1853,7 +1860,7 @@ missScheduler.requestWake()
 _ = waitPumpingMain { missTicks.withLock { $0 } == 1 }
 let missStableTimerBeforeWake = missTimers.last
 check("T-bv42b expanded→实际panel避让frame+未到期stable one-shot",
-      missFrameNear(missDock.frame, missAvoidAppKitFrame)
+      dockFrameNear(missDock.frame, missAvoidAppKitFrame)
         && missObstacleCounts.withLock { $0 } == [1]
         && missStableTimerBeforeWake?.repeats == false
         && missStableTimerBeforeWake?.invalidated == false,
@@ -1880,7 +1887,7 @@ check("T-bv42c targetMissing→callback→coalescer仅一次提前完整tick",
         + "activeTimers=\(missActiveTimersAfterWake.count)")
 check("T-bv42d 零障碍+实际DockPanel.frame回基础位",
       missObstacleCounts.withLock { $0 } == [1, 0]
-        && missFrameNear(missDock.frame, missBaseAppKitFrame),
+        && dockFrameNear(missDock.frame, missBaseAppKitFrame),
       "frame=\(missDock.frame) expected=\(missBaseAppKitFrame) obstacles=\(missObstacleCounts.withLock { $0 })")
 
 missTime = 15_002
