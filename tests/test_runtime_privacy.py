@@ -846,7 +846,17 @@ def test_runtime_evidence_is_disabled_without_explicit_flag() -> None:
     # a nested file that merely shares its name is still scanned.
     assert (production_root / "RuntimeEvidence.swift").is_file()
 
-    direct_forms = ("RuntimeEvidenceCollector(", "RuntimeEvidenceCollector.init(")
+    # Whitespace-free matching is the anti-bypass core: newlines and alignment
+    # cannot split a token sequence.  The typealias binding regex is bounded by
+    # declaration keywords plus ';'/'{' so an unrelated alias can never be
+    # joined with an unrelated collector annotation further down the file.
+    direct_form = "RuntimeEvidenceCollector("
+    factory_form = "RuntimeEvidenceCollector.init"
+    typealias_binding = re.compile(
+        r"typealias\w+="
+        r"(?:(?!static|func|class|struct|enum|protocol|extension|let|var|import)[^;{}])*?"
+        r"RuntimeEvidenceCollector"
+    )
     direct_counts: dict[str, int] = {}
     violations: list[str] = []
     for path in production_root.rglob("*.swift"):
@@ -855,18 +865,17 @@ def test_runtime_evidence_is_disabled_without_explicit_flag() -> None:
             continue
         source = path.read_text(encoding="utf-8")
         flat = "".join(source.split())
-        direct = sum(flat.count(form) for form in direct_forms)
+        direct = flat.count(direct_form)
         direct_counts[str(relative)] = direct
 
         file_violations = []
         if direct and relative != Path("main.swift"):
             file_violations.append("direct-construction")
+        if factory_form in flat:
+            file_violations.append("constructor-factory-reference")
         if "RuntimeEvidenceCollector.self" in flat:
             file_violations.append("metatype")
-        if any(
-            "typealias" in line and "RuntimeEvidenceCollector" in line
-            for line in source.splitlines()
-        ):
+        if typealias_binding.search(flat):
             file_violations.append("typealias-alias")
         if ":RuntimeEvidenceCollector" in flat and re.search(r"(?<!super)\.init\(", flat):
             file_violations.append("typed-inferred-init")
@@ -885,9 +894,9 @@ def test_runtime_evidence_is_disabled_without_explicit_flag() -> None:
     # is anchored inside the constructor argument region so a matching
     # expression anywhere else in main.swift cannot satisfy the sink contract.
     main_flat = "".join(main.split())
-    form = next((candidate for candidate in direct_forms if candidate in main_flat), None)
-    assert form is not None
-    open_paren = main_flat.index(form) + len(form) - 1
+    assert main_flat.count(direct_form) == 1
+    assert factory_form not in main_flat
+    open_paren = main_flat.index(direct_form) + len(direct_form) - 1
     depth, index = 1, open_paren + 1
     while index < len(main_flat) and depth:
         if main_flat[index] == "(":
