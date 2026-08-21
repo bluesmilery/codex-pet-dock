@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import stat
 import tempfile
 from datetime import datetime
@@ -840,38 +841,62 @@ def test_runtime_evidence_source_is_aggregate_only() -> None:
 
 def test_runtime_evidence_is_disabled_without_explicit_flag() -> None:
     """The collector must only be constructed from the QA-provided candidate SHA."""
-    sources = [
-        path
-        for path in (ROOT / "Sources" / "PetDock").rglob("*.swift")
-        if path.name != "RuntimeEvidence.swift"
-    ]
-    constructions = {
-        str(path.relative_to(ROOT / "Sources" / "PetDock")): path.read_text(encoding="utf-8").count(
-            "RuntimeEvidenceCollector("
-        )
-        for path in sources
-    }
-    assert sum(constructions.values()) == 1, constructions
-    assert constructions.get("main.swift") == 1
-    main = (ROOT / "Sources" / "PetDock" / "main.swift").read_text(encoding="utf-8")
+    production_root = ROOT / "Sources" / "PetDock"
+    # Only the collector's own definition file at the package root is exempt;
+    # a nested file that merely shares its name is still scanned.
+    assert (production_root / "RuntimeEvidence.swift").is_file()
+
+    direct_forms = ("RuntimeEvidenceCollector(", "RuntimeEvidenceCollector.init(")
+    direct_counts: dict[str, int] = {}
+    violations: list[str] = []
+    for path in production_root.rglob("*.swift"):
+        relative = path.relative_to(production_root)
+        if relative == Path("RuntimeEvidence.swift"):
+            continue
+        source = path.read_text(encoding="utf-8")
+        flat = "".join(source.split())
+        direct = sum(flat.count(form) for form in direct_forms)
+        direct_counts[str(relative)] = direct
+
+        file_violations = []
+        if direct and relative != Path("main.swift"):
+            file_violations.append("direct-construction")
+        if "RuntimeEvidenceCollector.self" in flat:
+            file_violations.append("metatype")
+        if any(
+            "typealias" in line and "RuntimeEvidenceCollector" in line
+            for line in source.splitlines()
+        ):
+            file_violations.append("typealias-alias")
+        if ":RuntimeEvidenceCollector" in flat and re.search(r"(?<!super)\.init\(", flat):
+            file_violations.append("typed-inferred-init")
+        if file_violations:
+            violations.append(f"{relative}:{','.join(file_violations)}")
+
+    assert not violations, violations
+    assert sum(direct_counts.values()) == 1, direct_counts
+    assert direct_counts.get("main.swift") == 1, direct_counts
+
+    main = (production_root / "main.swift").read_text(encoding="utf-8")
     assert "RuntimeEvidenceFlag.parseCandidateSHA(CommandLine.arguments)" in main
     assert "init(runtimeEvidenceSHA: String? = nil)" in main
     # The sole production constructor's outputURL argument must be exactly the
     # private Diagnostics URL plus the fixed evidence filename.  The assertion
     # is anchored inside the constructor argument region so a matching
     # expression anywhere else in main.swift cannot satisfy the sink contract.
-    marker = "RuntimeEvidenceCollector("
-    arguments_start = main.index(marker) + len(marker)
-    depth = 1
-    index = arguments_start
-    while index < len(main) and depth:
-        if main[index] == "(":
+    main_flat = "".join(main.split())
+    form = next((candidate for candidate in direct_forms if candidate in main_flat), None)
+    assert form is not None
+    open_paren = main_flat.index(form) + len(form) - 1
+    depth, index = 1, open_paren + 1
+    while index < len(main_flat) and depth:
+        if main_flat[index] == "(":
             depth += 1
-        elif main[index] == ")":
+        elif main_flat[index] == ")":
             depth -= 1
         index += 1
     assert depth == 0, "unbalanced constructor arguments"
-    arguments = "".join(main[arguments_start : index - 1].split())
+    arguments = main_flat[open_paren + 1 : index - 1]
     assert (
         "outputURL:PrivateStorage.diagnosticsURL"
         ".appendingPathComponent(RuntimeEvidenceCollector.outputFileName)" in arguments
