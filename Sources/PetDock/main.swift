@@ -87,7 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runtimeEvidence = RuntimeEvidenceCollector(
                 candidateSHA: runtimeEvidenceSHA,
                 outputURL: PrivateStorage.diagnosticsURL
-                    .appendingPathComponent(RuntimeEvidenceCollector.outputFileName)
+                    .appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
+                flushNow: followMonotonicNow
             )
         } else {
             runtimeEvidence = nil
@@ -302,7 +303,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         detail.close()
                     }
                     // 诊断聚合只在既有完整布局 tick 末尾评估落盘（无独立计时/捕获；
-                    // collector 内部 dirty 抑制：无新聚合证据的 display tick 不产生写 IO）。
+                    // collector 内部 dirty 抑制 + 最小 0.5s 单调节流：无新证据的 tick 零写，
+                    // 持续 identity 抖动在窗口内合并、到期由下一次既有 tick 写出）。
                     runtimeEvidence?.flush()
                 }
             } else {

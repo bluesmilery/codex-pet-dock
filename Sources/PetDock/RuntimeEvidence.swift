@@ -82,6 +82,8 @@ final class RuntimeEvidenceCollector: Sendable {
         var dockDyUpTo64Count = 0
         var dockDyAbove64Count = 0
         var lastDockDyBucket: DockDyBucket?
+        /// 上次实际尝试写盘的单调时刻（用于 flush 节流；成功与失败都推进）。
+        var lastFlushAt: TimeInterval?
         /// 自上次成功落盘后是否出现新的有意义聚合证据（accepted capture/identity/wake/
         /// layout 状态变化/dy bucket 变化）。tickCount 等单调增长本身不算新证据，
         /// 避免高频无变化 display tick 产生持续写 IO。
@@ -91,10 +93,20 @@ final class RuntimeEvidenceCollector: Sendable {
     internal let lock = OSAllocatedUnfairLock<State>(initialState: State())
     let candidateSHA: String
     private let outputURL: URL
+    /// flush 节流时钟（由调用方注入的单调时钟；本文件不读取任何系统时间源）。
+    private let flushNow: @Sendable () -> TimeInterval
 
-    init(candidateSHA: String, outputURL: URL) {
+    /// 连续聚合证据（如每 tick identity 抖动）在窗口内合并写盘的最小间隔。
+    static let minimumFlushInterval: TimeInterval = 0.5
+
+    init(
+        candidateSHA: String,
+        outputURL: URL,
+        flushNow: @escaping @Sendable () -> TimeInterval
+    ) {
         self.candidateSHA = candidateSHA
         self.outputURL = outputURL
+        self.flushNow = flushNow
     }
 
     // MARK: - 生产 fact owner 调用点（全部为计数，无 IO、无副作用）
@@ -198,12 +210,18 @@ final class RuntimeEvidenceCollector: Sendable {
         }
     }
 
-    /// 原子写入私有 Diagnostics；仅在存在未落盘的新聚合证据时执行。
-    /// 返回是否真正写盘；失败（含 symlink 拒绝）恢复 dirty 以便下一 tick 重试。
+    /// 原子写入私有 Diagnostics；仅在存在未落盘的新聚合证据且距上次尝试 ≥ 0.5s 时执行。
+    /// 被节流的 dirty 向后携带；到期后由既有 tick 的下一次调用最终写出。
+    /// 返回是否真正写盘；失败（含 symlink 拒绝）恢复 dirty，但重试同样受节流。
     @discardableResult
     func flush() -> Bool {
+        let now = flushNow()
         let shouldWrite = lock.withLock { s -> Bool in
             guard s.dirty else { return false }
+            if let lastFlushAt = s.lastFlushAt, now - lastFlushAt < Self.minimumFlushInterval {
+                return false
+            }
+            s.lastFlushAt = now
             s.dirty = false
             return true
         }
