@@ -36,7 +36,7 @@ final class DetailPanel {
         container = NSStackView()
         container.orientation = .vertical
         container.alignment = .leading
-        container.spacing = 0
+        container.spacing = 3
         container.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
         container.translatesAutoresizingMaskIntoConstraints = false
 
@@ -94,6 +94,12 @@ final class DetailPanel {
             capL.widthAnchor.constraint(equalTo: firstCap.widthAnchor).isActive = true
             val.widthAnchor.constraint(equalTo: firstVal.widthAnchor).isActive = true
         }
+        let arrangedHeight = container.arrangedSubviews.reduce(CGFloat.zero) {
+            $0 + $1.fittingSize.height
+        }
+        let gapsHeight = CGFloat(max(0, container.arrangedSubviews.count - 1)) * container.spacing
+        let fittedHeight = container.edgeInsets.top + arrangedHeight + gapsHeight + container.edgeInsets.bottom
+        panel.setContentSize(NSSize(width: 230, height: ceil(fittedHeight)))
     }
 
     var isVisible: Bool { isOpen }
@@ -122,7 +128,7 @@ final class DetailPanel {
         panel.contentView?.layer?.borderColor = accent.cgColor
         for cap in captionLabels {
             cap.textColor = dim
-            cap.font = DockView.font(m.font, caption: true)
+            cap.font = DockView.font(m.font, size: 11, weight: .medium)
         }
         for val in rowValues {
             val.textColor = label
@@ -153,13 +159,13 @@ final class DetailPanel {
         isOpen = false
     }
 
-    /// 紧贴底座下方（dockFrame 为 AppKit 全局坐标），水平与底座对齐。
+    /// 紧贴底座下方（dockFrame 为 AppKit 全局坐标），相对底座水平居中。
     /// 若传入 `visibleScreen`，对 detail 宽度（≥230）做水平 clamp，避免 dock 贴右边缘时
-    /// detail 右侧越出屏幕（detail 宽 max(dockWidth,230) > dock 宽 200，从同一 x 起算会超 30px）。
+    /// detail 越出屏幕。
     func placeBelow(dockFrame: NSRect, visibleScreen: NSScreen? = nil) {
         let h = panel.frame.height
         let w = max(dockFrame.width, 230)
-        var x = dockFrame.origin.x
+        var x = dockFrame.midX - w / 2
         if let v = visibleScreen?.visibleFrame {
             x = min(max(x, v.minX), v.maxX - w)   // 水平 clamp：左不越 visibleMinX，右不越 visibleMaxX-w
         }
@@ -239,7 +245,7 @@ final class DetailPanel {
 
     private static func captionLabel(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)
-        l.font = .systemFont(ofSize: 10)
+        l.font = .systemFont(ofSize: 11, weight: .medium)
         l.textColor = NSColor.white.withAlphaComponent(0.55)
         l.backgroundColor = .clear
         l.alignment = .left

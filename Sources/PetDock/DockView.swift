@@ -30,7 +30,9 @@ final class DockView: NSView {
         leftCol.alignment = .leading
         leftCol.spacing = 0
 
-        let rightCol = NSStackView(views: [tokensCaption, tokensValue])
+        let valueTopSpacer = NSView()
+        let valueBottomSpacer = NSView()
+        let rightCol = NSStackView(views: [tokensCaption, valueTopSpacer, tokensValue, valueBottomSpacer])
         rightCol.orientation = .vertical
         rightCol.alignment = .leading
         rightCol.spacing = 0
@@ -38,11 +40,12 @@ final class DockView: NSView {
         tokensValue.setContentHuggingPriority(.required, for: .vertical)
         rightCol.setContentHuggingPriority(.required, for: .vertical)
         rightCol.setContentCompressionResistancePriority(.required, for: .vertical)
+        valueTopSpacer.heightAnchor.constraint(equalTo: valueBottomSpacer.heightAnchor).isActive = true
 
         let row = NSStackView(views: [leftCol, rightCol])
         row.orientation = .horizontal
         row.distribution = .fillEqually
-        row.alignment = .centerY
+        row.alignment = .top
         // top/bottom 4（原 6）：为 WEEK LEFT 第三行 reset 次级文本让出紧凑空间，不改底座整体尺寸（48）。
         row.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -52,7 +55,7 @@ final class DockView: NSView {
             row.trailingAnchor.constraint(equalTo: trailingAnchor),
             row.topAnchor.constraint(equalTo: topAnchor),
             row.bottomAnchor.constraint(equalTo: bottomAnchor),
-            rightCol.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            rightCol.heightAnchor.constraint(equalTo: leftCol.heightAnchor),
         ])
     }
 

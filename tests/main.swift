@@ -295,27 +295,43 @@ check("T17a DockView frame 200x48", dv.frame.width == 200 && dv.frame.height == 
 check("T17b DockPanel dockWidth=200", DockPanel().dockWidth == 200, "")
 check("T17c DockPanel dockHeight=48", DockPanel().dockHeight == 48, "")
 
-// T18 WEEK TOKENS 内容组中点与底座可用区域中点对齐（允许 AppKit 像素舍入 1pt）
+// T18 两列标题同顶线；WEEK TOKENS 数值在标题下方剩余区域居中（允许 AppKit 像素舍入 1pt）
 dv.layoutForTesting()
 let available = dv.availableContentFrameForTesting
+func descendantTextField(in view: NSView, text: String) -> NSTextField? {
+    if let field = view as? NSTextField, field.stringValue == text { return field }
+    for child in view.subviews {
+        if let field = descendantTextField(in: child, text: text) { return field }
+    }
+    return nil
+}
+func titleRectInDock(_ field: NSTextField?, dock: DockView) -> NSRect {
+    guard let field else { return .zero }
+    let titleBounds = field.cell?.titleRect(forBounds: field.bounds) ?? field.bounds
+    return field.convert(titleBounds, to: dock)
+}
+let leftCapF = titleRectInDock(descendantTextField(in: dv, text: "WEEK LEFT"), dock: dv)
 let tokensCapF = dv.tokensCaptionTitleRectForTesting
 let tokensValF = dv.tokensValueTitleRectForTesting
 let tokensCapIntrinsicH = dv.tokensCaptionIntrinsicSizeForTesting.height
 let tokensValIntrinsicH = dv.tokensValueIntrinsicSizeForTesting.height
-let tokensGap = tokensCapF.minY - tokensValF.maxY
-let compactTokensH = tokensCapF.height + tokensValF.height + max(0, tokensGap)
-let compactTop = max(tokensCapF.maxY, tokensValF.maxY)
-let compactBottom = min(tokensCapF.minY, tokensValF.minY)
-let compactMidY = (compactTop + compactBottom) / 2
-check("T18a WEEK TOKENS 标题与值之间无拉伸大空隙",
-      tokensGap <= 1.0
-        && abs(tokensCapF.height - tokensCapIntrinsicH) < 1.0
+let remainingBelowCaption = NSRect(
+    x: available.minX,
+    y: available.minY,
+    width: available.width,
+    height: max(0, tokensCapF.minY - available.minY)
+)
+check("T18a WEEK LEFT 与 WEEK TOKENS 标题顶线一致",
+      !leftCapF.isEmpty && abs(leftCapF.maxY - tokensCapF.maxY) < 1.0,
+      "left=\(leftCapF) tokens=\(tokensCapF)")
+check("T18b WEEK TOKENS 标题和值保持 intrinsic 高度",
+      abs(tokensCapF.height - tokensCapIntrinsicH) < 1.0
         && abs(tokensValF.height - tokensValIntrinsicH) < 1.0,
-      "gap=\(tokensGap) spacing=\(dv.tokensColumnSpacingForTesting) cap=\(tokensCapF) val=\(tokensValF) capH=\(tokensCapIntrinsicH) valH=\(tokensValIntrinsicH)")
-check("T18b WEEK TOKENS 紧凑组 midY 与可用区 midY 对齐",
-      abs(compactMidY - available.midY) < 1.0,
-      "compactMidY=\(compactMidY) availableMidY=\(available.midY) compactH=\(compactTokensH) compactTop=\(compactTop) compactBottom=\(compactBottom) available=\(available)")
-check("T18c 对齐后底座仍为 200x48",
+      "cap=\(tokensCapF) val=\(tokensValF) capH=\(tokensCapIntrinsicH) valH=\(tokensValIntrinsicH)")
+check("T18c WEEK TOKENS 数值在标题下方剩余区域居中",
+      !remainingBelowCaption.isEmpty && abs(tokensValF.midY - remainingBelowCaption.midY) < 1.0,
+      "valueMidY=\(tokensValF.midY) remainingMidY=\(remainingBelowCaption.midY) remaining=\(remainingBelowCaption)")
+check("T18d 对齐后底座仍为 200x48",
       dv.frame.width == 200 && dv.frame.height == 48, "\(dv.frame.size)")
 print("\n[Dock 几何/reset/placeBelow] \(pass - dkPass) passed, \(fail - dkBase) failed")
 
@@ -966,22 +982,22 @@ if let screen = NSScreen.screens.first {
     check("D3 dock贴左→detail minX>=visibleMinX", df3.minX >= v.minX,
           "detailMinX=\(df3.minX) visibleMinX=\(v.minX)")
 
-    // D4: dock 居中不超界 → detail 与 dock 左对齐（clamp 不改变原对齐；NSPanel 可能像素对齐，容差 1px）
+    // D4: dock 居中不超界 → detail 相对 dock 水平居中（NSPanel 可能像素对齐，容差 1px）
     let dockCenter = NSRect(x: v.midX - 100, y: v.minY + 100, width: 200, height: 48)
     dtPanel.placeBelow(dockFrame: dockCenter, visibleScreen: screen)
     let df4 = dtPanel.frameForTesting
-    check("D4 dock居中→detail与dock左对齐(clamp不改变)", abs(df4.origin.x - dockCenter.origin.x) < 1.0,
-          "detailX=\(df4.origin.x) dockX=\(dockCenter.origin.x)")
+    check("D4 常规空间→detail相对dock水平居中", abs(df4.midX - dockCenter.midX) < 1.0,
+          "detailMidX=\(df4.midX) dockMidX=\(dockCenter.midX)")
 } else {
     check("D2/D3/D4（无屏跳过）", true, "")
 }
 
-// D5: 无 screen → 不 clamp（与原 behavior 一致，x 与 dock 对齐）
+// D5: 无 screen → 不 clamp，但仍相对 dock 水平居中
 let noScrDock = NSRect(x: 5000, y: 5000, width: 200, height: 48)  // 远超常规屏
 dtPanel.placeBelow(dockFrame: noScrDock, visibleScreen: nil)
 let df5 = dtPanel.frameForTesting
-check("D5 无screen→不clamp(x与dock对齐)", abs(df5.origin.x - noScrDock.origin.x) < 0.01,
-      "detailX=\(df5.origin.x) dockX=\(noScrDock.origin.x)")
+check("D5 无screen→不clamp但仍水平居中", abs(df5.midX - noScrDock.midX) < 0.01,
+      "detailMidX=\(df5.midX) dockMidX=\(noScrDock.midX)")
 
 print("\n[DetailPanel clamp] \(pass - dtPass) passed, \(fail - dtBase) failed")
 
@@ -1075,8 +1091,9 @@ for spec in Theme.builtins {
         ("dockBorder", sameCGColor(dockTheme.borderColorForTesting, m.accent.nsColor.cgColor)),
         ("dockCapFont", dockTheme.captionFontForTesting == DockView.font(m.font, caption: true)),
         ("dockValFont", dockTheme.valueFontForTesting == DockView.font(m.font, caption: false)),
-        ("detailCapFont", detailUI.captionFontForTesting == expectedCaptionFont
-            && abs(fontPointSize(detailUI.captionFontForTesting) - 9) < 0.01),
+        ("detailCapFont", detailUI.captionFontForTesting == expectedBodyFont
+            && abs(fontPointSize(detailUI.captionFontForTesting) - 11) < 0.01
+            && fontIsMedium(detailUI.captionFontForTesting)),
         ("detailNoteFont", detailUI.noteFontForTesting == expectedCaptionFont
             && abs(fontPointSize(detailUI.noteFontForTesting) - 9) < 0.01),
         ("detailBodyFont", detailUI.valueFontsForTesting.allSatisfy { abs(fontPointSize($0) - 11) < 0.01 && fontIsMedium($0) }
@@ -1110,17 +1127,27 @@ for spec in Theme.builtins {
     let lowestRowMinY = rowFs.map { $0.minY }.min() ?? 0
     let noteBelowRows = lowestRowMinY >= noteF.maxY - 1.0
     let noteLeftAligned = nearlyEqual(noteF.minX, 12, 1.0)
+    let rowSeparatorSpacing = zip(0..<max(0, rowFs.count - 1), seps).allSatisfy { pair in
+        let (i, sep) = pair
+        return rowFs[i].minY - sep.maxY >= 2.0
+            && sep.minY - rowFs[i + 1].maxY >= 2.0
+    }
+    let topInset = bounds.maxY - (rowFs.first?.maxY ?? bounds.maxY)
+    let bottomInset = noteF.minY - bounds.minY
+    let contentFitted = nearlyEqual(topInset, 8, 1.1)
+        && nearlyEqual(bottomInset, 8, 1.1)
+        && detailUI.frameForTesting.height < 190
     let geo: [(String, Bool)] = [
-        ("size", abs(detailUI.frameForTesting.width - 230) < 0.01 && abs(detailUI.frameForTesting.height - 190) < 0.01),
+        ("size", abs(detailUI.frameForTesting.width - 230) < 0.01 && contentFitted),
         ("capAlign", detailUI.captionAlignmentForTesting == .left && allNearlyEqual(capWs) && allNearlyEqual(capXs) && capXs.allSatisfy { nearlyEqual($0, 12, 1.0) }),
         ("valAlign", detailUI.valueAlignmentForTesting == .right && allNearlyEqual(valWs) && allNearlyEqual(valMaxXs) && valMaxXs.allSatisfy { nearlyEqual($0, 218, 1.0) }),
-        ("seps", detailUI.separatorCountForTesting >= 6),
+        ("seps", detailUI.separatorCountForTesting >= 6 && rowSeparatorSpacing),
         ("inside", rowsInside && noteInside && sepsInside && !overlap && noteBelowRows && !noteF.isEmpty && noteLeftAligned),
     ]
     let geoFailed = geo.filter { !$0.1 }.map { $0.0 }
     if !geoFailed.isEmpty {
         geoOk = false
-        themeExtra += "\(spec.id)-geo:\(geoFailed) "
+        themeExtra += "\(spec.id)-geo:\(geoFailed) frame=\(detailUI.frameForTesting.size) top=\(topInset) bottom=\(bottomInset) "
     }
 }
 check("DU6 标签列左对齐且共享稳定宽度（换肤后）", geoOk, themeExtra)
@@ -1128,6 +1155,8 @@ check("DU7 数值列右对齐且共享稳定宽度（换肤后）", geoOk, theme
 check("DU8 七行之间有克制分隔线（换肤后）", geoOk, themeExtra)
 check("DU9 内容不截断/重叠且底部提示分层（换肤后）", geoOk, themeExtra)
 check("DU10 三主题详情卡与底座共用 ThemeMetrics 并同步换肤", themeOk, themeExtra)
+check("DU11 详情左右文字字号一致", nearlyEqual(fontPointSize(detailUI.captionFontForTesting), fontPointSize(detailUI.valueFontForTesting), 0.01),
+      "caption=\(fontPointSize(detailUI.captionFontForTesting)) value=\(fontPointSize(detailUI.valueFontForTesting))")
 
 print("\n[DetailPanel UI] \(pass - duPass) passed, \(fail - duBase) failed")
 
