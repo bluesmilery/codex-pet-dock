@@ -106,6 +106,8 @@ Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布
 
 v5 的生产组合回归与自动门禁全部通过，但同一候选在真实图 3 full-hide 后仍保留旧 dy。该结果否定了“生产组合通过即可证明症状修复”，尚不能在 `.stats`、`.targetMissing`、`.unavailable`、`.control` bypass 或 candidate identity 反复变化之间确定唯一根因。
 
+当前模型分工为：实现、正式代码 Review、修复复核和自动门禁 QA 使用 `zhipu/glm-5.3 + max`；需要读取屏幕并操作候选 App 的视觉/真机验收使用 `kimi/k3 + max`。两类角色均须全新创建并绑定同一冻结 SHA，任一指定路由不可用即停止，不替换模型。
+
 本轮第一候选仅增加默认关闭的聚合诊断，不改变正常分类和布局策略。诊断边界靠近各自事实 owner：
 
 - `FollowLayoutPass` 汇总本 tick 的 bubble/control 数量与最终 visible obstacle 数量；
@@ -118,4 +120,4 @@ v5 的生产组合回归与自动门禁全部通过，但同一候选在真实�
 
 ## Rollout and rollback
 
-`24b9732` 的最终 Review 结论为 P0=0/P1=0/P2=2，问题均为证据没有穿过生产边界，QA 未启动且旧结论不可复用。用户最新指定本任务后续子 Agent 统一使用全新 `zhipu/glm-5.3 + max`；实施前仍须预检实际模型与 worktree，失败即停派、不换模型。若基线证据暴露范围外根因，或需要预测/持续 SCStream，必须再次回到规划。
+`24b9732` 的最终 Review 结论为 P0=0/P1=0/P2=2，问题均为证据没有穿过生产边界，QA 未启动且旧结论不可复用。当时的统一 `zhipu/glm-5.3 + max` 分工已由 Fifth contract 的“自动角色 zhipu、视觉 QA kimi”取代；派发仍须预检对应模型与 worktree，失败即停派、不换模型。若基线证据暴露范围外根因，或需要预测/持续 SCStream，必须再次回到规划。
