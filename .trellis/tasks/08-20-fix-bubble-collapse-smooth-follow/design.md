@@ -2,7 +2,7 @@
 
 ## Scope and boundaries
 
-本轮从 `d8538a5` 的已审候选继续，只改 BubbleVisibility 捕获结果语义、DockPanel 显式 frame 插值、最小 main 接线、对应 UI 测试和直接受影响的事实文档。现有窗口选择/障碍几何、0.1 秒 cadence、FollowTickScheduler、Follower 稳定判定、数据刷新、主题和权限请求策略保持不变。
+当前 v5 campaign 从精确产品候选 `585b9a4b4e2eef291755d5bc8971294e32feafa9` 继续，先只补墙钟 absence guard 与 `targetMissing` 生产组合证据。只有批准基线上的真实生产链测试失败时，才修改被证明有缺陷的最小生产边界；现有窗口选择/障碍几何、0.1 秒 cadence、FollowTickScheduler、Follower 稳定判定、插值语义、数据刷新、主题和权限请求策略保持不变。
 
 ## Root-cause model
 
@@ -12,7 +12,7 @@
 
 真机复测显示底座在完整隐藏后仍随宠物改变绝对位置，却保持旧避让间距。这使“scheduler 未 tick / frame 完全 stale”的后验概率很低，最强假设是障碍仍被判 visible。当前 `BubbleCapturer` 的 `BubbleAlphaStats?` 把以下状态压成同一个 `nil`：SCK 清单获取失败、清单成功但目标 WID 不存在、截图失败。分类器对所有 `nil` 都返回 visible；若 CGWindowList 在窗口 teardown 后短暂保留旧几何，`knownWids` 仍包含该 WID，旧障碍便不会失效。
 
-实现前先用生产链红测区分该假设与“另一个透明 wrapper/control 仍满足障碍几何”。只有红测证明“同一 CG 候选 + 先成功捕获 + 后续 SCK 清单成功但目标缺失”会保留 stale obstacle，才实施 typed outcome；否则停止并重查候选几何，不改 alpha 阈值。
+实现前先在批准基线上运行生产链症状测试，区分该假设与“另一个透明 wrapper/control 仍满足障碍几何”。只有测试证明“同一 CG 候选 + 先成功捕获 + 后续 SCK 清单成功但目标缺失”仍会保留 stale obstacle，才修改 typed outcome；若基线已经通过，则只补证据，不改 alpha 阈值或其他产品逻辑。
 
 最小捕获契约：
 
@@ -102,4 +102,4 @@ Probe 的 `lastCapture` 与 pending retry 保存为单调 instant。若完整布
 
 ## Rollout and rollback
 
-精确候选 `d8538a5` 的自动 Review/QA 结论因真机回归失效，不可复用。用户已确认 32ms 最大插值窗口。先前 `kimi/k3 + max` 实现载荷因 429 中断；用户随后用最新项目级 `AGENTS.md` 将本任务后续子 Agent 统一切换为全新 `luna + max`。实施前仍须预检实际模型与 worktree，失败即停派、不换模型。若 typed capture 红测不能证明根因，或插值需要预测/持续 SCStream，必须再次回到规划。
+`24b9732` 的最终 Review 结论为 P0=0/P1=0/P2=2，问题均为证据没有穿过生产边界，QA 未启动且旧结论不可复用。用户最新指定本任务后续子 Agent 统一使用全新 `zhipu/glm-5.3 + max`；实施前仍须预检实际模型与 worktree，失败即停派、不换模型。若基线证据暴露范围外根因，或需要预测/持续 SCStream，必须再次回到规划。

@@ -2,12 +2,13 @@
 
 ## Preconditions
 
-- Product base: exact candidate `91a8fe6ba915f84e35f232943fd1c1c3a558063d`; the v2 implementation branch additionally carries planning/spec commits only. Verify the final planning HEAD before dispatch.
+- Product base: exact candidate `585b9a4b4e2eef291755d5bc8971294e32feafa9`, plus the approved break-loop 4 and evidence-topology governance commits in a fresh v5 worktree.
 - Delivery path: L2.
-- Per the latest project-level `AGENTS.md`, every implementation, formal Review, repair recheck and QA sub-agent for this task uses `luna + max`; unavailable routing stops dispatch without model downgrade. Each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
-- Allowed product scope is limited to typed bubble capture outcome/lifecycle invalidation, bounded DockPanel frame interpolation, follow scheduling integration, corresponding UI tests, and directly affected docs.
+- Per the user's latest task-level override, every implementation, formal Review, repair recheck and QA sub-agent for this task uses `zhipu/glm-5.3 + max`; unavailable routing stops dispatch without model downgrade. Each fresh role owns its required isolated branch/worktree and the main session does not edit product code.
+- The controlling instructions for the current campaign are under **Fourth break-loop replan after evidence-only final Review findings**. Earlier ordered-work and break-loop sections are retained as history and do not override the fourth replan.
+- Current product scope is evidence-only first: tests, executable source/API guard, AC Evidence Topology Table, task/spec and directly affected facts. Product code may change only if the unmodified `24b9732` production-chain test fails, and then only at the proven boundary.
 
-## Ordered work
+## Historical ordered work (superseded by the fourth replan)
 
 1. Dispatch preflight: verify the resolved model configuration is available, create a fresh clean and unique implementation worktree from the recorded product baseline plus approved planning/governance commits, confirm the public Git identity, and ensure no duplicate implementation owner is active. Old implementation worktrees remain preserved but are not new-version inputs; failure stops dispatch without model substitution.
 2. Run typed-capture production-chain tests in `Tests/main.swift` against the approved product baseline before product edits; record the full baseline SHA and exact test-only state. If the baseline already passes, classify this as a coverage-only gap and skip speculative product changes:
@@ -27,8 +28,8 @@
 7. Wire `main.swift` with existing `Follower.shouldSetFrame` and the shared monotonic clock. Do not change scheduler source selection, cadence, Follower thresholds, obstacle geometry, alpha thresholds or data/UI behavior.
 8. Update only directly affected README/architecture facts. Record actual test counts after execution; do not duplicate candidate artifact instructions.
 9. The implementation owner applies the `trellis-check` skill/checklist, fixes mechanical/spec issues, runs targeted tests and all hard gates, commits with public identity, freezes the full SHA, and reports diff, commands, actual results, failures and unverified runtime items.
-10. Dispatch a fresh `luna + max` read-only formal Reviewer in a separate clean worktree for the complete diff from `d8538a5`. Batch all P0/P1/P2 findings once to the same implementer. Any substantive finding in the second full Review triggers `trellis-break-loop`; no third Review loop.
-11. Only after Review P0/P1/P2=0, dispatch a fresh `luna + max` QA Agent against the identical SHA. QA reruns hard gates, executes `make app` for the first time in this repair batch, archives a fresh commit-bound candidate, and verifies signature/source without altering TCC or `/Applications`.
+10. Dispatch a fresh `zhipu/glm-5.3 + max` read-only formal Reviewer in a separate clean worktree for the complete current-campaign diff. Batch all P0/P1/P2 findings once to the same implementer. Any substantive finding in the second full Review triggers `trellis-break-loop`; no third Review loop.
+11. Only after Review P0/P1/P2=0, dispatch a fresh `zhipu/glm-5.3 + max` QA Agent against the identical SHA. QA reruns hard gates, executes `make app` for the first time in this repair batch, archives a fresh commit-bound candidate, and verifies signature/source without altering TCC or `/Applications`.
 12. The candidate remains pending until exact-app real-device checks separately cover expanded→collapsed, full message/control hide, 60 Hz drag feel, available high-refresh drag feel, TCC/ScreenCaptureKit and available multi-display conditions. Main integrates only an accepted SHA into local `dev`; no push/tag/release.
 
 ## Break-loop replan after second Review
@@ -83,7 +84,7 @@ Additional targeted tests must cover scheduler coalescing, repeated visibility t
 
 The Review campaign `0e6439b` -> `585b9a4b4e2eef291755d5bc8971294e32feafa9` is closed. Its final Review reported P0=0/P1=0/P2=2, so QA did not start and no third patch/Review round is allowed. Begin a fresh campaign only after approval:
 
-1. Create a fresh Luna Max implementation owner/worktree from `24b9732` plus this break-loop/spec commit. Do not reuse v4 Review or implementation worktrees as a new version.
+1. Create a fresh `zhipu/glm-5.3 + max` implementation owner/worktree from `24b9732` plus the approved break-loop/spec and evidence-topology governance commits. Do not reuse v4 Review or implementation worktrees as a new version.
 2. Replace the ineffective wall-jump fixture with two real evidence edges:
    - keep behavioral scheduler/probe tests driven only by their injected monotonic clock;
    - add an executable source/API guard covering the cadence-owning production files and fail on `Date`, `CFAbsoluteTime`, or equivalent wall-clock inputs used for deadline/throttle/retry logic.

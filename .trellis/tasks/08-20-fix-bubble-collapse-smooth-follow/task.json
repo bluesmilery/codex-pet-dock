@@ -24,10 +24,10 @@
   "notes": "",
   "meta": {
     "delivery_path": "L2",
-    "subagent_model": "gpt-5.6-luna",
+    "subagent_model": "zhipu/glm-5.3",
     "subagent_reasoning": "max",
     "break_loop_count": "4",
-    "review_campaign": "replan_after_24b9732_final_review",
+    "review_campaign": "v5_implementation_approved",
     "replan_base_sha": "585b9a4b4e2eef291755d5bc8971294e32feafa9",
     "interpolation_duration_ms": "32"
   }
