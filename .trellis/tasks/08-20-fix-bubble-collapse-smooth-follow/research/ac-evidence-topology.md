@@ -153,10 +153,23 @@
 | MA9 | 删除 `#if PETDOCK_TESTING`/`#endif` 包裹（forTesting 裸露） | W2 + W3 双 FAIL |
 | MA10 | 三态对照（保留 MA1 外部直接构造 probe） | A 正确 private 树：release 编译 FAIL；B 临时去掉 `private`：同一 probe 变为可编译（breach 实证访问控制是主防线）且 W0 FAIL；C 恢复：probe 再次编译 FAIL 且 W0 PASS（28 passed）|
 
+### v8 formal Review r1 修复批次（W7 declaration inventory canary）
+
+- Review finding（对 `<v8-r1-review-base>`，P0=0/P1=0/P2=1）：W3 只盘点 `URL|NSURL|CFURL` 类型 token；Reviewer 证明定义文件内未 flag 的同文件生产 API 可接收 `String` 并经 `URLComponents` 或 `FileManager.default.temporaryDirectory` 派生任意 sink——release 编译通过且当时 28 项 privacy 全绿。该 SHA 及其全部 Review 结论失效。
+- 修复合同（`tests/test_runtime_privacy.py` 新增 W7，编译层访问控制证据保持主证据、W3 原样保留）：① test flag 区域外完全禁止 `extension` token（含注释/字符串，fail-closed）；② 以行首 declaration shape（可选 attribute + 修饰词组合 + class/struct/enum/protocol/typealias/func/init/deinit/let/var）钉死区域外完整 declaration 清单（53 行，含嵌套局部 declaration——区分作用域即自制 parser，故整文件 fail-closed；任何新增行必须更新清单并走隐私复审）。仅防 accidental drift，不作为语言层证明。
+- Mutation 证据（均 FAIL → 完全撤销 → PASS）：
+
+| 编号 | 临时改动 | release 编译 | privacy 结果 |
+| --- | --- | --- | --- |
+| MA11-A | 文件末尾未 flag `extension` + `static func` 工厂接收 `path: String`，经 `URLComponents(string:)` 派生 sink | Build complete（exit 0）——Reviewer 场景真实可编译，W3 对其完全无感 | 仅 W7 FAIL（1 failed, 28 passed；W3 保持绿）|
+| MA11-B | class 内 `static func` 工厂经 `FileManager.default.temporaryDirectory.appendingPathComponent(path)` 派生 sink，无地址类型注解 | Build complete（exit 0）——真实 drift | 仅 W7 FAIL（1 failed, 28 passed；W3 保持绿）。附带证据：临时注释含英文单词 "URL" 时 W3 亦 FAIL（fail-closed 注释误报方向成立），改写注释后聚焦为 W7-only FAIL |
+
+- 撤销后清洁树 privacy：29 passed（v7 22 → v8 28 → r1 修复后 29）。W0–W6 与既有 MA1–MA10 语义零改动。
+
 ### 行为/回归与门禁证据
 
-- T-re1–T-re12 断言、fixture 与时序零改动；tests/main.swift 仅 9 处构造改为 `forTesting(...)`。test-ui 282/282，连续 3 次全绿（run1/2/3 均 282 passed, 0 failed）。
-- privacy gate：v7 22 passed → v8 28 passed（删 1 个构造 regex 测试，新增 W0–W6 共 7 个；aggregate-only 与既有合同测试原样保留）。
+- T-re1–T-re12 断言、fixture 与时序零改动；tests/main.swift 仅 9 处构造改为 `forTesting(...)`。test-ui 282/282，连续 3 次全绿（run1/2/3 均 282 passed, 0 failed；r1 修复批次复跑同样三连绿）。
+- privacy gate：v7 22 passed → v8 28 passed（删 1 个构造 regex 测试，新增 W0–W6 共 7 个；aggregate-only 与既有合同测试原样保留）→ r1 修复后 29 passed（新增 W7 declaration inventory；W0–W6 原样）。
 - 门禁：`git diff --check` 通过；`swift build -c release` 0 warning；`make PYTHON=<project-python> test`（docs-check + test-docs + test-privacy + test-ui + test-data + test-shell）全绿；`task.py validate` 全绿；added-line 隐私扫描按文件名+计数报告，0 残留；无生成产物 staged。
 - 生产工厂真实落盘不在 test-ui 内行为化（不写真实私有目录）：由编译层（无地址参数）+ W6/源审 + QA 真机（`--runtime-evidence=<candidate-full-sha>` 后检查私有 Diagnostics 文件出现且权限正确）分层验证。
 

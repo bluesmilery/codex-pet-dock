@@ -950,3 +950,96 @@ def test_w5_makefile_testing_flag_is_wired_once_in_test_ui_recipe() -> None:
     following = [i for i in targets if i > test_ui[0]]
     recipe_end = following[0] if following else len(lines)
     assert test_ui[0] < flagged[0] < recipe_end
+
+
+def test_w7_runtime_evidence_declaration_inventory_is_pinned() -> None:
+    """W7 drift inventory: exact declaration set outside the test region.
+
+    Drift inventory only, never language proof: access control stays with the
+    compiler (private init + no-sink production factory).  Because Swift lets
+    a same-file API derive a sink from a String without any URL/NSURL/CFURL
+    token, W3 cannot see shape drift; this canary pins every declaration-shaped
+    line outside the PETDOCK_TESTING region and bans the extension token
+    outright.  Local/nested declaration lines are intentionally included:
+    separating scopes would require a parser, and any new line must fail
+    closed here and go through privacy re-review.  Comment/string false
+    positives are acceptable in the fail-closed direction.
+    """
+    lines = _runtime_evidence_source_lines()
+    open_index, close_index = _runtime_evidence_test_flag_region(lines)
+    production_lines = [
+        line for index, line in enumerate(lines)
+        if index < open_index or index > close_index
+    ]
+    assert "extension" not in "\n".join(production_lines), "extension token outside test region"
+
+    declaration_shape = re.compile(
+        r"^\s*(?:@\w+\s+)?"
+        r"(?:private\s+|internal\s+|fileprivate\s+|public\s+|open\s+|"
+        r"static\s+|final\s+|override\s+)*"
+        r"(?:class|struct|enum|protocol|typealias|func|init|deinit|let|var)\b"
+    )
+    actual = sorted(
+        line.strip()
+        for line in production_lines
+        if declaration_shape.match(line)
+    )
+    expected = sorted([
+        "enum DockDyBucket: String, CaseIterable, Sendable {",
+        "enum RuntimeCaptureOutcomeKind: String, Sendable {",
+        "enum RuntimeEvidenceFlag {",
+        "final class RuntimeEvidenceCollector: Sendable {",
+        "func flush() -> Bool {",
+        "func recordCapture(kind: RuntimeCaptureOutcomeKind, visibility: BubbleVisibility) {",
+        "func recordDockDyBucket(_ bucket: DockDyBucket) {",
+        "func recordIdentityChange() {",
+        "func recordLayoutTick(bubbleObstacles: Int, controlObstacles: Int, visibleObstacles: Int) {",
+        "func recordWakeCallback() {",
+        "func snapshot() -> [String: Any] {",
+        "internal let lock = OSAllocatedUnfairLock<State>(initialState: State())",
+        "internal struct State: Sendable {",
+        "let candidateSHA: String",
+        "let dyBucketChanged = $0.lastDockDyBucket != bucket",
+        "let firstLayoutSample = $0.tickCount == 0",
+        "let layoutStateChanged = $0.lastBubbleObstacleCount != bubbleObstacles",
+        "let now = flushNow()",
+        "let payload = snapshot()",
+        "let sha = String(argument.dropFirst(name.count + 1))",
+        "let shouldWrite = lock.withLock { s -> Bool in",
+        "private init(",
+        "private let flushNow: @Sendable () -> TimeInterval",
+        "private let outputURL: URL",
+        "static func bucket(dy: CGFloat) -> DockDyBucket {",
+        "static func isCandidateSHA(_ value: String) -> Bool {",
+        "static func parseCandidateSHA(_ arguments: [String]) -> String? {",
+        "static func production(",
+        "static let minimumFlushInterval: TimeInterval = 0.5",
+        "static let name = \"--runtime-evidence\"",
+        "static let outputFileName = \"runtime-evidence.json\"",
+        "static let schemaVersion = \"petdock-runtime-evidence/1\"",
+        "var bubbleObstacleTotal = 0",
+        "var captureStatsCount = 0",
+        "var captureTargetMissingCount = 0",
+        "var captureUnavailableCount = 0",
+        "var controlObstacleTotal = 0",
+        "var dirty = false",
+        "var dockDyAbove64Count = 0",
+        "var dockDyBaseCount = 0",
+        "var dockDyUpTo32Count = 0",
+        "var dockDyUpTo64Count = 0",
+        "var identityChangeCount = 0",
+        "var lastBubbleObstacleCount = 0",
+        "var lastControlObstacleCount = 0",
+        "var lastDockDyBucket: DockDyBucket?",
+        "var lastFlushAt: TimeInterval?",
+        "var lastVisibleObstacleCount = 0",
+        "var tickCount = 0",
+        "var visibilityHiddenCount = 0",
+        "var visibilityVisibleCount = 0",
+        "var visibleObstacleTotal = 0",
+        "var wakeCallbackCount = 0",
+    ])
+    assert actual == expected, {
+        "unexpected": sorted(set(actual) - set(expected)),
+        "missing": sorted(set(expected) - set(actual)),
+    }
