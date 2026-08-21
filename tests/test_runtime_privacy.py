@@ -842,11 +842,13 @@ def test_runtime_evidence_is_disabled_without_explicit_flag() -> None:
     """The collector must only be constructed from the QA-provided candidate SHA."""
     sources = [
         path
-        for path in (ROOT / "Sources" / "PetDock").glob("*.swift")
+        for path in (ROOT / "Sources" / "PetDock").rglob("*.swift")
         if path.name != "RuntimeEvidence.swift"
     ]
     constructions = {
-        path.name: path.read_text(encoding="utf-8").count("RuntimeEvidenceCollector(")
+        str(path.relative_to(ROOT / "Sources" / "PetDock")): path.read_text(encoding="utf-8").count(
+            "RuntimeEvidenceCollector("
+        )
         for path in sources
     }
     assert sum(constructions.values()) == 1, constructions
@@ -854,3 +856,10 @@ def test_runtime_evidence_is_disabled_without_explicit_flag() -> None:
     main = (ROOT / "Sources" / "PetDock" / "main.swift").read_text(encoding="utf-8")
     assert "RuntimeEvidenceFlag.parseCandidateSHA(CommandLine.arguments)" in main
     assert "init(runtimeEvidenceSHA: String? = nil)" in main
+    # The sole production constructor must sink exactly into the private
+    # Diagnostics URL plus the fixed evidence filename (whitespace-normalized).
+    whitespace_free = "".join(main.split())
+    assert (
+        "PrivateStorage.diagnosticsURL.appendingPathComponent(RuntimeEvidenceCollector.outputFileName)"
+        in whitespace_free
+    )

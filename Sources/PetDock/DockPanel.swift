@@ -211,8 +211,11 @@ final class DockPanel {
         let shouldAnimate = movementChanged && hasVisibleScreen && !screenChanged && !obstaclesChanged
         let frame = frameInterpolator.update(to: target, at: monotonicNow, movementChanged: shouldAnimate)
         panel.setFrame(frame, display: true)
+        // Owner read-back：setFrame 会做像素对齐等状态修正，请求值不等于最终 owner 状态；
+        // dy telemetry 只消费写回后的真实 panel.frame（插值状态继续使用请求值，布局行为不变）。
+        let ownerFrame = panel.frame
         if let evidence, let bucket = dyBucket(
-            actualAppKitFrame: frame,
+            actualAppKitFrame: ownerFrame,
             pet: pet,
             screen: visibleScreen
         ) {

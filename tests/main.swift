@@ -1906,15 +1906,17 @@ missScheduler.stop()
 
 // T-re1: 启用参数解析（缺省/非法 → 关闭；QA 显式提供候选 SHA → 启用）
 check("T-re1a 无flag→disabled", RuntimeEvidenceFlag.parseCandidateSHA([]) == nil, "")
-check("T-re1b 合法full sha→enabled",
+check("T-re1b 恰好40位小写hex→enabled",
       RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=0123456789abcdef0123456789abcdef01234567"])
         == "0123456789abcdef0123456789abcdef01234567", "")
-check("T-re1c 合法short sha→enabled",
-      RuntimeEvidenceFlag.parseCandidateSHA(["-other", "--runtime-evidence=abcdef0"]) == "abcdef0", "")
-check("T-re1d 非hex/大写/过短/裸flag→disabled",
-      RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=xyz987"]) == nil
-        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=ABCDEF0"]) == nil
-        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=abcdef"]) == nil
+check("T-re1c 缩写与边界长度(7/39/41/64)→disabled",
+      RuntimeEvidenceFlag.parseCandidateSHA(["-other", "--runtime-evidence=abcdef0"]) == nil
+        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "a", count: 39)]) == nil
+        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "a", count: 41)]) == nil
+        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "a", count: 64)]) == nil, "")
+check("T-re1d 大写/非hex/裸flag→disabled",
+      RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "ABCDEF", count: 6) + "ABCD"]) == nil
+        && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence=" + String(repeating: "g", count: 40)]) == nil
         && RuntimeEvidenceFlag.parseCandidateSHA(["--runtime-evidence"]) == nil, "")
 
 // T-re2/T-re3: 白名单序列化、禁止字段、record 不落盘、flush 私有权限
@@ -2201,10 +2203,61 @@ check("T-re9b not-due jitter→identity计1但capture不加（gate前计数）",
       "identity=\(reJAfterNotDue["identityChangeCount"] ?? -1) "
         + "calls=\(reJCaptureCalls.withLock { $0 })")
 
-// T-re10 (review r1 P1 修复): in-flight identity replacement —— 用 semaphore gate 消除竞态：
-// capturer 先 signal entry 并阻塞在 release gate；主线程确定 calls==1 后再注入 identity
-// replacement 并断言 inFlight/single-flight（此刻在途任务被 gate 阻塞，状态确定），
-// 手工释放后收尾。不使用固定 sleep，不读取后台中间态的时序巧合。
+/// Test-only async entry gate（T-re10）：capturer 进入后挂起 continuation，
+/// 不阻塞 cooperative executor 线程；release() 对每个等待者恰好 resume 一次，
+/// 早到的 release 由下一个进入者消费。无 semaphore、无固定 sleep 窗口。
+final class AsyncCaptureEntryGate: @unchecked Sendable {
+    private struct GateState {
+        var enteredCount = 0
+        var pendingReleases = 0
+        var continuation: CheckedContinuation<Void, Never>?
+    }
+    private let lock = OSAllocatedUnfairLock(initialState: GateState())
+
+    var enteredCount: Int { lock.withLock { $0.enteredCount } }
+
+    /// async 侧：记录进入；若 release 已先行到达则立即返回，否则挂起等待恰好一次 resume。
+    func waitAfterEntry() async {
+        let shouldSuspend = lock.withLock { state -> Bool in
+            state.enteredCount += 1
+            if state.pendingReleases > 0 {
+                state.pendingReleases -= 1
+                return false
+            }
+            return true
+        }
+        guard shouldSuspend else { return }
+        await withCheckedContinuation { continuation in
+            let resumeImmediately = lock.withLock { state -> Bool in
+                if state.pendingReleases > 0 {
+                    state.pendingReleases -= 1
+                    return true
+                }
+                state.continuation = continuation
+                return false
+            }
+            if resumeImmediately { continuation.resume() }
+        }
+    }
+
+    /// 主线程侧：释放一个等待中（或下一个进入）的 capturer；continuation 恰好 resume 一次。
+    func release() {
+        let resume: CheckedContinuation<Void, Never>? = lock.withLock { state in
+            if let continuation = state.continuation {
+                state.continuation = nil
+                return continuation
+            }
+            state.pendingReleases += 1
+            return nil
+        }
+        resume?.resume()
+    }
+}
+
+// T-re10 (review r1 P1 修复 / v7 P2-2): in-flight identity replacement ——
+// capturer 进入后经 continuation gate 挂起（不阻塞 executor）；主线程 pump RunLoop
+// 直到 entered/calls/inFlight 状态确定，再注入 identity replacement 并断言
+// single-flight；手工 release 恰好 resume 一次后收尾。不使用固定 sleep 或时序巧合。
 var reITime: TimeInterval = 27_000
 let reIRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-inflight-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
@@ -2214,12 +2267,10 @@ let reICollector = RuntimeEvidenceCollector(
     outputURL: reIRoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
     flushNow: { reITime })
 let reICaptureCalls = OSAllocatedUnfairLock(initialState: 0)
-let reIEntryGate = DispatchSemaphore(value: 0)
-let reIReleaseGate = DispatchSemaphore(value: 0)
+let reIEntryGate = AsyncCaptureEntryGate()
 let reICap: BubbleCapturer = { _ in
     reICaptureCalls.withLock { $0 += 1 }
-    reIEntryGate.signal()
-    reIReleaseGate.wait()
+    await reIEntryGate.waitAfterEntry()
     return .stats(expandedS)
 }
 let reIStable = mkw(591, layer: 3, bubbleForCollapse)
@@ -2228,9 +2279,11 @@ let reIProbe = BubbleVisibilityProbe(
     monotonicNow: { reITime }, canCapture: { true }, capturer: reICap, evidence: reICollector)
 reIProbe.probe(candidates: [reIStable])   // 慢捕获启动，保持 inFlight
 check("T-re10 前置 gate: capturer已进入且calls==1",
-      reIEntryGate.wait(timeout: .now() + 5) == .success
-        && reICaptureCalls.withLock { $0 } == 1
-        && reIProbe.lock.withLock { $0.inFlight },
+      waitPumpingMain {
+          reIEntryGate.enteredCount == 1
+              && reICaptureCalls.withLock { $0 } == 1
+              && reIProbe.lock.withLock { $0.inFlight }
+      },
       "calls=\(reICaptureCalls.withLock { $0 })")
 reITime = 27_000.01
 reIProbe.probe(candidates: [reIJittered]) // in-flight 期间 identity 替换（single-flight 合并）
@@ -2241,7 +2294,7 @@ check("T-re10a in-flight jitter→identity计1且不启动第二捕获",
         && reIProbe.lock.withLock { $0.inFlight },
       "identity=\(reIAfterReplacement["identityChangeCount"] ?? -1) "
         + "calls=\(reICaptureCalls.withLock { $0 })")
-reIReleaseGate.signal()   // 手工释放第一段 in-flight
+reIEntryGate.release()   // 手工释放第一段 in-flight（continuation 恰好 resume 一次）
 _ = waitPumpingMain { !reIProbe.lock.withLock { $0.inFlight } }
 let reIAfterStale = reICollector.snapshot()
 check("T-re10b stale完成被拒绝→outcome/visibility/wake均不计入",
@@ -2253,8 +2306,8 @@ check("T-re10b stale完成被拒绝→outcome/visibility/wake均不计入",
         + "wake=\(reIAfterStale["wakeCallbackCount"] ?? -1)")
 reITime = 27_001   // 新 generation 下 due → 接受的捕获必须计数
 reIProbe.probe(candidates: [reIJittered])
-_ = reIEntryGate.wait(timeout: .now() + 5)
-reIReleaseGate.signal()   // 释放第二段捕获
+_ = waitPumpingMain { reIEntryGate.enteredCount == 2 && reICaptureCalls.withLock { $0 } == 2 }
+reIEntryGate.release()   // 释放第二段捕获
 _ = waitPumpingMain { !reIProbe.lock.withLock { $0.inFlight } }
 let reIAfterAccepted = reICollector.snapshot()
 check("T-re10c 接受的新捕获→outcome/visibility计入且visible不变无wake",
@@ -2335,6 +2388,124 @@ reFCollector.recordIdentityChange()
 reFCollector.recordWakeCallback()
 reFNow += 0.5
 check("T-re11m accepted capture/identity/wake→写盘", reFCollector.flush(), "")
+
+// T-re12 (v7 P2-1): owner read-back —— dy telemetry 只能消费 setFrame 后回读的真实 panel frame。
+// 生产链 FollowTickScheduler → FollowLayoutPass.placeDock → DockPanel.placeBelow → collector；
+// 先用同构探针 panel 实测本显示环境的 setFrame 对齐行为，构造 requested 与 owner 回读跨
+// bucket 边界的 fractional 避让；若环境无法区分（requested == owner），行为断言退化为与
+// owner 回读一致并标注 coverage-gap，可失败性由 T-re12b source guard 承担（不伪造区分证据）。
+let reOTime: TimeInterval = 23_000
+var reOClock: TimeInterval = 0
+let reODock = DockPanel()
+let reOCap: BubbleCapturer = { _ in .stats(expandedS) }
+let reOSHA = "fedcba0987654321fedcba0987654321fedcba09"
+let reORoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-owner-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reORoot)
+let reOCollector = RuntimeEvidenceCollector(
+    candidateSHA: reOSHA,
+    outputURL: reORoot.appendingPathComponent(RuntimeEvidenceCollector.outputFileName),
+    flushNow: { reOTime })
+let reOProbePanel = NSPanel(
+    contentRect: NSRect(x: 0, y: 0, width: 200, height: 48),
+    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+let reOProbeBaseY: CGFloat = 400
+var reOFixtureDy: CGFloat?
+for boundary in [CGFloat(32), 64] {
+    for delta in [CGFloat(0.125), 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.75] {
+        reOProbePanel.setFrame(
+            NSRect(x: 86, y: reOProbeBaseY - (boundary + delta), width: 200, height: 48), display: true)
+        let ownerDy = reOProbeBaseY - reOProbePanel.frame.minY
+        if DockDyBucket.bucket(dy: boundary + delta) != DockDyBucket.bucket(dy: ownerDy) {
+            reOFixtureDy = boundary + delta
+            break
+        }
+    }
+    if reOFixtureDy != nil { break }
+}
+let reOFixtureDyValue = reOFixtureDy ?? 64.125   // 无区分环境也走同一生产链（断言退化为 owner 等值）
+let reOMascot = mkw(583, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
+let reOBubbleRect = CGRect(x: 80, y: petForCollapse.maxY + reOFixtureDyValue - 54, width: 345, height: 54)
+let reOCandidate = mkw(581, layer: 3, reOBubbleRect)
+let reOActiveCandidates = OSAllocatedUnfairLock(initialState: [reOMascot])   // tick A：无障碍基础位
+let reOBaseAppKit = Geometry.appKitRectFromQuartz(CGRect(
+    x: petForCollapse.origin.x + (petForCollapse.width - 200) / 2,
+    y: petForCollapse.maxY + gapBV, width: 200, height: 48))
+let reOAvoidQuartz = Geometry.safeDockFrame(
+    pet: petForCollapse, avoiding: [reOBubbleRect], dockSize: dockSizeBV, gap: gapBV, screen: nil).frame!
+let reOAvoidRequested = Geometry.appKitRectFromQuartz(reOAvoidQuartz)
+var reOProbe: BubbleVisibilityProbe!
+let reOScheduler = FollowTickScheduler(
+    runTick: {
+        FollowLayoutPass.placeDock(
+            mascot: reOMascot,
+            candidates: reOActiveCandidates.withLock { $0 },
+            bubbleProbe: reOProbe,
+            evidence: reOCollector,
+            frameSink: { pet, obstacles in
+                reODock.placeBelow(
+                    petQuartzRect: pet,
+                    avoiding: obstacles,
+                    visibleScreen: nil,
+                    movementChanged: false,
+                    monotonicNow: reOTime,
+                    evidence: reOCollector
+                )
+            }
+        ) ? .stable : .hidden
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { reOClock },
+    makeTimer: { interval, repeats, callback in
+        TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+    }
+)
+reOProbe = BubbleVisibilityProbe(
+    monotonicNow: { reOTime },
+    canCapture: { true },
+    capturer: reOCap,
+    evidence: reOCollector,
+    onVisibilityChange: reOScheduler.visibilityChangeCallback
+)
+reOProbe.probe(candidates: [reOCandidate])   // cache：fractional bubble → visible（plumbing-only）
+_ = waitPumpingMain { !reOProbe.lock.withLock { $0.inFlight } }
+reOScheduler.start()
+reOScheduler.requestWake()
+_ = waitPumpingMain { (reOCollector.snapshot()["tickCount"] as? Int ?? 0) >= 1 }
+let reOBaseOwnerFrame = reODock.frame
+reOActiveCandidates.withLock { $0 = [reOMascot, reOCandidate] }   // tick B：fractional 避让
+reOScheduler.requestWake()
+_ = waitPumpingMain { (reOCollector.snapshot()["tickCount"] as? Int ?? 0) >= 2 }
+let reOAvoidOwnerFrame = reODock.frame
+reOScheduler.stop()
+let reOExpectedOwnerBucket = DockDyBucket.bucket(dy: abs(reOAvoidOwnerFrame.midY - reOBaseAppKit.midY))
+let reOExpectedRequestedBucket = DockDyBucket.bucket(dy: abs(reOAvoidRequested.midY - reOBaseAppKit.midY))
+let reORecorded = reOCollector.snapshot()["lastDockDyBucket"] as? String
+check("T-re12a placeBelow后dy bucket=owner回读frame（非请求frame）",
+      reORecorded == reOExpectedOwnerBucket.rawValue
+        && (reOFixtureDy == nil || reOExpectedOwnerBucket != reOExpectedRequestedBucket),
+      "recorded=\(reORecorded ?? "nil") owner=\(reOExpectedOwnerBucket.rawValue) "
+        + "requested=\(reOExpectedRequestedBucket.rawValue) "
+        + (reOFixtureDy == nil
+           ? "[coverage-gap: requested==owner in this display environment]"
+           : String(format: "fixtureDy=%.3f", reOFixtureDy!)))
+
+// T-re12b (owner-read-back absence guard): DockPanel 源码必须在 setFrame 之后回读 panel.frame，
+// 且只把 owner 回读值传给 dyBucket；mutation 把消费值改回请求 frame 时本 guard FAIL。
+let reOOwnerGuardRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+let reOOwnerSource = try! String(
+    contentsOf: reOOwnerGuardRoot.appendingPathComponent("Sources/PetDock/DockPanel.swift"), encoding: .utf8)
+let reOOwnerFlat = String(reOOwnerSource.filter { !$0.isWhitespace })
+let reOSetFrameRange = reOOwnerFlat.range(of: "panel.setFrame(frame,display:true)")
+let reOReadBackRange = reOOwnerFlat.range(of: "letownerFrame=panel.frame")
+let reOConsumeRange = reOOwnerFlat.range(of: "dyBucket(actualAppKitFrame:ownerFrame")
+check("T-re12b dy telemetry输入=setFrame后panel.frame回读（source guard）",
+      reOSetFrameRange != nil && reOReadBackRange != nil && reOConsumeRange != nil
+        && reOSetFrameRange!.lowerBound < reOReadBackRange!.lowerBound
+        && reOReadBackRange!.lowerBound < reOConsumeRange!.lowerBound,
+      "setFrame=\(reOSetFrameRange != nil) readBack=\(reOReadBackRange != nil) consume=\(reOConsumeRange != nil)")
 
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)

@@ -45,9 +45,10 @@ enum RuntimeEvidenceFlag {
         return nil
     }
 
-    /// git short/full SHA 形态：7–64 个小写十六进制字符。
+    /// 精确候选 provenance 合同：恰好 40 个小写十六进制字符（Git SHA-1 完整对象 SHA）。
+    /// 7 位缩写、39/41/64 位、大写或非 hex 一律拒绝并保持诊断关闭。
     static func isCandidateSHA(_ value: String) -> Bool {
-        (7...64).contains(value.count)
+        value.count == 40
             && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 }
