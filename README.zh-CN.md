@@ -54,6 +54,7 @@
 - **macOS 13（Ventura）或更高**（`SMAppService`、现代 AppKit 需要）。
 - **Apple Silicon（arm64）**：发布包按 arm64 构建。
 - **Swift 5.9+ 工具链**（从源码构建时）。
+- **uv + Python 3.12**：仓库文档门禁和 privacy 测试（`docs-check`、`test-docs`、`test-privacy`）使用该环境。克隆后在仓库根目录执行 `uv sync --dev` 创建 `.venv`；`make` 在该解释器存在时优先使用 `.venv/bin/python`。
 - **Codex 桌面应用**（`ChatGPT.app`）已安装，且已登录（`WEEK LEFT` 依赖 codex 已完成自身鉴权）。
 - **屏幕录制权限**：跨应用窗口枚举的硬前提，详见「隐私与权限」。
 
@@ -77,6 +78,14 @@
 ---
 
 ## 📦 构建、运行与分发
+
+克隆后先同步一次 Python 工具环境：
+
+```sh
+uv sync --dev     # 按 uv.lock 创建 Python 3.12 的 .venv，并安装 pytest
+```
+
+`pyproject.toml`、`uv.lock` 与 `.python-version` 将 Python 钉在 3.12。`.venv/` 仅存在于本机，已被 gitignore。`make docs-check`、`make test-docs`、`make test-privacy` 在 `.venv/bin/python` 存在时使用它，否则回退到 `python3`。
 
 在仓库根目录执行：
 
@@ -163,7 +172,7 @@ make clean-logs   # 清理 Application Support/PetDock 私有运行 / 诊断日�
 
 ## 🧪 测试
 
-全部为纯函数 / fixture 测试，用 `swiftc` 编译真实源码后运行，**不依赖屏幕录制权限、不联网**：
+UI / 数据 / Shell 套件是纯函数 / fixture 测试，用 `swiftc` 编译真实源码后运行。文档门禁和 privacy 测试走 uv 的 Python 3.12 环境。这些命令都不依赖屏幕录制权限，也不联网：
 
 ```sh
 make test-ui      # 宠物识别 + 坐标转换 + 跟随状态机 + 气泡可见性 + 障碍避让（气泡 + 控制按钮）+ 边缘 clamp + 日志轮转 + FollowTickPlanner

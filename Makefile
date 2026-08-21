@@ -1,4 +1,4 @@
-PYTHON ?= python3
+PYTHON := $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; else printf '%s' python3; fi)
 BINARY := .build/release/PetDock
 APP    := build/PetDock.app
 IDENT  := io.github.bluesmilery.codexpetdock

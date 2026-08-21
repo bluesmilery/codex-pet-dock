@@ -55,6 +55,7 @@ Both the dock and the detail card are drawn with native AppKit (`NSPanel` + `NSS
 - **macOS 13 (Ventura) or later** (required by `SMAppService` and modern AppKit).
 - **Apple Silicon (arm64)**: release builds target arm64.
 - **Swift 5.9+ toolchain** (when building from source).
+- **uv + Python 3.12** for the repository docs and privacy gates (`docs-check`, `test-docs`, `test-privacy`). After clone, run `uv sync --dev` at the repository root to create `.venv`; `make` uses `.venv/bin/python` when that interpreter exists.
 - **Codex desktop app** (`ChatGPT.app`) installed and signed in (`WEEK LEFT` depends on codex having completed its own authentication).
 - **Screen-recording permission**: a hard requirement for cross-app window enumeration; see "Privacy & Permissions".
 
@@ -80,6 +81,14 @@ This project follows strict privacy boundaries (pinned by fixture tests):
 ## 📦 Build, Run & Distribution
 
 Run from the repository root:
+
+After cloning, sync the Python tooling environment once:
+
+```sh
+uv sync --dev     # creates .venv with Python 3.12 and pytest from uv.lock
+```
+
+`pyproject.toml`, `uv.lock`, and `.python-version` pin Python 3.12. `.venv/` stays local and is gitignored. `make docs-check`, `make test-docs`, and `make test-privacy` use `.venv/bin/python` when present, otherwise `python3`.
 
 ```sh
 make build        # swift build -c release, produces .build/release/PetDock
@@ -164,7 +173,7 @@ The [documentation catalog](docs/README.md) is the single entry point for archit
 
 ## 🧪 Testing
 
-All tests are pure-function / fixture tests, compiled with `swiftc` against the real sources — **no screen-recording permission and no network required**:
+The UI, data, and shell suites are pure-function / fixture tests, compiled with `swiftc` against the real sources. The docs and privacy gates run through the uv Python 3.12 environment. None of these commands require screen-recording permission or network access:
 
 ```sh
 make test-ui      # pet detection + geometry + follow state machine + bubble visibility + obstacle avoidance (bubble + control button) + clamp + logger rotation + FollowTickPlanner

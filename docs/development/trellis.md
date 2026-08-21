@@ -17,6 +17,8 @@ trellis platforms       # 确认 Codex 为 active
 
 仓库已经包含 Codex 和 Trellis 的跟踪文件；初始化的作用是补齐本机开发者身份及缺失的标准平台文件。不要使用 force 覆盖项目配置。完成后可用 `trellis update --dry-run` 预览 CLI 模板差异，确认没有把本地状态或项目定制加入提交。
 
+文档门禁和 privacy 测试使用仓库根目录的 uv 环境，Python 钉在 3.12。克隆后执行 `uv sync --dev` 创建 `.venv`；`pyproject.toml`、`uv.lock` 与 `.python-version` 纳入版本管理，`.venv/` 保持本机忽略。`make docs-check`、`make test-docs`、`make test-privacy` 在 `.venv/bin/python` 存在时使用它。
+
 ## 三个目录的职责
 
 | 路径 | 标准生成 / 跟踪内容 | 项目定制 |
@@ -70,9 +72,10 @@ trellis update --create-new
 
 每个实现任务在规划和 Review 中填写 `Docs Impact: none | update | new`。行为、接口、数据边界、验证状态或开发流程变化时，必须在同一提交中同步相关文档，不能以 README 重复数字代替测试源码或验收记录。
 
-提交文档或行为变更前运行：
+提交文档或行为变更前，先确认 uv 环境已同步，再运行：
 
 ```sh
+uv sync --dev
 make docs-check
 make test-docs
 ```

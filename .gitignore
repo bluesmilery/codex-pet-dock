@@ -5,3 +5,7 @@ build/
 DerivedData/
 Package.resolved
 dist/
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
