@@ -29,6 +29,18 @@ appKitOriginY = mainScreenHeight - quartzOriginY - height
 - `setFrame` 会做像素对齐：断言位置容差用 `< 1.0` 而非 `< 0.01`（如 836.5 → 836.0）。
 - `setFrame` 的请求值不等于最终 owner 状态。诊断若记录“实际 frame”，必须在 `setFrame` 返回后读取 `panel.frame` / `window.frame`，并用该回读值分类或序列化；请求 frame 只可作为 target，不得冒充 actual。边界测试需构造 requested 与 owner read-back 可跨 bucket 的 fractional fixture，并配 source mutation guard。
 
+### 透明圆角 Panel 的单层绘制契约
+
+- borderless、非 opaque 的圆角 `NSPanel` 在展示前、`applyTheme` 后必须令 `panel.backgroundColor = .clear`；主题背景、圆角和边框只由 `contentView.layer` 绘制。禁止同时给 window 与 content layer 填同一个半透明背景，否则 alpha 会叠加且圆角外出现矩形底色。
+- `applyTheme` 后仍须保持 window clear，并同步更新 content layer 的 `backgroundColor`、`cornerRadius`、`borderWidth`、`borderColor`；换肤只改变视觉 token，不改变几何。
+- 测试至少断言：window `backgroundColor` 的 alpha 接近 0、content layer 背景/alpha 等于主题值，并在每个内置主题 `applyTheme` 后重新执行内容不截断、不重叠和列对齐检查。
+
+```swift
+panel.backgroundColor = .clear
+panel.contentView?.layer?.backgroundColor = metrics.background.nsColor.cgColor
+panel.contentView?.layer?.cornerRadius = metrics.cornerRadius
+```
+
 ## 并发
 
 - `PetDockDataService` 单 serial queue + `refreshInFlight` 合并（`maxConcurrent == 1`）。

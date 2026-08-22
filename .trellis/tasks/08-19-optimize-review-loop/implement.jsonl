@@ -1,0 +1,2 @@
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"Defines the current project quality gates, Docs Impact, TDD, and verification boundaries that the L1/L2 routing must preserve."}
+{"file":".trellis/tasks/08-19-optimize-review-loop/research/affected-surfaces.md","reason":"Maps the tracked Trellis/Codex surfaces, current self-fix conflicts, generated-file boundaries, and validation options."}

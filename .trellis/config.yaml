@@ -30,8 +30,8 @@ max_journal_lines: 2000
 #
 # Accepts: true / false / yes / no / 1 / 0 / on / off (case-insensitive).
 #
-# 本项目设 false：workspace/ journal 含开发者机器身份，不入库，不自动提交。
-session_auto_commit: false
+# 项目共享的 task 与 workspace journal 纳入 Git，由 Trellis 自动记录变更。
+session_auto_commit: true
 
 #-------------------------------------------------------------------------------
 # Task Lifecycle Hooks

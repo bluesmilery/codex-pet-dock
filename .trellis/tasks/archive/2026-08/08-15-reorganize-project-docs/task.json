@@ -1,0 +1,31 @@
+{
+  "id": "reorganize-project-docs",
+  "name": "reorganize-project-docs",
+  "title": "整理项目文档结构与陈旧内容",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "docs",
+  "package": null,
+  "priority": "P2",
+  "creator": "bluesmilery",
+  "assignee": "bluesmilery",
+  "createdAt": "2026-08-15",
+  "completedAt": "2026-08-17",
+  "branch": "codex/reorganize-project-docs-v2-0817",
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_path": "<worktree>/.codex/worktrees/codex-pet-dock-reorganize-project-docs-v2-0817",
+    "accepted_commit": "42ddf19dc47a90db6bfd3eb07553777daa76d2a6",
+    "review_status": "approved",
+    "qa_status": "accepted"
+  }
+}

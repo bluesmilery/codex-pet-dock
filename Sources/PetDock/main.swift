@@ -131,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let ts = themeStore { externalThemes = ts.loadAll() }
 
         dock.applyTheme(resolveTheme(id: settings.themeID).metrics)
+        detail.applyTheme(resolveTheme(id: settings.themeID).metrics)
 
         statusBar = StatusBar(
             themes: allThemes,
@@ -155,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func selectTheme(id: String) {
         settings.themeID = id
         dock.applyTheme(resolveTheme(id: id).metrics)
+        detail.applyTheme(resolveTheme(id: id).metrics)
         statusBar?.updateThemeSelection(id)
         log("theme select \(id)")
     }

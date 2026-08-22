@@ -229,6 +229,8 @@ Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-bef
 
 Sub-agent dispatch protocol applies to all platforms and all sub-agents, including native Codex `SubagentStart` context injection with child-side pull fallback, class-2 Gemini/Qoder/Copilot/Reasonix/Trae/Grok/Kimi Code, hook-backed ZCode/Snow, and `trellis-research`: every dispatch prompt starts with `Active task: <task path from task.py current>` before role-specific instructions. On Grok Build, use `spawn_subagent` with `subagent_type` set to the Trellis agent name (e.g. `trellis-implement`). On Kimi Code, dispatch the built-in `coder` / `explore` sub-agent with the matching `.kimi-code/skills/trellis-<role>/SKILL.md` instructions.
 
+Resolve every sub-agent's model configuration before dispatch: explicit model or reasoning settings in the task assignment or approved task plan take precedence; an unspecified model defaults to `luna`, and an unspecified reasoning level defaults to `max`. Preflight the resolved configuration and stop with an explicit report if it is unavailable; never downgrade or substitute it silently.
+
 [workflow-state:in_progress]
 First classify the current request. An L0 status/read-only request inside an active task is answered directly without advancing task status or entering the execution loop. Otherwise read `Delivery Path` from `prd.md`; missing or unclear path fails closed to L2.
 L1: the main session edits the approved non-executable governance/documentation scope directly, runs targeted static checks, then requests one fresh read-only consistency check using the resolved model configuration. No implementation/fix/QA worktree loop; batch any findings once, and escalate to L2 if runtime or executable impact appears.
@@ -636,6 +638,8 @@ Update the docs under `.trellis/spec/` accordingly. Even if the conclusion is "n
 The AI drives a batched commit of this task's code changes so `/finish-work` can run cleanly afterwards. Goal: produce work commits FIRST, then bookkeeping (archive + journal) commits land after — never interleaved.
 
 L2 candidate commits may already exist because formal Review and QA are bound to a full SHA. Do not rewrite or amend an accepted candidate here. Instead, verify that the accepted SHA is still current and present the remaining integration/bookkeeping action in the one-shot plan. L1 normally reaches this step with an uncommitted reviewed diff.
+
+Development sessions land an accepted SHA onto its `feature/<slug>` parking branch and do not merge into `dev`. `feature/` branches stay isolated from each other. A dedicated integration session later merges parked `feature/` branches serially onto current local `dev` so that feature's accepted SHA becomes an ancestor. Do not rebase, cherry-pick-rewrite, `reset --hard`, or force-push `dev` to clear conflicts. Conflict resolution must preserve both sides' already-accepted behavior and evidence. Never use ours/theirs, take only one side of a file or logic block, drop the other side's tests/docs/evidence, or discard an accepted behavior to make the merge green. Formatting or whitespace-only conflicts may follow current `dev` style. If both sides cannot hold at once, stop and report a semantic conflict. Any resulting merge SHA is a new candidate; previous Review, tests, QA, and evidence conclusions cannot be reused. Full contract: project `AGENTS.md` section 1.
 
 **Step-by-step**:
 

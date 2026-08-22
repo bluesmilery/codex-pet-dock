@@ -2,7 +2,7 @@
 
 本项目使用 Trellis **0.6.14** 管理开发流程。当前仓库的活动平台是 **Codex**：`trellis platforms` 应显示 Codex，并指向 `.codex`；Codex 平台同时使用共享的 `.agents/skills/`。
 
-本文只说明项目中已跟踪的 Trellis 结构、项目定制点和本地状态。`.claude/` 是 Trellis 支持的其他可选平台，不是本项目当前必需的平台，也不应被当作仓库配置提交。
+本文只说明项目中已跟踪的 Trellis 结构、项目定制点和本地状态。当前项目只维护 Codex 平台；未实际启用其他平台时，不生成或维护对应的平台文件。
 
 ## 新克隆初始化
 
@@ -16,6 +16,8 @@ trellis platforms       # 确认 Codex 为 active
 ```
 
 仓库已经包含 Codex 和 Trellis 的跟踪文件；初始化的作用是补齐本机开发者身份及缺失的标准平台文件。不要使用 force 覆盖项目配置。完成后可用 `trellis update --dry-run` 预览 CLI 模板差异，确认没有把本地状态或项目定制加入提交。
+
+文档门禁和 privacy 测试使用仓库根目录的 uv 环境，Python 钉在 3.12。克隆后执行 `uv sync --dev` 创建 `.venv`；`pyproject.toml`、`uv.lock` 与 `.python-version` 纳入版本管理，`.venv/` 保持本机忽略。`make docs-check`、`make test-docs`、`make test-privacy` 在 `.venv/bin/python` 存在时使用它。
 
 ## 三个目录的职责
 
@@ -41,6 +43,14 @@ L2 中，原实现负责人在自己的 worktree 内运行 `trellis-check` **ski
 
 `AGENTS.md` 保存上述项目持久边界，`.trellis/workflow.md` 保存可被 Hook 注入的详细阶段和状态提示；两者语义必须保持一致。
 
+## 分支分层与合入本地 `dev`
+
+开发会话只使用 `codex/...` 工作分支和独立 worktree。一个功能开发完成并 `accepted` 后，把该 accepted SHA 停放到对应的 `feature/<slug>` 分支，然后结束开发会话；不要在开发会话里直接合入 `dev`。`feature/` 分支彼此独立停放，不互相 merge 或 rebase。这不表示它们改动的文件一定不相交。
+
+合入本地 `dev` 只在专门的合入会话中进行：把已停放的 `feature/` 串行 merge 到当前 `dev`，一次只合一条，并使该 feature 的 accepted SHA 成为 `dev` 祖先。不得 rebase / cherry-pick 改写已 accepted 候选，也不得对 `dev` 使用 `reset --hard` 或 force-push 消除冲突。
+
+合入 `dev` 的冲突解决必须保留双方已经验收的功能和行为合同，禁止覆盖解决。禁止 `--ours/--theirs`、`-X ours/-X theirs`、整文件或整段逻辑只取一边，以及删除另一方的测试、文档或验收证据来让合并变绿。仅格式或空白冲突可按当前 `dev` 风格统一。双方语义不能同时成立时停止并报告，不得为了合入丢弃任一方已验收行为。合入产生的 merge SHA 一律是新候选；旧 SHA 的 Review、测试、QA 和证据结论均不得复用。完整执行约束以项目 `AGENTS.md` 第 1 节为准。
+
 ## 本地 workflow 升级合并
 
 升级 Trellis CLI 后，不要直接覆盖项目 workflow。先预览，再生成 sidecar 并人工合并：
@@ -54,15 +64,15 @@ trellis update --create-new
 
 ## 本地状态与忽略边界
 
-下列内容由初始化或任务流程在本机生成，不属于项目配置：
+下列内容由初始化或任务流程在本机生成，属于本机 runtime/身份状态，不纳入项目共享配置：
 
 - `.trellis/.developer`：当前开发者身份；
-- `.trellis/workspace/<developer>/`：journal、session 记录等开发者机器状态；
 - `.trellis/.runtime/`、`.trellis/.current-task`：会话与当前任务指针；
-- `.trellis/spec/backend/`、`.trellis/spec/frontend/`：CLI 可能重新生成的默认 web spec，本项目只跟踪 `spec/macos/` 与 `spec/guides/`；
-- 根目录 `.claude/`（若某贡献者启用其他平台）：由根 `.gitignore` 忽略，不能提交。
+- 临时文件、备份目录和 Python cache。
 
-上述目录已由仓库的 Trellis / Git ignore 规则覆盖。`.trellis/tasks/` 是任务工作流产生的本地任务资料，当前不属于本次文档候选；它可能以未跟踪状态出现，提交时不要将其加入候选。项目配置、源码和公开文档仍按正常 Git 跟踪。
+上述本机状态由仓库的 Trellis / Git ignore 规则覆盖。`.trellis/spec/`、`.trellis/tasks/`、`.trellis/workspace/`、`workflow.md`、`config.yaml` 和脚本是项目共享资料，按正常 Git 管理。纳入候选前必须做内容级隐私扫描：真实本机路径、用户名和其他本机标识替换为 `<user>`、`<repo>`、`<worktree>` 等稳定占位符，且不得包含本机 auth/token/邮箱/认证数据或会话正文；公开 Git 身份可以保留。扫描只报告文件名和计数，不回显疑似秘密原值。
+
+`config.yaml` 的 `session_auto_commit: true` 允许 Trellis 自动记录 task archive 与 workspace journal；自动提交不绕过上述脱敏和审查。官方 `.trellis/.gitignore` 只负责本机身份、runtime、临时和缓存路径，不能用目录忽略代替内容治理。
 
 ## 文档门禁与 Docs Impact
 
@@ -70,9 +80,10 @@ trellis update --create-new
 
 每个实现任务在规划和 Review 中填写 `Docs Impact: none | update | new`。行为、接口、数据边界、验证状态或开发流程变化时，必须在同一提交中同步相关文档，不能以 README 重复数字代替测试源码或验收记录。
 
-提交文档或行为变更前运行：
+提交文档或行为变更前，先确认 uv 环境已同步，再运行：
 
 ```sh
+uv sync --dev
 make docs-check
 make test-docs
 ```
@@ -87,7 +98,7 @@ trellis update --dry-run
 git status --short
 ```
 
-检查结果应显示 Codex active，且工作树只包含本次任务明确允许的文件。不要提交开发者身份、session/journal、runtime 指针或平台私有配置；不要把本地认证文件、会话正文或用户路径写入文档。
+检查结果应显示 Codex active，且工作树只包含本次任务明确允许的文件。不要提交 `.trellis/.developer`、`.trellis/.current-task`、`.trellis/.runtime/` 或平台私有配置；task/workspace 共享记录应纳入审查后的候选。不要把本地认证文件、会话正文或用户路径写入被跟踪内容。
 
 ## Runtime 隐私边界
 

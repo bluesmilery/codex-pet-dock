@@ -1,0 +1,4 @@
+{"file":".trellis/spec/macos/privacy-guidelines.md","reason":"Defines the project's privacy boundary and must be converted from directory exclusion to content-level governance."}
+{"file":".trellis/spec/macos/documentation-guidelines.md","reason":"Defines Docs Impact and documentation synchronization requirements for this governance change."}
+{"file":".trellis/spec/macos/quality-guidelines.md","reason":"Defines the release build, test, warning, Review, and QA quality gates required for this L2 task."}
+{"file":".trellis/tasks/08-20-restore-official-trellis-git-policy/research/current-state.md","reason":"Records the verified Trellis 0.6.14 baseline, current repository deviations, and migration constraints."}

@@ -5,8 +5,7 @@ build/
 DerivedData/
 Package.resolved
 dist/
-
-# Trellis .claude/ 平台文件（agents/commands/hooks/skills/settings）由各贡献者
-# 本地 `trellis init --claude -u <name>` 生成，永不上传 GitHub（项目规则）。
-# AO 本地 hooks（settings.local.json 等）亦在此目录，整目录忽略。
-.claude/
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc

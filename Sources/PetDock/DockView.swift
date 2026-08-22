@@ -30,13 +30,22 @@ final class DockView: NSView {
         leftCol.alignment = .leading
         leftCol.spacing = 0
 
-        let rightCol = NSStackView(views: [tokensCaption, tokensValue])
+        let valueTopSpacer = NSView()
+        let valueBottomSpacer = NSView()
+        let rightCol = NSStackView(views: [tokensCaption, valueTopSpacer, tokensValue, valueBottomSpacer])
         rightCol.orientation = .vertical
         rightCol.alignment = .leading
+        rightCol.spacing = 0
+        tokensCaption.setContentHuggingPriority(.required, for: .vertical)
+        tokensValue.setContentHuggingPriority(.required, for: .vertical)
+        rightCol.setContentHuggingPriority(.required, for: .vertical)
+        rightCol.setContentCompressionResistancePriority(.required, for: .vertical)
+        valueTopSpacer.heightAnchor.constraint(equalTo: valueBottomSpacer.heightAnchor).isActive = true
 
         let row = NSStackView(views: [leftCol, rightCol])
         row.orientation = .horizontal
         row.distribution = .fillEqually
+        row.alignment = .top
         // top/bottom 4（原 6）：为 WEEK LEFT 第三行 reset 次级文本让出紧凑空间，不改底座整体尺寸（48）。
         row.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -46,6 +55,7 @@ final class DockView: NSView {
             row.trailingAnchor.constraint(equalTo: trailingAnchor),
             row.topAnchor.constraint(equalTo: topAnchor),
             row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            rightCol.heightAnchor.constraint(equalTo: leftCol.heightAnchor),
         ])
     }
 
@@ -84,12 +94,55 @@ final class DockView: NSView {
     /// 仅供测试：WEEK LEFT 到期时间文本。
     var resetTextForTesting: String { leftReset.stringValue }
 
+    /// 仅供测试：强制完成 Auto Layout，便于读取内容组几何。
+    func layoutForTesting() { layoutSubtreeIfNeeded() }
+
+    var tokensCaptionIntrinsicSizeForTesting: NSSize { tokensCaption.intrinsicContentSize }
+    var tokensValueIntrinsicSizeForTesting: NSSize { tokensValue.intrinsicContentSize }
+    var tokensColumnSpacingForTesting: CGFloat {
+        (tokensCaption.superview as? NSStackView)?.spacing ?? 0
+    }
+
+    /// 仅供测试：NSTextFieldCell 实际绘制标题的矩形（底座坐标），不受拉伸 frame 放大。
+    var tokensCaptionTitleRectForTesting: NSRect {
+        titleRectForTesting(tokensCaption)
+    }
+    var tokensValueTitleRectForTesting: NSRect {
+        titleRectForTesting(tokensValue)
+    }
+
+    private func titleRectForTesting(_ field: NSTextField) -> NSRect {
+        layoutForTesting()
+        let titleBounds = field.cell?.titleRect(forBounds: field.bounds) ?? field.bounds
+        return field.convert(titleBounds, to: self)
+    }
+
+    /// 仅供测试：底座扣除内容 stack edgeInsets 后的可用区域。
+    var availableContentFrameForTesting: NSRect {
+        layoutForTesting()
+        let insets = (subviews.compactMap { $0 as? NSStackView }.first)?.edgeInsets ?? NSEdgeInsets()
+        return NSRect(
+            x: bounds.minX + insets.left,
+            y: bounds.minY + insets.bottom,
+            width: max(0, bounds.width - insets.left - insets.right),
+            height: max(0, bounds.height - insets.top - insets.bottom)
+        )
+    }
+
+    var backgroundColorForTesting: CGColor? { layer?.backgroundColor }
+    var borderColorForTesting: CGColor? { layer?.borderColor }
+    var captionFontForTesting: NSFont? { leftCaption.font }
+    var valueFontForTesting: NSFont? { leftValue.font }
+
     // MARK: - 工厂
 
     /// 主题字体 token → 系统字体（system/rounded/monospace），caption 与 value 区分字号/字重。
-    private static func font(_ token: ThemeFont, caption: Bool) -> NSFont {
-        let size: CGFloat = caption ? 9 : 15
-        let weight: NSFont.Weight = caption ? .medium : .semibold
+    static func font(_ token: ThemeFont, caption: Bool) -> NSFont {
+        font(token, size: caption ? 9 : 15, weight: caption ? .medium : .semibold)
+    }
+
+    /// 主题字体 token → 指定字号/字重的系统字体。详情表体复用同一 token，但用更紧凑的 11pt medium。
+    static func font(_ token: ThemeFont, size: CGFloat, weight: NSFont.Weight) -> NSFont {
         switch token {
         case .system:     return .systemFont(ofSize: size, weight: weight)
         case .monospace:  return .monospacedSystemFont(ofSize: size, weight: weight)
