@@ -639,6 +639,8 @@ The AI drives a batched commit of this task's code changes so `/finish-work` can
 
 L2 candidate commits may already exist because formal Review and QA are bound to a full SHA. Do not rewrite or amend an accepted candidate here. Instead, verify that the accepted SHA is still current and present the remaining integration/bookkeeping action in the one-shot plan. L1 normally reaches this step with an uncommitted reviewed diff.
 
+Development sessions land an accepted SHA onto its `feature/<slug>` parking branch and do not merge into `dev`. `feature/` branches stay isolated from each other. A dedicated integration session later merges parked `feature/` branches serially onto current local `dev` so that feature's accepted SHA becomes an ancestor. Do not rebase, cherry-pick-rewrite, `reset --hard`, or force-push `dev` to clear conflicts. Conflict resolution must preserve both sides' already-accepted behavior and evidence. Never use ours/theirs, take only one side of a file or logic block, drop the other side's tests/docs/evidence, or discard an accepted behavior to make the merge green. Formatting or whitespace-only conflicts may follow current `dev` style. If both sides cannot hold at once, stop and report a semantic conflict. Any resulting merge SHA is a new candidate; previous Review, tests, QA, and evidence conclusions cannot be reused. Full contract: project `AGENTS.md` section 1.
+
 **Step-by-step**:
 
 1. **Inspect dirty state**:

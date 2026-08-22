@@ -91,6 +91,8 @@
 
 ## Git
 
-- 特性分支从 `dev` 创建；不 push `main`、不建 tag/release 除非用户明确确认。
+- 开发会话使用 `codex/...` 工作分支和独立 worktree；一个已完成功能停放到一条 `feature/<slug>` 分支。`codex/` 从当时的 `dev` 或该功能已有 `feature/` 创建。不 push `main`、不建 tag/release 除非用户明确确认。
 - 公开身份 `bluesmilery <19263500+bluesmilery@users.noreply.github.com>`，commit body **不带 Co-Authored-By**。
 - 每个逻辑批次独立提交，conventional commit message。
+- 功能 `accepted` 后把 accepted SHA 落到对应 `feature/` 分支，使该 SHA 成为 feature 祖先；`feature/` 彼此不互相 merge 或 rebase。合入本地 `dev` 只在专门合入会话中从 `feature/` 串行 merge，一次一条；不得 rebase / cherry-pick 改写已 accepted 候选，也不得对 `dev` 使用 `reset --hard` 或 force-push 消除冲突。开发会话不得直接 merge 到 `dev`。
+- 冲突解决必须保留双方已验收功能和行为合同，禁止覆盖解决：不得 `checkout --ours/--theirs`、`merge -X ours/-X theirs`、整文件或整段逻辑只取一边，也不得删除另一方的测试、文档或验收证据来让合并变绿。仅格式或空白冲突可按当前 `dev` 风格统一。语义不能同时成立时停止并报告，不得丢弃任一方已验收行为。合入产生的 merge SHA 一律是新候选；旧 SHA 的 Review、测试、QA 和证据结论均不得复用。

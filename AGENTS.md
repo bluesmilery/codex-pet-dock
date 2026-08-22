@@ -32,10 +32,18 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 ## 1. 仓库与分支
 
 - 单仓库（mono-repo），无 submodule。
-- `main` 是唯一的 GitHub 稳定/发布分支；`dev` 是本地集成分支；特性分支从 `dev` 创建。
-- L2 的每个实现、修复、Review、QA 子 Agent 必须使用独立分支和独立 worktree；一个子 Agent 对应一个分支、一个 worktree。
-- 子 Agent 只能在分配给自己的 worktree 内工作，禁止进入或修改其他 Agent 的 worktree。
-- worktree 只隔离文件写入；主管仍须按文件或模块划分任务，并在集成时逐项处理潜在冲突。
+- `main` 是唯一的 GitHub 稳定/发布分支；`dev` 是本地集成分支，只在专门的合入会话中更新。
+- 分支分三层，禁止跨层乱用：
+  1. `codex/...`：L2 实现、修复、Review、QA 子 Agent 的工作分支。开发会话只在这些分支和对应 worktree 上工作；一个子 Agent 对应一个分支、一个 worktree。
+  2. `feature/<slug>`：一个已完成功能的停放分支。一个功能只对应一条 `feature/` 分支。功能完成并 `accepted` 后，把该功能的 accepted SHA 落到这条分支，然后结束开发会话；开发会话不得把该功能直接合入 `dev`。
+  3. `dev`：本地集成线。只在专门的合入会话中，把已停放的 `feature/` 分支串行 merge 进来。
+- `codex/` 工作分支从该功能的批准基线创建：通常是当时的 `dev`；若该功能已有 `feature/` 则从其创建。子 Agent 只能在分配给自己的 worktree 内工作，禁止进入或修改其他 Agent 的 worktree。
+- worktree 只隔离文件写入。并行的 `codex/` 工作区不会改写彼此目录里的文件，但这不消除以后合入 `dev` 时的文件重叠。
+- 功能完成（独立 Review 和 QA 清零、进入 `accepted`）后，主管把该 accepted SHA 创建或 merge 到对应的 `feature/<slug>`，使 accepted SHA 成为该 feature 分支祖先。不得 rebase、cherry-pick 改写或替换已 accepted 的候选。不要把 Review/QA worktree 里的非产品提交合进 `feature/`。此后该功能的开发会话不得再改 `dev`。
+- `feature/` 分支彼此独立停放：不互相 merge、不互相 rebase，也不把一条 feature 当作另一条 feature 的基线。这只表示停放隔离，不表示它们改动的文件一定不相交；文件重叠推迟到专门的 feature→`dev` 合入会话处理。
+- 专门的合入会话才把 `feature/` 合入本地 `dev`。多个 feature 必须串行合入当前 `dev`，一次只合一条；使用 merge，使该 feature 的 accepted SHA 成为 `dev` 祖先。不得 rebase、cherry-pick 改写或替换已 accepted 的候选来“变快合入”，也不得对 `dev` 使用 `reset --hard` 或 force-push 消除冲突。开发会话和实现/Review/QA 子 Agent 都不得直接 merge 到 `dev`。
+- 合入 `dev` 的冲突解决必须保留冲突双方已经验收的功能和行为合同，禁止覆盖解决。禁止 `checkout --ours/--theirs`、`merge -X ours/-X theirs`、整文件或整段逻辑只取一边，以及删除另一方的测试、文档或验收证据来让合并变绿。仅格式或空白冲突可按当前 `dev` 风格统一，不得借格式整理删除对方功能相关代码。
+- 同一文件或同一逻辑的冲突必须按双方意图手工组合：能同时成立则全部保留；不能同时成立则停止并报告语义冲突，不得为了合入而丢弃任一方的已验收行为。合入产生的 merge SHA 一律是新候选；旧 SHA 的 Review、测试、QA 和证据结论均不得复用，不论产品代码、测试、文档还是验收证据是否变化。
 - 严禁向 `main` 直接 push；推送 `main`、创建 tag / release 都需要**用户明确人工确认**。
 
 ## 2. Agent 编排与生命周期
@@ -46,7 +54,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - 派发前必须预检：按上述优先级解析后的模型和推理强度实际可用、base commit 正确、分支与 worktree 唯一、worktree 初始状态干净，并且不存在负责同一任务的活跃子 Agent；任一项不满足则不启动。
 - 子 Agent 状态统一为 `planning → working → waiting_input / blocked → review → qa → accepted → cleanup`；状态必须由实际活动和交付证据驱动，`idle` 仅表示当前无活动，绝不表示完成。
 - 主管判断子 Agent 是否正常时，以会话进度输出、工具调用或其他持续活动为准；只要任一活动仍在继续，就视为正常执行，不得因等待时间、尚未落盘或主观进度预期而催促、要求状态汇报或中断。子 Agent 正常运行期间，主管至多每五分钟执行一次非中断式状态检查，两次检查之间不得轮询；Agent 主动完成、报错或请求输入的事件通知可立即处理。当会话与工具均无新活动、无法判断是否仍在执行时，只允许先做非中断式检查；仅在检查确认无进展、报错、请求输入或其他异常证据后才可中断或替换，用户明确要求中断或替换时除外。
-- 并发数量不得超过当前运行时上限，主 Agent 占用一个并发槽位；只有任务边界和依赖均独立时才可并行。
+- 并发数量不得超过当前运行时上限，主 Agent 占用一个并发槽位；只有任务边界和依赖均独立时才可并行。并行开发只发生在 `codex/` worktree；功能完成后停放到各自 `feature/` 分支。合入 `dev` 必须另开专门会话，按第 1 节从 `feature/` 串行 merge，不得并行 merge，也不得用覆盖解决冲突。
 - L2 开发按审查、实现、独立 Review、QA 分阶段进行；实现子 Agent 先在批准基线上运行真实症状回归：基线失败才做最小行为修复，基线通过则只补覆盖证据，不制造红测或猜测式修改产品代码。
 - 用户原始症状和每条行为验收标准必须建立“证据拓扑”：`触发/扰动 → 实际生产消费者 → 调度/回调链 → 最终状态所有者的可观察结果`。helper、纯函数或局部 frame sink 测试只能补充，不能替代穿过真实生产组合的回归证据；测试中的 fake/clock/event 必须确实被被测系统消费。构建、文档、静态约束等非行为 AC 仍须逐条提供与其类型匹配的直接证据。
 - 实现者不得 Review 自己的提交；独立 Review 和 QA 必须使用全新子 Agent，并针对明确的完整 commit SHA 验证。
@@ -72,7 +80,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - 正式 Review 前，主 Agent 必须逐条核验 AC 证据、基线来源/结果和适用的最终状态所有者；只核对测试名称、通过数量或 helper 输出不得放行。首轮 Reviewer 必须重新审计同一证据文件并一次性报告断链、未消费 fake、缺失的 absence guard 和仅局部覆盖。
 - 独立 Review 按可操作 P0 / P1 / P2 分类清零。
 - 所有验收结论必须绑定完整 commit SHA；目标 commit 发生变化后，之前的 Review、测试和 QA 结论不得复用。
-- 只有完成独立 Review 和 QA、满足全部门禁并进入 `accepted` 状态的 commit，才可作为集成到 `dev` 的候选。
+- 只有完成独立 Review 和 QA、满足全部门禁并进入 `accepted` 状态的 commit，才可落到对应 `feature/` 分支；合入本地 `dev` 只在专门合入会话中从 `feature/` 串行 merge，冲突按第 1 节保留双方已验收功能，禁止覆盖解决。
 - macOS 窗口 / TCC / ScreenCaptureKit 功能须**真机验证**（CGWindowList / 三态 QA），不依赖纯编译通过。
 
 ## 5. 隐私边界

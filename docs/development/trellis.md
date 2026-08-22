@@ -43,6 +43,14 @@ L2 中，原实现负责人在自己的 worktree 内运行 `trellis-check` **ski
 
 `AGENTS.md` 保存上述项目持久边界，`.trellis/workflow.md` 保存可被 Hook 注入的详细阶段和状态提示；两者语义必须保持一致。
 
+## 分支分层与合入本地 `dev`
+
+开发会话只使用 `codex/...` 工作分支和独立 worktree。一个功能开发完成并 `accepted` 后，把该 accepted SHA 停放到对应的 `feature/<slug>` 分支，然后结束开发会话；不要在开发会话里直接合入 `dev`。`feature/` 分支彼此独立停放，不互相 merge 或 rebase。这不表示它们改动的文件一定不相交。
+
+合入本地 `dev` 只在专门的合入会话中进行：把已停放的 `feature/` 串行 merge 到当前 `dev`，一次只合一条，并使该 feature 的 accepted SHA 成为 `dev` 祖先。不得 rebase / cherry-pick 改写已 accepted 候选，也不得对 `dev` 使用 `reset --hard` 或 force-push 消除冲突。
+
+合入 `dev` 的冲突解决必须保留双方已经验收的功能和行为合同，禁止覆盖解决。禁止 `--ours/--theirs`、`-X ours/-X theirs`、整文件或整段逻辑只取一边，以及删除另一方的测试、文档或验收证据来让合并变绿。仅格式或空白冲突可按当前 `dev` 风格统一。双方语义不能同时成立时停止并报告，不得为了合入丢弃任一方已验收行为。合入产生的 merge SHA 一律是新候选；旧 SHA 的 Review、测试、QA 和证据结论均不得复用。完整执行约束以项目 `AGENTS.md` 第 1 节为准。
+
 ## 本地 workflow 升级合并
 
 升级 Trellis CLI 后，不要直接覆盖项目 workflow。先预览，再生成 sidecar 并人工合并：
