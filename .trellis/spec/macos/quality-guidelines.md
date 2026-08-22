@@ -9,7 +9,7 @@
 - `swift build -c release` **0 warning**（不是「忽略 warning」，是 0）。
 - `make docs-check` 与 `make test-docs` 必须通过；它们离线检查公开 Markdown 的本地链接、目录完整性、旧路径和隐私残留。
 - `make test` 全绿 = docs gate + `test-privacy` + test-ui + test-data + test-shell 五个独立入口；测试数字和证据以 [dev 候选验收](../../../docs/verification/dev-candidate.md) 与测试源码为准，文档测试另计。
-- `build/PetDock.app` 只作为可覆盖的 staging；开发候选须按 [产物归档规则](../../../docs/verification/dev-candidate.md#开发候选产物归档) 创建全新、提交绑定的 `YYYY-MM-DD-HHmmss-<label>-<shortSHA>` 本地目录，并验证签名与来源。
+- `build/PetDock.app` 只作为可覆盖的 staging；开发候选须按 [产物归档规则](../../../docs/verification/dev-candidate.md#开发候选产物归档) 归档到主工作树 `build/candidates/` 下全新、提交绑定的 `YYYY-MM-DD-HHmmss-<label>-<worktree>-<shortSHA>` 目录，并验证签名与来源。
 - 自动验证**不能代替**真机 QA：TCC 屏幕录制 / ScreenCaptureKit 像素捕获 / 多屏负坐标 / Instruments 内存。
 
 ## Docs Impact
@@ -91,7 +91,7 @@
 
 ## Git
 
-- 开发会话使用 `codex/...` 工作分支和独立 worktree；一个已完成功能停放到一条 `feature/<slug>` 分支。`codex/` 从当时的 `dev` 或该功能已有 `feature/` 创建。不 push `main`、不建 tag/release 除非用户明确确认。
+- 开发会话使用 `codex/...` 工作分支和独立 worktree；新 worktree 建在主工作树旁边的 `<repo>-worktrees/<slug>/`，禁止 `~/.ao/` 或主工作树内部。一个已完成功能停放到一条 `feature/<slug>` 分支。`codex/` 从当时的 `dev` 或该功能已有 `feature/` 创建。不 push `main`、不建 tag/release 除非用户明确确认。
 - 公开身份 `bluesmilery <19263500+bluesmilery@users.noreply.github.com>`，commit body **不带 Co-Authored-By**。
 - 每个逻辑批次独立提交，conventional commit message。
 - 功能 `accepted` 后把 accepted SHA 落到对应 `feature/` 分支，使该 SHA 成为 feature 祖先；`feature/` 彼此不互相 merge 或 rebase。合入本地 `dev` 只在专门合入会话中从 `feature/` 串行 merge，一次一条；不得 rebase / cherry-pick 改写已 accepted 候选，也不得对 `dev` 使用 `reset --hard` 或 force-push 消除冲突。开发会话不得直接 merge 到 `dev`。

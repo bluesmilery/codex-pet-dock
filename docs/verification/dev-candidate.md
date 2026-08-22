@@ -60,16 +60,18 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 
 ## 开发候选产物归档
 
-`make app` 会删除并重新组装、ad-hoc 签名 `build/PetDock.app`。该路径是可变的 staging，不是交给用户测试的开发候选。候选归档是最终 QA 的最后阶段：必须从同一 worktree 的精确清洁 Git 状态开始，先捕获完整与 7 位提交 SHA，再运行门禁和 `make app`，复核 SHA 与清洁状态未变后，才归档一份新的本地候选：
+`make app` 会删除并重新组装、ad-hoc 签名当前 worktree 的 `build/PetDock.app`。该路径是可变的 staging，不是交给用户测试的开发候选。候选归档是最终 QA 的最后阶段：必须从同一 worktree 的精确清洁 Git 状态开始，先捕获完整与 7 位提交 SHA，再运行门禁和 `make app`，复核 SHA 与清洁状态未变后，才把候选归档到**主工作树**的 `build/candidates/`，即使构建发生在 linked worktree 内：
 
 ```text
-build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
+<primary>/build/candidates/YYYY-MM-DD-HHmmss-<label>-<worktree>-<shortSHA>/PetDock.app
 ```
 
+- `<primary>` 是 `git worktree list --porcelain` 列出的第一条主工作树路径，不是当前 `git rev-parse --show-toplevel`。linked worktree 自己的 `build/candidates/` 不得作为交付目录。
 - `label` 必须是匹配 `^[a-z0-9]+(-[a-z0-9]+)*$` 的单路径组件 slug。`dev` 构建固定为 `dev`；其他开发构建使用脱敏后的 feature 或 task 标签，例如 `app-icon-v2`。不得直接使用含 `/` 的分支名，也不得包含空白、大写字符、空值、首尾连字符或连续连字符。
+- `worktree` 同样必须匹配 `^[a-z0-9]+(-[a-z0-9]+)*$`。主工作树固定为 `primary`；独立 worktree 使用其目录名 slug，例如 `08-22-bubble-smooth-feature-handoff`。不得写入本机绝对路径、用户名或 `.ao` 等隐藏数据目录名。
 - `shortSHA` 必须是该次最终 QA 所绑定完整提交 SHA 的前 7 个字符。
 - 每次交付的候选目录都必须全新且不可变：不得覆盖或复用已有目录；重新构建、提交 SHA 变化或归档时间变化时创建新目录。时间戳精确到秒；若同一秒的目标目录已存在，归档必须失败，使用新的时间戳重新执行完整流程。
-- `build/` 是 gitignore 中的本地构建目录；候选产物不得加入 Git 或提交。
+- 主工作树的 `build/` 是 gitignore 中的本地构建目录；候选产物不得加入 Git 或提交。历史目录若缺少 `<worktree>` 字段，只作为旧产物保留，新归档必须带该字段。
 
 以下 zsh 示例给出完整顺序；`candidate_label` 使用占位符，执行前替换为本次实际值：
 
@@ -140,6 +142,16 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
   candidate_short_sha="$(printf '%s' "$candidate_sha" | cut -c1-7)"
   candidate_label="<dev-or-task-label>"
   [[ "$candidate_label" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]
+  candidate_current_root="$(git rev-parse --show-toplevel)"
+  candidate_primary_root="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
+  test -n "$candidate_primary_root"
+  test -d "$candidate_primary_root"
+  if [[ "$candidate_current_root" == "$candidate_primary_root" ]]; then
+    candidate_worktree="primary"
+  else
+    candidate_worktree="${candidate_current_root:t}"
+  fi
+  [[ "$candidate_worktree" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]
 
   swift build -c release
   PYTHONDONTWRITEBYTECODE=1 make docs-check
@@ -152,10 +164,9 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
   candidate_status_after="$(git status --porcelain=v1 --untracked-files=all)"
   test -z "$candidate_status_after"
   test -d build/PetDock.app
-  candidate_repo_root="$(git rev-parse --show-toplevel)"
-  mkdir -p "$candidate_repo_root/build/candidates"
-  candidate_parent="$(cd "$candidate_repo_root/build/candidates" && pwd -P)"
-  candidate_temp_dir="$(mktemp -d "$candidate_parent/.candidate-${candidate_label}-${candidate_short_sha}.XXXXXX")"
+  mkdir -p "$candidate_primary_root/build/candidates"
+  candidate_parent="$(cd "$candidate_primary_root/build/candidates" && pwd -P)"
+  candidate_temp_dir="$(mktemp -d "$candidate_parent/.candidate-${candidate_label}-${candidate_worktree}-${candidate_short_sha}.XXXXXX")"
   candidate_temp_app="${candidate_temp_dir}/PetDock.app"
 
   ditto build/PetDock.app "$candidate_temp_app"
@@ -164,7 +175,7 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
   cmp build/PetDock.app/Contents/MacOS/PetDock "$candidate_temp_app/Contents/MacOS/PetDock"
 
   candidate_stamp="$(date '+%Y-%m-%d-%H%M%S')"
-  candidate_dir="${candidate_parent}/${candidate_stamp}-${candidate_label}-${candidate_short_sha}"
+  candidate_dir="${candidate_parent}/${candidate_stamp}-${candidate_label}-${candidate_worktree}-${candidate_short_sha}"
   candidate_app="${candidate_dir}/PetDock.app"
   test ! -e "$candidate_dir"
   mkdir "$candidate_dir"
@@ -182,13 +193,13 @@ build/candidates/YYYY-MM-DD-HHmmss-<label>-<shortSHA>/PetDock.app
 )
 ```
 
-隔离 subshell 中的 `set -euo pipefail` 确保任一前置检查、门禁、复制、签名、内容比较或发布步骤失败时立即以非零状态终止。app 先复制到 `build/candidates/` 下唯一的隐藏临时目录并完成全部验证；验证通过后，以 `mkdir` 原子占有尚不存在的最终目录，再移动 app 并复核正式路径。并发创建或同秒冲突会让 `mkdir` 失败，不覆盖已有目录；`mv -n` 后还必须确认临时 app 已消失。
+隔离 subshell 中的 `set -euo pipefail` 确保任一前置检查、门禁、复制、签名、内容比较或发布步骤失败时立即以非零状态终止。app 先复制到主工作树 `build/candidates/` 下唯一的隐藏临时目录并完成全部验证；验证通过后，以 `mkdir` 原子占有尚不存在的最终目录，再移动 app 并复核正式路径。并发创建或同秒冲突会让 `mkdir` 失败，不覆盖已有目录；`mv -n` 后还必须确认临时 app 已消失。
 
 EXIT trap 使用 macOS 13+ 自带的 BSD `/bin/rm` 清理，并始终保留原命令退出码。执行前同时验证非空路径、词法直属父目录与 `pwd -P` 解析父目录；临时路径还必须使用 `.candidate-` 隐藏名称，最终路径还必须是本轮原子占有的精确目录。因此 cleanup 不接受宽泛路径，也不会清理竞争者目录。若 `/bin/rm` 被安全钩子拦截、返回失败或清理后路径仍存在，必须把错误中报告的**唯一精确残留路径**移到回收站，并禁止报告候选已交付；不依赖 Finder 自动化或 TCC。
 
 即使归档前已经存在可通过签名检查的 staging，也不得跳过本流程中的 `make app`；该命令按 Makefile 删除并重建 staging，避免复用旧 bundle。前后两次 Git 检查证明门禁与构建期间 HEAD 未变化，且 tracked / 非忽略 untracked 状态保持清洁；`codesign` 只验证 app 的签名结构，`diff` 与 `cmp` 只验证它与刚生成的 staging 内容一致。精确来源由 QA 记录把捕获的完整 SHA、上述命令及其实际输出绑定在一起，不能仅凭签名结果推断。
 
-交付报告必须给出完整提交 SHA、归档后的 app 路径、各门禁与 `make app` 的实际结果，以及针对归档路径的 `codesign` 和 staging 内容一致性结果。不能由这些检查推断 app 已启动、TCC 已授权或 UI / 真机交互已通过。可保留 `build/PetDock.app` 供后续 staging 使用，但面向用户的测试说明必须指向归档候选路径。归档过程不得启动或安装 app，也不得写入或覆盖 `/Applications`。
+交付报告必须给出完整提交 SHA、主工作树归档后的 app 路径、各门禁与 `make app` 的实际结果，以及针对归档路径的 `codesign` 和当前 worktree staging 内容一致性结果。不能由这些检查推断 app 已启动、TCC 已授权或 UI / 真机交互已通过。可保留当前 worktree 的 `build/PetDock.app` 供后续 staging 使用，但面向用户的测试说明必须指向主工作树归档候选路径。归档过程不得启动或安装 app，也不得写入或覆盖 `/Applications`。
 
 ## 风险与边界
 

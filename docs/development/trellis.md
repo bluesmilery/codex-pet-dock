@@ -45,7 +45,7 @@ L2 中，原实现负责人在自己的 worktree 内运行 `trellis-check` **ski
 
 ## 分支分层与合入本地 `dev`
 
-开发会话只使用 `codex/...` 工作分支和独立 worktree。一个功能开发完成并 `accepted` 后，把该 accepted SHA 停放到对应的 `feature/<slug>` 分支，然后结束开发会话；不要在开发会话里直接合入 `dev`。`feature/` 分支彼此独立停放，不互相 merge 或 rebase。这不表示它们改动的文件一定不相交。
+开发会话只使用 `codex/...` 工作分支和独立 worktree。新的独立 worktree 建在主工作树旁边的 `<repo>-worktrees/<slug>/`，例如主工作树 `codex-pet-dock` 对应 `codex-pet-dock-worktrees/<slug>`；不要放到 `~/.ao/` 或主工作树内部。一个功能开发完成并 `accepted` 后，把该 accepted SHA 停放到对应的 `feature/<slug>` 分支，然后结束开发会话；不要在开发会话里直接合入 `dev`。`feature/` 分支彼此独立停放，不互相 merge 或 rebase。这不表示它们改动的文件一定不相交。
 
 合入本地 `dev` 只在专门的合入会话中进行：把已停放的 `feature/` 串行 merge 到当前 `dev`，一次只合一条，并使该 feature 的 accepted SHA 成为 `dev` 祖先。不得 rebase / cherry-pick 改写已 accepted 候选，也不得对 `dev` 使用 `reset --hard` 或 force-push 消除冲突。
 

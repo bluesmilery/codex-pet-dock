@@ -39,6 +39,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
   3. `dev`：本地集成线。只在专门的合入会话中，把已停放的 `feature/` 分支串行 merge 进来。
 - `codex/` 工作分支从该功能的批准基线创建：通常是当时的 `dev`；若该功能已有 `feature/` 则从其创建。子 Agent 只能在分配给自己的 worktree 内工作，禁止进入或修改其他 Agent 的 worktree。
 - worktree 只隔离文件写入。并行的 `codex/` 工作区不会改写彼此目录里的文件，但这不消除以后合入 `dev` 时的文件重叠。
+- 新的独立 worktree 必须建在主工作树旁边的 `<repo>-worktrees/<slug>/`：若主工作树是 `.../codex-pet-dock`，则 worktree 为 `.../codex-pet-dock-worktrees/<slug>`。`slug` 必须匹配 `^[a-z0-9]+(-[a-z0-9]+)*$`。禁止放到 `~/.ao/` 或其他应用隐藏数据目录，也禁止建在主工作树内部。已有旧路径 worktree 可沿用到本轮结束；新建、替换或重新派发必须使用新路径。
 - 功能完成（独立 Review 和 QA 清零、进入 `accepted`）后，主管把该 accepted SHA 创建或 merge 到对应的 `feature/<slug>`，使 accepted SHA 成为该 feature 分支祖先。不得 rebase、cherry-pick 改写或替换已 accepted 的候选。不要把 Review/QA worktree 里的非产品提交合进 `feature/`。此后该功能的开发会话不得再改 `dev`。
 - `feature/` 分支彼此独立停放：不互相 merge、不互相 rebase，也不把一条 feature 当作另一条 feature 的基线。这只表示停放隔离，不表示它们改动的文件一定不相交；文件重叠推迟到专门的 feature→`dev` 合入会话处理。
 - 专门的合入会话才把 `feature/` 合入本地 `dev`。多个 feature 必须串行合入当前 `dev`，一次只合一条；使用 merge，使该 feature 的 accepted SHA 成为 `dev` 祖先。不得 rebase、cherry-pick 改写或替换已 accepted 的候选来“变快合入”，也不得对 `dev` 使用 `reset --hard` 或 force-push 消除冲突。开发会话和实现/Review/QA 子 Agent 都不得直接 merge 到 `dev`。
@@ -94,7 +95,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 ## 6. 构建与分发
 
 - `make app`（ad-hoc 签名）只在**最终 QA / 发布阶段**执行，减少 TCC 重授权次数。
-- `build/PetDock.app` 只是可覆盖的 staging；开发候选交付必须按 [dev 候选验收](docs/verification/dev-candidate.md#开发候选产物归档) 归档到全新、不可复用且绑定提交的 `YYYY-MM-DD-HHmmss-<label>-<shortSHA>` 本地目录。
+- `build/PetDock.app` 只是可覆盖的 staging；开发候选交付必须按 [dev 候选验收](docs/verification/dev-candidate.md#开发候选产物归档) 归档到主工作树 `build/candidates/` 下全新、不可复用且绑定提交的 `YYYY-MM-DD-HHmmss-<label>-<worktree>-<shortSHA>` 目录。
 - 分发包为 ad-hoc 签名（无 Developer ID、未公证），README 须含 **Preview + Open Anyway** 安装说明。
 - 用户首次安装需手动授权 Gatekeeper + 屏幕录制 + （如需）系统音频录制。
 
