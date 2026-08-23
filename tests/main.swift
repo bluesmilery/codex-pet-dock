@@ -2654,14 +2654,298 @@ let identitySeenOld = identityObserved.withLock { seen in
 }
 check("T-bv41c RED 同WID身份变化使旧in-flight结果失效",
       identityChanged
-        && identitySeenOld
-        && identityCaptureCalls.withLock { $0 } == 2
-        && identityProbe.visibility(for: identityReplacement.wid) == .visible
-        && identityCached == nil
-        && identityNotifications.withLock { $0 } == 0,
+      && identitySeenOld
+      && identityCaptureCalls.withLock { $0 } == 2
+      && identityProbe.visibility(for: identityReplacement.wid) == .visible
+      && identityCached == nil
+      && identityNotifications.withLock { $0 } == 0,
       "changed=\(identityChanged) seenOld=\(identitySeenOld) calls=\(identityCaptureCalls.withLock { $0 }) "
         + "visibility=\(identityProbe.visibility(for: identityReplacement.wid)) cached=\(String(describing: identityCached)) "
         + "notifications=\(identityNotifications.withLock { $0 })")
+
+// T-bv43 (拖动期间空白症状回归): 拖动时气泡窗口 bounds 逐 tick 平移/缩放，但 WID、owner、
+// title、layer、alpha、isOnscreen、sharingState 均不变。基线把每次 bounds 变化当作候选
+// identity 变化 → generation 递增 + cached/successfullyObservedWids 清空 → visibility(for:)
+// 对仍在 knownWids 中的 WID 回落默认 .visible（保守避让）→ dock 在整个拖动期间持续避让
+// 隐藏气泡 → 宠物与 dock 之间出现空白；拖动停止后 identity 稳定，下一次捕获（≤0.1s cadence
+// + 捕获耗时）才恢复，与用户观察的 ~0.3s 延迟吻合。
+// 修复合同：纯几何（仅 bounds）变化保留既有 cache 与成功观察集合（粘性），不递增 generation；
+// 真正身份变化（WID 集合或任一非 bounds 身份字段）维持现行 generation 递增 + 清空 + 保守
+// visible。写入校验保持现行严格语义：完成回调仍要求 generation 与 knownCandidates 完全
+// 一致，bounds 平移期间启动的旧捕获结果一律丢弃，绝不写入新几何；粘性只影响 cache 保留。
+// 权衡：拖动期间展开/收起的真实状态变化最迟在拖动结束后的下一次捕获收敛（≤0.2s），见
+// docs/architecture/dock-obstacle-avoidance.md「拖动期间的粘性可见性」。
+var dragTime: TimeInterval = 16_500
+let dragOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(collapsedS))
+let dragWakes = OSAllocatedUnfairLock(initialState: 0)
+let dragCap: BubbleCapturer = { _ in dragOutcome.withLock { $0 } }
+let dragWid = CGWindowID(531)
+let dragStart = CGRect(x: 80, y: 280, width: 200, height: 54)
+let dragProbe = BubbleVisibilityProbe(
+    monotonicNow: { dragTime },
+    canCapture: { true },
+    capturer: dragCap,
+    onVisibilityChange: { dragWakes.withLock { $0 += 1 } }
+)
+dragProbe.probe(candidates: [mkw(531, layer: 3, dragStart)])
+_ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
+check("T-bv43a 前置: 拖动前collapsed捕获→hidden",
+      dragProbe.visibility(for: dragWid) == .hidden, "")
+
+/// 拖动序列：宠物每 tick 位移 (7,5) 带动气泡平移，中途叠加尺寸变化（复现 Activity Stack
+/// Backing 200x54→216x64 形态）；每步时间推进 < 0.1s cadence，避免与在途捕获交织。
+func bv43DragTicks(_ probe: BubbleVisibilityProbe, wid: UInt32, start: CGRect,
+                   ticks: Int, expected: BubbleVisibility) -> (stayed: Bool, finalBounds: CGRect) {
+    var stayed = true
+    var bounds = start
+    for index in 0..<ticks {
+        bounds.origin.x += 7
+        bounds.origin.y += 5
+        if index == 2 { bounds.size = CGSize(width: 216, height: 64) }
+        dragTime += 0.016
+        probe.probe(candidates: [mkw(wid, layer: 3, bounds)])
+        if probe.visibility(for: CGWindowID(wid)) != expected { stayed = false }
+    }
+    return (stayed, bounds)
+}
+
+let dragHiddenRun = bv43DragTicks(dragProbe, wid: 531, start: dragStart, ticks: 10, expected: .hidden)
+check("T-bv43b RED 拖动期间bounds逐tick平移→visibility保持拖动前hidden",
+      dragHiddenRun.stayed
+        && dragProbe.lock.withLock { $0.cached[dragWid] } == .hidden,
+      "visibility=\(dragProbe.visibility(for: dragWid)) "
+        + "cached=\(String(describing: dragProbe.lock.withLock { $0.cached[dragWid] }))")
+
+let dragVisProbe = BubbleVisibilityProbe(
+    monotonicNow: { dragTime },
+    canCapture: { true },
+    capturer: { _ in .stats(expandedS) }
+)
+dragVisProbe.probe(candidates: [mkw(531, layer: 3, dragStart)])
+_ = waitPumpingMain { !dragVisProbe.lock.withLock { $0.inFlight } }
+let dragVisibleRun = bv43DragTicks(dragVisProbe, wid: 531, start: dragStart, ticks: 10, expected: .visible)
+check("T-bv43c 拖动期间visible同样保持（粘性对称）",
+      dragVisProbe.visibility(for: dragWid) == .visible && dragVisibleRun.stayed, "")
+
+// 纯几何拖动保留成功观察资格（successfullyObservedWids 粘性）：拖动结束后（identity 稳定）
+// 一次权威 targetMissing 仍判 hidden，与 T-bv39f 语义一致。
+_ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
+dragOutcome.withLock { $0 = .targetMissing }
+dragTime += 0.11
+dragProbe.probe(candidates: [mkw(531, layer: 3, dragHiddenRun.finalBounds)])
+_ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
+check("T-bv43d 纯几何拖动保留成功观察资格→targetMissing权威hidden",
+      dragProbe.visibility(for: dragWid) == .hidden, "")
+
+// 拖动结束后正常捕获刷新：hidden→visible 状态变化必须写回并唤醒一次布局。
+dragOutcome.withLock { $0 = .stats(expandedS) }
+let wakesBeforeRefresh = dragWakes.withLock { $0 }
+dragTime += 0.11
+dragProbe.probe(candidates: [mkw(531, layer: 3, dragHiddenRun.finalBounds)])
+_ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
+check("T-bv43f 拖动结束后捕获刷新hidden→visible并唤醒一次",
+      dragProbe.visibility(for: dragWid) == .visible
+        && dragWakes.withLock { $0 } == wakesBeforeRefresh + 1,
+      "visibility=\(dragProbe.visibility(for: dragWid)) wakes=\(dragWakes.withLock { $0 })")
+
+// 拖动中在途捕获（bounds 平移后释放）：写入校验按现行严格语义拒绝（knownCandidates 精确
+// 相等），粘性 cache 不被旧结果覆盖，也不因 single-flight 合并启动第二捕获。
+let inflightCalls = OSAllocatedUnfairLock(initialState: 0)
+let inflightGate = AsyncCaptureEntryGate()
+let inflightCap: BubbleCapturer = { _ in
+    inflightCalls.withLock { $0 += 1 }
+    await inflightGate.waitAfterEntry()
+    return .stats(collapsedS)
+}
+let inflightProbe = BubbleVisibilityProbe(
+    monotonicNow: { dragTime }, canCapture: { true }, capturer: inflightCap)
+let inflightStable = mkw(537, layer: 3, dragStart)
+inflightProbe.probe(candidates: [inflightStable])
+let inflightEntered1 = waitPumpingMain {
+    inflightGate.enteredCount == 1 && inflightProbe.lock.withLock { $0.inFlight }
+}
+inflightGate.release()
+_ = waitPumpingMain { !inflightProbe.lock.withLock { $0.inFlight } }
+let inflightPreHidden = inflightProbe.visibility(for: inflightStable.wid) == .hidden
+dragTime += 0.11
+let inflightMoved = CGRect(x: dragStart.origin.x + 7, y: dragStart.origin.y + 5,
+                           width: dragStart.width, height: dragStart.height)
+inflightProbe.probe(candidates: [mkw(537, layer: 3, inflightMoved)])
+let inflightEntered2 = waitPumpingMain {
+    inflightGate.enteredCount == 2 && inflightProbe.lock.withLock { $0.inFlight }
+}
+dragTime += 0.016
+inflightProbe.probe(candidates: [mkw(537, layer: 3, inflightMoved.offsetBy(dx: 7, dy: 5))])
+inflightGate.release()
+_ = waitPumpingMain { !inflightProbe.lock.withLock { $0.inFlight } }
+check("T-bv43g 拖动中in-flight旧结果拒绝写入且cache保持粘性hidden",
+      inflightEntered1 && inflightPreHidden && inflightEntered2
+        && inflightCalls.withLock { $0 } == 2
+        && inflightProbe.lock.withLock { $0.cached[inflightStable.wid] } == .hidden
+        && inflightProbe.visibility(for: inflightStable.wid) == .hidden,
+      "entered1=\(inflightEntered1) preHidden=\(inflightPreHidden) entered2=\(inflightEntered2) "
+        + "calls=\(inflightCalls.withLock { $0 }) "
+        + "cached=\(String(describing: inflightProbe.lock.withLock { $0.cached[inflightStable.wid] }))")
+
+// 真正身份变化（WID 集合变化 / owner 变化 / layer 变化）→ 维持现行清空 + 保守 visible，
+// 且成功观察资格同步清空（变化后首次 targetMissing 仍保守 visible，T-bv39f3 语义）。
+let idChangeOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(collapsedS))
+let idChangeCap: BubbleCapturer = { _ in idChangeOutcome.withLock { $0 } }
+func bv43MakeIdentityProbe() -> BubbleVisibilityProbe {
+    BubbleVisibilityProbe(monotonicNow: { dragTime }, canCapture: { true }, capturer: idChangeCap)
+}
+
+let ownerProbe = bv43MakeIdentityProbe()
+let ownerStable = mkw(534, layer: 3, dragStart)
+ownerProbe.probe(candidates: [ownerStable])
+_ = waitPumpingMain { !ownerProbe.lock.withLock { $0.inFlight } }
+let ownerHiddenEstablished = ownerProbe.visibility(for: ownerStable.wid) == .hidden
+let ownerChanged = WinCandidate(
+    wid: ownerStable.wid, ownerPID: ownerStable.ownerPID, ownerName: "Other", title: "",
+    layer: 3, alpha: 1.0, isOnscreen: true, sharingState: 1, bounds: ownerStable.bounds)
+dragTime += 0.016   // 未到 cadence：本 probe 只做身份切换+清 cache，不启动捕获
+ownerProbe.probe(candidates: [ownerChanged])
+let ownerClearedToVisible = ownerProbe.visibility(for: ownerChanged.wid) == .visible
+idChangeOutcome.withLock { $0 = .targetMissing }
+dragTime += 0.11
+ownerProbe.probe(candidates: [ownerChanged])
+_ = waitPumpingMain { !ownerProbe.lock.withLock { $0.inFlight } }
+check("T-bv43h1 owner变化→清cache回保守visible且观察资格清空",
+      ownerHiddenEstablished && ownerClearedToVisible
+        && ownerProbe.visibility(for: ownerChanged.wid) == .visible,
+      "established=\(ownerHiddenEstablished) cleared=\(ownerClearedToVisible) "
+        + "afterMissing=\(ownerProbe.visibility(for: ownerChanged.wid))")
+idChangeOutcome.withLock { $0 = .stats(collapsedS) }
+
+let layerProbe = bv43MakeIdentityProbe()
+let layerStable = mkw(535, layer: 3, dragStart)
+layerProbe.probe(candidates: [layerStable])
+_ = waitPumpingMain { !layerProbe.lock.withLock { $0.inFlight } }
+let layerHiddenEstablished = layerProbe.visibility(for: layerStable.wid) == .hidden
+dragTime += 0.11
+layerProbe.probe(candidates: [mkw(535, layer: 4, dragStart)])
+check("T-bv43h2 layer变化→清cache回保守visible",
+      layerHiddenEstablished && layerProbe.visibility(for: layerStable.wid) == .visible,
+      "established=\(layerHiddenEstablished) "
+        + "visibility=\(layerProbe.visibility(for: layerStable.wid))")
+
+let widProbe = bv43MakeIdentityProbe()
+let widStable = mkw(536, layer: 3, dragStart)
+widProbe.probe(candidates: [widStable])
+_ = waitPumpingMain { !widProbe.lock.withLock { $0.inFlight } }
+let widHiddenEstablished = widProbe.visibility(for: widStable.wid) == .hidden
+dragTime += 0.11
+widProbe.probe(candidates: [mkw(538, layer: 3, dragStart)])
+check("T-bv43h3 WID集合变化→新wid保守visible",
+      widHiddenEstablished && widProbe.visibility(for: CGWindowID(538)) == .visible,
+      "established=\(widHiddenEstablished) newWid=\(widProbe.visibility(for: CGWindowID(538)))")
+
+// T-bv44 (拖动期间空白·生产组合回归): 拖动序列穿过真实生产链
+// FollowLayoutPass.placeDock → bubbleProbe.probe/visibility → frameSink → 真实 DockPanel.placeBelow。
+// 气泡已捕获为 hidden 时，拖动期间（宠物与气泡 bounds 逐 tick 平移）dock 必须保持无障碍
+// 基础位，不被默认保守 visible 的隐藏气泡窗口推开；拖动结束后第一次真实捕获刷新
+// （hidden→visible）仍经 onVisibilityChange → scheduler coalescer → 完整 tick 写回避让 frame。
+var bv44Time: TimeInterval = 18_000
+var bv44Clock: TimeInterval = 0
+let bv44Dock = DockPanel()
+let bv44Outcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(collapsedS))
+let bv44Cap: BubbleCapturer = { _ in bv44Outcome.withLock { $0 } }
+let bv44Ticks = OSAllocatedUnfairLock(initialState: 0)
+let bv44ObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+var bv44Timers: [TestFollowTickTimer] = []
+var bv44PetBounds = petForCollapse
+var bv44BubbleBounds = bubbleForCollapse
+func bv44BaseFrame() -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(
+        x: bv44PetBounds.origin.x + (bv44PetBounds.width - 200) / 2,
+        y: bv44PetBounds.maxY + 2, width: 200, height: 48))
+}
+func bv44AvoidFrame() -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(
+        x: bv44PetBounds.origin.x + (bv44PetBounds.width - 200) / 2,
+        y: bv44BubbleBounds.maxY + 2, width: 200, height: 48))
+}
+var bv44Probe: BubbleVisibilityProbe!
+let bv44Scheduler = FollowTickScheduler(
+    runTick: {
+        bv44Ticks.withLock { $0 += 1 }
+        let mascot = mkw(543, layer: 2, bv44PetBounds, title: "Codex Pet Mascot Effect")
+        let bubble = mkw(541, layer: 3, bv44BubbleBounds)
+        let placed = FollowLayoutPass.placeDock(
+            mascot: mascot,
+            candidates: [mascot, bubble],
+            bubbleProbe: bv44Probe,
+            frameSink: { pet, obstacles in
+                bv44ObstacleCounts.withLock { $0.append(obstacles.count) }
+                return bv44Dock.placeBelow(
+                    petQuartzRect: pet,
+                    avoiding: obstacles,
+                    visibleScreen: nil,
+                    movementChanged: true,
+                    monotonicNow: bv44Time
+                )
+            }
+        )
+        return placed ? .stable : .hidden
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { bv44Clock },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        bv44Timers.append(timer)
+        return timer
+    }
+)
+bv44Probe = BubbleVisibilityProbe(
+    monotonicNow: { bv44Time },
+    canCapture: { true },
+    capturer: bv44Cap,
+    onVisibilityChange: bv44Scheduler.visibilityChangeCallback
+)
+bv44Probe.probe(candidates: [mkw(541, layer: 3, bv44BubbleBounds)])
+_ = waitPumpingMain { !bv44Probe.lock.withLock { $0.inFlight } }
+bv44Scheduler.start()
+bv44Scheduler.requestWake()
+_ = waitPumpingMain { bv44Ticks.withLock { $0 } == 1 }
+let bv44StableTimerBeforeWake = bv44Timers.last
+check("T-bv44a 前置: 拖动前hidden→实际panel基础位+未到期stable one-shot",
+      dockFrameNear(bv44Dock.frame, bv44BaseFrame())
+        && bv44ObstacleCounts.withLock { $0 } == [0]
+        && bv44StableTimerBeforeWake?.repeats == false,
+      "frame=\(bv44Dock.frame) expected=\(bv44BaseFrame()) "
+        + "obstacles=\(bv44ObstacleCounts.withLock { $0 })")
+
+var bv44DragFramesOK = true
+for _ in 0..<8 {
+    bv44PetBounds.origin.x += 7
+    bv44PetBounds.origin.y += 5
+    bv44BubbleBounds.origin.x += 7
+    bv44BubbleBounds.origin.y += 5
+    bv44Time += 0.016
+    bv44Scheduler.requestWake()
+    let expectedTicks = bv44Ticks.withLock { $0 } + 1
+    _ = waitPumpingMain { bv44Ticks.withLock { $0 } == expectedTicks }
+    if !dockFrameNear(bv44Dock.frame, bv44BaseFrame()) { bv44DragFramesOK = false }
+}
+check("T-bv44b RED 拖动期间dock保持无障碍基础位(隐藏气泡不推开)",
+      bv44DragFramesOK && bv44ObstacleCounts.withLock { $0 } == Array(repeating: 0, count: 9),
+      "framesOK=\(bv44DragFramesOK) obstacles=\(bv44ObstacleCounts.withLock { $0 }) "
+        + "frame=\(bv44Dock.frame) expected=\(bv44BaseFrame())")
+
+bv44Outcome.withLock { $0 = .stats(expandedS) }
+bv44Time += 0.11
+bv44Scheduler.requestWake()
+let bv44RefreshTick = bv44Ticks.withLock { $0 } + 1
+_ = waitPumpingMain { bv44Ticks.withLock { $0 } == bv44RefreshTick }
+_ = waitPumpingMain { bv44Ticks.withLock { $0 } == bv44RefreshTick + 1 }
+check("T-bv44c 拖动结束后真实捕获刷新→wake→完整tick→实际panel避让frame",
+      bv44ObstacleCounts.withLock { $0 }.last == 1
+        && dockFrameNear(bv44Dock.frame, bv44AvoidFrame()),
+      "obstacles=\(bv44ObstacleCounts.withLock { $0 }) frame=\(bv44Dock.frame) "
+        + "expected=\(bv44AvoidFrame())")
+bv44Scheduler.stop()
 
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
 
