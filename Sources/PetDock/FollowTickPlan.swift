@@ -285,7 +285,16 @@ enum FollowLayoutPass {
         })
         let visibleBounds = classified.compactMap { pair -> CGRect? in
             if pair.1 == .control { return pair.0.bounds }
-            return bubbleProbe.visibility(for: pair.0.wid) == .visible ? pair.0.bounds : nil
+            let observation = bubbleProbe.observation(for: pair.0.wid)
+            guard observation.visibility == .visible else { return nil }
+            // 可见气泡按可见内容避让：宿主收起后的容器窗口底部仍残留大片透明区，
+            // 障碍高度 = 窗口内内容底边+1（像素≈点），dock 紧贴内容底而非整窗底；
+            // 水平仍用整窗 bounds（内容水平居中且窗口本身水平定位，保持水平避让语义）。
+            // 保守 visible（unavailable/TCC/首次观察前，无内容信息）→ 整窗 bounds。
+            guard let contentBottom = observation.contentBottom else { return pair.0.bounds }
+            return CGRect(x: pair.0.bounds.minX, y: pair.0.bounds.minY,
+                          width: pair.0.bounds.width,
+                          height: min(CGFloat(contentBottom + 1), pair.0.bounds.height))
         }
         if let evidence {
             let bubbleCount = classified.filter { $0.1 == .bubble }.count

@@ -294,3 +294,28 @@
 - 本 implement 沙箱与上一轮相同无 WindowServer（`NSScreen.screens.count==0`）：`make test-ui` 的既有 `tests/main.swift:180` guard 会 fatalError。test-ui 改用 headless 驱动副本运行：复制 `tests/main.swift` 到 /tmp，仅替换该 NSScreen guard 为固定负 origin 合成屏 frame（primary fixture 走既有合成负坐标分支），并把 3 处 `#filePath` 推导的仓库根固定为本 worktree 绝对路径（T-sch4f/T-re8/T-re12b source guard 需要），其余测试与源文件清单、`-warnings-as-errors -DPETDOCK_TESTING` flags 与 `make test-ui` 完全一致。
 - 该差异只影响 Geometry 屏幕 fixture 与 source guard 的路径解析；本候选新增测试（T-bv43/T-bv44）与被测生产链不依赖 NSScreen。完整 `make test` 需在 GUI 会话对冻结 SHA 复跑。
 - `swift build` 使用 `--disable-sandbox` 与 /tmp 缓存路径（外层 seatbelt 禁止 SwiftPM 内层 sandbox 与 `~/Library` 写入）；python 门禁使用任务指定 `/Users/Gai/workspace/codex-pet-dock/.venv/bin/python`。
+
+---
+
+## 气泡障碍按可见内容 bbox 避让（impl-bbox 轮，2026-08-23）
+
+- 任务：fix-bubble-collapse-smooth-follow（用户症状修复轮：控制按钮消失后 dock 应回升到紧贴可见小横条下方，现状偏低）。
+- 批准产品基线：`0d6285ee1119de74a55d531072150ed8d6de2905`（本 worktree 创建时 HEAD，实现前 Sources 未修改）。
+- 根因证据（主 Agent 现场实测，见派发记录）：宿主状态卡容器窗口 200x54@<现场坐标>，可见内容（白色小横条）只占窗口内 y[15,21]（25 个非透明像素、7px 高），底部 32px 全透明。旧 open/close 比例滞回把该形态判进 visible→整窗避让（多让 32px 透明尾巴，图2 症状）或 hidden→直接遮住仍可见的横条；原阈值假设"收起=无卡"已被宿主实际行为否定。
+- 最小修复（仅 `BubbleVisibility.swift` + `FollowTickPlan.swift`）：`computeAlphaStats` 输出非透明像素数与 `contentBottom`（窗口内像素 maxY）；分类改为内容噪声下限（非透明像素 ≥3 → visible，<3/全透明 → hidden，无滞回）；probe cache 升级为 `BubbleObservation`（可见性+内容底边，保守 visible 时 contentBottom=nil）；`FollowLayoutPass` 对可见气泡构造障碍高度 = contentBottom+1（水平仍整窗 bounds；无内容信息的保守 visible 退回整窗）；wake 仍只在可见性状态变化触发，内容底变化由既有 0.1s cadence 完整 tick 应用。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S-bbox 图2：收起后 dock 保持旧避让间距（整窗避让，多 32px 透明尾巴） | behavior（生产组合，T-bv45a/f） | 现场形态：气泡候选 200x54@<现场坐标>；capturer 返回 stats（25 个非透明像素、bbox y[15,21]）；生产 `FollowLayoutPass.placeDock` 消费 | 基线完整树 + 仅叠加 test-only 红测块（headless 驱动副本）：RED-bbox1 FAIL——障碍=[(376,446,200,54)] 整窗高度 54，精确复现症状；RED-bbox2（2px 噪声→无障碍）基线即 PASS（覆盖补强）；其余 316 既有用例基线全绿 | fake capturer → 真实 `BubbleVisibilityProbe.probe/classifier/cache` → `FollowLayoutPass.placeDock` 障碍构造 → `frameSink` → **真实 `DockPanel.placeBelow`** | T-bv45a：障碍矩形高度=22（contentBottom+1）、水平仍整窗；T-bv45f：实际 `DockPanel.frame`（setFrame 后 owner 状态，容差<1.0）位于内容底+2（y=470），非整窗避让位 502 | headless 驱动（同 test-ui 源清单+flags）：基线 317 passed/1 failed（红）→ 修复树 326 passed/0 failed（绿） | 真机视觉确认"图1 紧贴横条下方"的体感与时机留视觉 QA |
+| 展开大卡不回归 | behavior（T-bv45b） | 同窗口 stats（189px、内容底 53=窗口底） | 基线行为等价（整窗） | 同上 | 障碍高度 = contentBottom+1 = 54（内容达窗口底时与旧行为一致） | 同上（绿） | 无 |
+| 噪声/完全透明 → 无障碍、基础位 | behavior（T-bv45c/d/g） | 2px 噪声、0px 全透明 stats 经真实 probe→placeDock→placeBelow | 基线 RED-bbox2 即 PASS（hidden 语义重叠区），修复树保持 | 同上 | obstacles 为空；实际 panel 回 pet 底+2 基础位 | 同上（绿） | 无 |
+| unavailable/TCC 保守路径不回归 | behavior（T-bv45e；既有 T-bv34/38 保持） | capturer 返回 `.unavailable`；preflight=false | 基线与修复树均 PASS | 真实 probe conservative 分支 → FollowLayoutPass | 保守 visible 且 contentBottom=nil → 障碍=整窗 bounds（54），不因无内容信息漏避让 | 同上（绿） | TCC 真机行为另见任务级真机矩阵 |
+| 拖动粘性保持 | behavior（T-bv45h；既有 T-bv43/44 保持） | 横条观察入 cache 后，同 WID 候选 bounds 每 tick 平移 (7,5)×4，时间步 0.016s（生产 placeDock 内 probe 消费） | 修复树 | 真实 probe 粘性路径（纯几何不换 generation、cache 保留）→ FollowLayoutPass 障碍构造 | contentBottom 随 cache 保留（窗口内相对坐标不变）；障碍矩形随窗口平移且高度保持 22 | 同上（绿） | 真机拖动叠加收起/展开留视觉 QA |
+| wake/状态语义保持 | behavior（T-bv45i/j；既有 T-bv39/40/42 保持） | 初始 visible 观察、内容底 21→53（visible→visible）、随后无内容（→hidden）三段捕获 | 修复树 | 真实 probe didChange（仅比较可见性状态）→ onVisibilityChange → scheduler coalescer | 初始与内容底变化不 wake；hidden 状态变化恰一次 wake | 同上（绿） | 无 |
+| 既有阈值/滞回用例改写 | behavior | T-bv1–5c 按新语义逐一改写（残留横条→visible、噪声下限边界 2/3px、unavailable 保守、首次 targetMissing 保守），T-bv13/14/22/30/39/43/44 的 hidden 前置改用噪声 stats；无覆盖删除 | 修复树全部 PASS（总数 316→326） | classifier/probe 全部分支 | 各断言逐一对应新语义 | 同上（绿） | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | `swift build -c release` 0 warning；`make docs-check`/`test-docs`/`test-privacy`(28 passed)/`test-data`/`test-shell` 全部 exit 0；test-ui 编译 0 warning（同清单 headless 驱动 326/0） | 完整 `make test`（含 GUI 会话 test-ui 运行时）需对冻结 SHA 复跑 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与前两轮相同无 WindowServer（`NSScreen.screens.count==0`）：`make test-ui` 运行时在既有 `tests/main.swift` NSScreen guard 崩溃。test-ui 语义由 headless 驱动副本承担：复制 `tests/main.swift` 到 /tmp，仅替换该 guard 为固定负 origin 合成屏 frame（primary fixture 走既有合成负坐标分支）并把 3 处 `#filePath` 根固定为本 worktree，其余测试、源文件清单、`-warnings-as-errors -DPETDOCK_TESTING` flags 与 `make test-ui` 完全一致。基线红测在同一 headless 驱动上叠加 test-only 红测块执行，产品源零改动。
+- `swift build`/swiftc 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`（外层 seatbelt 禁止写 `~/.cache`）；`swift build` 另用 `--disable-sandbox` 与 /tmp 缓存路径；python 门禁使用任务指定 venv python。privacy 编译探针子进程同样需要该 env。

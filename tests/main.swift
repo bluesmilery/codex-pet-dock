@@ -797,7 +797,7 @@ check("T-ctrl10c 控制按钮分类.control(btn2)",
 print("\n[控制按钮避让] \(pass - ctPass) passed, \(fail - ctBase) failed")
 print("\n[会话气泡避让] \(pass - avPass) passed, \(fail - avBase) failed")
 
-// ---- T-bv: BubbleVisibility 分类（纯函数滞回）+ 调度（0.1s/single-flight/reset）+ 异步集成（generation/strict single-flight）----
+// ---- T-bv: BubbleVisibility 分类（纯函数·内容噪声下限）+ 调度（0.1s/single-flight/reset）+ 异步集成（generation/strict single-flight）----
 let bvBase = fail, bvPass = pass
 // 进程内权限请求 gate：preflight=false 只请求一次；preflight=true 不请求。
 var requestGate = ScreenCapturePermissionRequestGate()
@@ -806,23 +806,34 @@ check("T-bv0b preflight=false重复检查不再请求", !requestGate.shouldReque
 var grantedGate = ScreenCapturePermissionRequestGate()
 check("T-bv0c preflight=true不请求", !grantedGate.shouldRequest(preflightGranted: true), "")
 check("T-bv0d preflight后续false仍可首次请求", grantedGate.shouldRequest(preflightGranted: false), "")
-// 实测基线（同窗口 345×64 真实对照）
-let collapsedS = BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080)
-let expandedS = BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
-let midS = BubbleAlphaStats(nonTransparentRatio: 0.004, bboxRatio: 0.007)
-check("T-bv1 collapsed→hidden", BubbleVisibilityClassifier.classify(stats: collapsedS, previous: .visible) == .hidden, "")
-check("T-bv2 expanded→visible", BubbleVisibilityClassifier.classify(stats: expandedS, previous: .hidden) == .visible, "")
-check("T-bv3 中间滞回→保持visible", BubbleVisibilityClassifier.classify(stats: midS, previous: .visible) == .visible, "")
-check("T-bv4 中间滞回→保持hidden", BubbleVisibilityClassifier.classify(stats: midS, previous: .hidden) == .hidden, "")
-check("T-bv5 nil stats→visible(capture失败/SC缺失保守避让)",
-      BubbleVisibilityClassifier.classify(stats: nil, previous: .visible) == .visible, "")
-// P1 nil 保守语义（README: capture failure conservatively avoids）：
+// 实测基线（同窗口 345×64 真实对照演化）：宿主收起后残留可见小横条（34px，内容底 y=21）
+// 仍是 visible——按内容 bbox 避让而非 hidden；open/close 比例滞回已被内容噪声下限取代。
+let collapsedS = BubbleAlphaStats(nonTransparentPixelCount: 34, contentBottom: 21)
+let expandedS = BubbleAlphaStats(nonTransparentPixelCount: 189, contentBottom: 53)
+let noiseS = BubbleAlphaStats(nonTransparentPixelCount: 2, contentBottom: 21)
+let floorS = BubbleAlphaStats(nonTransparentPixelCount: 3, contentBottom: 21)
+let bv1Obs = BubbleVisibilityClassifier.classify(stats: collapsedS)
+check("T-bv1 收起残留横条(34px)→visible+内容底21(按内容避让,非hidden)",
+      bv1Obs.visibility == .visible && bv1Obs.contentBottom == 21, "")
+let bv2Obs = BubbleVisibilityClassifier.classify(stats: expandedS)
+check("T-bv2 expanded(189px)→visible+内容底53",
+      bv2Obs.visibility == .visible && bv2Obs.contentBottom == 53, "")
+check("T-bv3 低于噪声下限(2px)→hidden(无滞回,不沿用previous)",
+      BubbleVisibilityClassifier.classify(stats: noiseS).visibility == .hidden, "")
+check("T-bv4 恰达噪声下限(3px)→visible(边界)",
+      BubbleVisibilityClassifier.classify(stats: floorS).visibility == .visible, "")
+// P1 unavailable 保守语义（README: capture failure conservatively avoids）：
 // 当前仍存在的气泡，SC 捕获失败（macOS13/TCC 抖动/窗口刚注册未进 SC content）
-// 必须保守判 visible（当障碍避让），不能因 capture nil 当成收起导致底座重叠气泡。
-check("T-bv5b nil stats(previous hidden)→visible(保守避让,不沿用previous)",
-      BubbleVisibilityClassifier.classify(stats: nil, previous: .hidden) == .visible, "")
-check("T-bv5c nil stats(previous visible)→visible(保守避让)",
-      BubbleVisibilityClassifier.classify(stats: nil, previous: .visible) == .visible, "")
+// 必须保守判 visible 且无内容底边（整窗避让），不能因捕获失败当成收起导致底座重叠气泡。
+let bv5Obs = BubbleVisibilityClassifier.classify(outcome: .unavailable, hasSuccessfulObservation: true)
+check("T-bv5 unavailable(已成功观察过)→保守visible无内容底(整窗避让)",
+      bv5Obs.visibility == .visible && bv5Obs.contentBottom == nil, "")
+let bv5bObs = BubbleVisibilityClassifier.classify(outcome: .unavailable, hasSuccessfulObservation: false)
+check("T-bv5b unavailable(从未观察)→保守visible",
+      bv5bObs.visibility == .visible && bv5bObs.contentBottom == nil, "")
+let bv5cObs = BubbleVisibilityClassifier.classify(outcome: .targetMissing, hasSuccessfulObservation: false)
+check("T-bv5c 首次观察即targetMissing→保守visible",
+      bv5cObs.visibility == .visible, "")
 
 // 调度（isDue + single-flight + reset）—— 经 lock 访问
 let probe = BubbleVisibilityProbe(monotonicNow: { 1000 })
@@ -841,7 +852,10 @@ probe.lock.withLock { $0.inFlight = true }
 check("T-bv9 single-flight→false", !probe.isDue(1001), "")
 probe.reset()
 check("T-bv10 reset不清inFlight(旧Task负责)", probe.lock.withLock { $0.inFlight }, "")
-probe.lock.withLock { $0.inFlight = false; $0.cached = [CGWindowID(1): .visible] }
+probe.lock.withLock {
+    $0.inFlight = false
+    $0.cached = [CGWindowID(1): BubbleObservation(visibility: .visible, contentBottom: nil)]
+}
 probe.reset()
 check("T-bv11 reset→cached空(inFlight不变)", probe.lock.withLock { $0.cached.isEmpty && !$0.inFlight }, "")
 probe.lock.withLock { $0.inFlight = false }
@@ -849,10 +863,8 @@ check("T-bv12 wid不在当前候选集→hidden(当前帧失效)", probe.visibil
 
 // 异步集成（fake capturer + RunLoop pump）：pending capture 完成 → cached 更新
 var fakeTime: TimeInterval = 2000
-let fakeCollapsed: BubbleCapturer = { _ in
-    .stats(BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080))
-}
-let asyncProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: fakeCollapsed)
+let fakeHidden: BubbleCapturer = { _ in .stats(noiseS) }
+let asyncProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: fakeHidden)
 let c1 = mkw(100, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 asyncProbe.probe(candidates: [c1])
 check("T-bv13 probe后inFlight=true", asyncProbe.lock.withLock { $0.inFlight }, "")
@@ -866,7 +878,7 @@ check("T-bv14 pending完成→cached(hidden)+inFlight=false",
 // strict single-flight：reset 期间新 probe 不启动（inFlight 由旧 Task 清）
 let slowCap: BubbleCapturer = { _ in
     try? await Task.sleep(nanoseconds: 300_000_000)  // 300ms（async-safe，无 semaphore）
-    return .stats(BubbleAlphaStats(nonTransparentRatio: 0.001, bboxRatio: 0.001))
+    return .stats(noiseS)
 }
 fakeTime = 3000
 let concProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: slowCap)
@@ -937,7 +949,10 @@ check("T-bv31 空闲态空probe不递增generation", genAfter == genBefore, "bef
 
 // T-bv32: cached 有值时 probe([]) → 仍清 cached + 递增 generation（旧结果失效）
 let cacheProbe = BubbleVisibilityProbe(monotonicNow: { 6000 })
-cacheProbe.lock.withLock { $0.cached = [CGWindowID(7): .visible]; $0.inFlight = false }
+cacheProbe.lock.withLock {
+    $0.cached = [CGWindowID(7): BubbleObservation(visibility: .visible, contentBottom: nil)]
+    $0.inFlight = false
+}
 let genCB = cacheProbe.lock.withLock { $0.generation }
 cacheProbe.probe(candidates: [])
 let genCA = cacheProbe.lock.withLock { $0.generation }
@@ -949,7 +964,7 @@ check("T-bv32 cached非空时probe([])→递增generation+清cached",
 // 真机语义：消息框收起后窗口可能从 obstaclesNear 消失，底座必须复位到宠物下方，
 // 而非沿用上一帧偏移。当前帧候选消失 = 状态立即失效，禁止残留 visible 缓存。
 let vanishCap: BubbleCapturer = { _ in
-    .stats(BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080))   // expanded → visible
+    .stats(expandedS)   // expanded → visible
 }
 let vanishProbe = BubbleVisibilityProbe(
     monotonicNow: { 7000 }, canCapture: { true }, capturer: vanishCap
@@ -972,9 +987,7 @@ check("T-bv33b 候选消失→旧wid状态立即失效(非visible)",
 // capture 失败时底座必须继续避让，不能重叠气泡。
 // 收起态的正确复位由 wid 从候选集消失驱动（见 T-bv33），不由 capture nil 驱动。
 var vanishTime: TimeInterval = 8000
-let vanishStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(
-    BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
-))
+let vanishStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(expandedS))
 let nilCap: BubbleCapturer = { _ in vanishStats.withLock { $0 } }
 let nilProbe = BubbleVisibilityProbe(monotonicNow: { vanishTime }, canCapture: { true }, capturer: nilCap)
 let nilCand = mkw(310, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
@@ -1038,7 +1051,7 @@ check("T-bv35b 收起→visibleObstacles空→dock复位到281(禁用上帧偏�
 // 即使 cached[A] 仍残留 visible，也不能继续作为障碍（回归A复位由候选消失驱动）。
 let p1capTime: TimeInterval = 9000
 let p1Expanded: BubbleCapturer = { _ in
-    .stats(BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080))   // expanded → visible
+    .stats(expandedS)   // expanded → visible
 }
 let p1Probe = BubbleVisibilityProbe(monotonicNow: { p1capTime }, canCapture: { true }, capturer: p1Expanded)
 let p1Cand = mkw(400, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
@@ -1052,7 +1065,7 @@ check("T-bv36a 前置: 候选A expanded→cached visible",
 // 确认 cached 残留 visible（这是要被 knownWids 失效机制屏蔽的旧结果）
 let p1CachedResidue = p1Probe.lock.withLock { $0.cached[CGWindowID(400)] }
 check("T-bv36b cached[A]残留visible(旧结果存在,待失效屏蔽)",
-      p1CachedResidue == .visible, "cached[A]=\(String(describing: p1CachedResidue))")
+      p1CachedResidue?.visibility == .visible, "cached[A]=\(String(describing: p1CachedResidue))")
 // 帧2 候选 A 从集合消失 → knownWids 更新 → visibility(A) 必须 hidden（不被残留 cache 继续当障碍）
 p1Probe.probe(candidates: [])
 check("T-bv36c 候选A消失→visibility立即hidden(旧cache不继续成为障碍)",
@@ -1065,7 +1078,7 @@ check("T-bv36c 候选A消失→visibility立即hidden(旧cache不继续成为障
 let p1Time2: TimeInterval = 9100
 let p1SlowCap: BubbleCapturer = { _ in
     try? await Task.sleep(nanoseconds: 200_000_000)
-    return .stats(BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080))   // visible
+    return .stats(expandedS)   // visible
 }
 let p1Probe2 = BubbleVisibilityProbe(monotonicNow: { p1Time2 }, canCapture: { true }, capturer: p1SlowCap)
 let p1Cand2 = mkw(401, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
@@ -1733,7 +1746,7 @@ check("T-bv39b 生产布局链初始visible→实际panel避让frame",
         && stableTimerBeforeWake?.repeats == false,
       "frame=\(transitionDock.frame) expected=\(transitionAvoidAppKitFrame) obstacles=\(transitionObstacleCounts.withLock { $0 })")
 
-transitionStats.withLock { $0 = .stats(collapsedS) }
+transitionStats.withLock { $0 = .stats(noiseS) }
 transitionTime = 11_001
 transitionProbe.probe(candidates: [transitionCandidate])
 let transitionPump1 = Date().addingTimeInterval(5)
@@ -2678,7 +2691,7 @@ check("T-bv41c RED 同WID身份变化使旧in-flight结果失效",
 // 权衡：拖动期间展开/收起的真实状态变化最迟在拖动结束后的下一次捕获收敛（≤0.2s），见
 // docs/architecture/dock-obstacle-avoidance.md「拖动期间的粘性可见性」。
 var dragTime: TimeInterval = 16_500
-let dragOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(collapsedS))
+let dragOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(noiseS))
 let dragWakes = OSAllocatedUnfairLock(initialState: 0)
 let dragCap: BubbleCapturer = { _ in dragOutcome.withLock { $0 } }
 let dragWid = CGWindowID(531)
@@ -2691,7 +2704,7 @@ let dragProbe = BubbleVisibilityProbe(
 )
 dragProbe.probe(candidates: [mkw(531, layer: 3, dragStart)])
 _ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
-check("T-bv43a 前置: 拖动前collapsed捕获→hidden",
+check("T-bv43a 前置: 拖动前噪声(无内容)捕获→hidden",
       dragProbe.visibility(for: dragWid) == .hidden, "")
 
 /// 拖动序列：宠物每 tick 位移 (7,5) 带动气泡平移，中途叠加尺寸变化（复现 Activity Stack
@@ -2714,7 +2727,7 @@ func bv43DragTicks(_ probe: BubbleVisibilityProbe, wid: UInt32, start: CGRect,
 let dragHiddenRun = bv43DragTicks(dragProbe, wid: 531, start: dragStart, ticks: 10, expected: .hidden)
 check("T-bv43b RED 拖动期间bounds逐tick平移→visibility保持拖动前hidden",
       dragHiddenRun.stayed
-        && dragProbe.lock.withLock { $0.cached[dragWid] } == .hidden,
+        && dragProbe.lock.withLock { $0.cached[dragWid]?.visibility } == .hidden,
       "visibility=\(dragProbe.visibility(for: dragWid)) "
         + "cached=\(String(describing: dragProbe.lock.withLock { $0.cached[dragWid] }))")
 
@@ -2757,7 +2770,7 @@ let inflightGate = AsyncCaptureEntryGate()
 let inflightCap: BubbleCapturer = { _ in
     inflightCalls.withLock { $0 += 1 }
     await inflightGate.waitAfterEntry()
-    return .stats(collapsedS)
+    return .stats(noiseS)
 }
 let inflightProbe = BubbleVisibilityProbe(
     monotonicNow: { dragTime }, canCapture: { true }, capturer: inflightCap)
@@ -2783,7 +2796,7 @@ _ = waitPumpingMain { !inflightProbe.lock.withLock { $0.inFlight } }
 check("T-bv43g 拖动中in-flight旧结果拒绝写入且cache保持粘性hidden",
       inflightEntered1 && inflightPreHidden && inflightEntered2
         && inflightCalls.withLock { $0 } == 2
-        && inflightProbe.lock.withLock { $0.cached[inflightStable.wid] } == .hidden
+        && inflightProbe.lock.withLock { $0.cached[inflightStable.wid]?.visibility } == .hidden
         && inflightProbe.visibility(for: inflightStable.wid) == .hidden,
       "entered1=\(inflightEntered1) preHidden=\(inflightPreHidden) entered2=\(inflightEntered2) "
         + "calls=\(inflightCalls.withLock { $0 }) "
@@ -2791,7 +2804,7 @@ check("T-bv43g 拖动中in-flight旧结果拒绝写入且cache保持粘性hidden
 
 // 真正身份变化（WID 集合变化 / owner 变化 / layer 变化）→ 维持现行清空 + 保守 visible，
 // 且成功观察资格同步清空（变化后首次 targetMissing 仍保守 visible，T-bv39f3 语义）。
-let idChangeOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(collapsedS))
+let idChangeOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(noiseS))
 let idChangeCap: BubbleCapturer = { _ in idChangeOutcome.withLock { $0 } }
 func bv43MakeIdentityProbe() -> BubbleVisibilityProbe {
     BubbleVisibilityProbe(monotonicNow: { dragTime }, canCapture: { true }, capturer: idChangeCap)
@@ -2817,7 +2830,7 @@ check("T-bv43h1 owner变化→清cache回保守visible且观察资格清空",
         && ownerProbe.visibility(for: ownerChanged.wid) == .visible,
       "established=\(ownerHiddenEstablished) cleared=\(ownerClearedToVisible) "
         + "afterMissing=\(ownerProbe.visibility(for: ownerChanged.wid))")
-idChangeOutcome.withLock { $0 = .stats(collapsedS) }
+idChangeOutcome.withLock { $0 = .stats(noiseS) }
 
 let layerProbe = bv43MakeIdentityProbe()
 let layerStable = mkw(535, layer: 3, dragStart)
@@ -2850,7 +2863,7 @@ check("T-bv43h3 WID集合变化→新wid保守visible",
 var bv44Time: TimeInterval = 18_000
 var bv44Clock: TimeInterval = 0
 let bv44Dock = DockPanel()
-let bv44Outcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(collapsedS))
+let bv44Outcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(noiseS))
 let bv44Cap: BubbleCapturer = { _ in bv44Outcome.withLock { $0 } }
 let bv44Ticks = OSAllocatedUnfairLock(initialState: 0)
 let bv44ObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
@@ -2948,6 +2961,181 @@ check("T-bv44c 拖动结束后真实捕获刷新→wake→完整tick→实际pan
       "obstacles=\(bv44ObstacleCounts.withLock { $0 }) frame=\(bv44Dock.frame) "
         + "expected=\(bv44AvoidFrame())")
 bv44Scheduler.stop()
+
+// T-bv45 (气泡障碍按可见内容 bbox 避让·现场形态回归): 宿主状态卡容器窗口 200x54，
+// 可见内容（白色小横条）只占窗口内 y[15,21]（25 个非透明像素、7px 高），底部 32px 全透明。
+// 旧 open/close 比例阈值把该形态滞回成 visible→整窗避让（多让 32px 透明尾巴，图2 症状）
+// 或 hidden→遮住横条；新语义：有内容（非透明像素 ≥3）→ 障碍高度=contentBottom+1，
+// dock 紧贴内容底+gap；无内容→不避让；保守 visible（unavailable）→ 整窗 bounds。
+let bv45Base = fail
+let bv45Pet = CGRect(x: 362, y: 382, width: 172, height: 62)      // maxY=444
+let bv45Bubble = CGRect(x: 376, y: 446, width: 200, height: 54)    // 现场形态窗口
+let bv45BarStats = BubbleAlphaStats(nonTransparentPixelCount: 25, contentBottom: 21)
+var bv45Time: TimeInterval = 19_000
+func bv45MakeProbe(
+    outcome: BubbleCaptureOutcome,
+    onVisibilityChange: @escaping @Sendable () -> Void = {}
+) -> BubbleVisibilityProbe {
+    let locked = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: outcome)
+    return BubbleVisibilityProbe(
+        monotonicNow: { bv45Time }, canCapture: { true },
+        capturer: { _ in locked.withLock { $0 } },
+        onVisibilityChange: onVisibilityChange)
+}
+func bv45LayoutObstacles(_ probe: BubbleVisibilityProbe, bubble: CGRect) -> [CGRect] {
+    var obstacles: [CGRect] = []
+    _ = FollowLayoutPass.placeDock(
+        mascot: mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+        candidates: [
+            mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+            mkw(544, layer: 3, bubble)
+        ],
+        bubbleProbe: probe,
+        frameSink: { _, obs in obstacles = obs; return true })
+    return obstacles
+}
+
+// (a) 小横条：障碍高度 = contentBottom+1 = 22，水平仍整窗 bounds
+let bv45BarProbe = bv45MakeProbe(outcome: .stats(bv45BarStats))
+bv45BarProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45BarProbe.lock.withLock { $0.inFlight } }
+let bv45BarObstacles = bv45LayoutObstacles(bv45BarProbe, bubble: bv45Bubble)
+check("T-bv45a 小横条(25px,y15-21)→障碍高度22(contentBottom+1),水平仍整窗",
+      bv45BarObstacles == [CGRect(x: 376, y: 446, width: 200, height: 22)],
+      "obstacles=\(bv45BarObstacles)")
+
+// (b) 展开大卡：内容底达窗口底（53）→ 障碍高度 = 54（整窗，语义与旧行为一致）
+let bv45ExpandedProbe = bv45MakeProbe(outcome: .stats(expandedS))
+bv45ExpandedProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45ExpandedProbe.lock.withLock { $0.inFlight } }
+let bv45ExpandedObstacles = bv45LayoutObstacles(bv45ExpandedProbe, bubble: bv45Bubble)
+check("T-bv45b 展开大卡(内容底53)→障碍高度54(contentBottom+1=整窗)",
+      bv45ExpandedObstacles == [CGRect(x: 376, y: 446, width: 200, height: 54)],
+      "obstacles=\(bv45ExpandedObstacles)")
+
+// (c) 噪声（2px）与完全透明 → 无障碍
+let bv45NoiseProbe = bv45MakeProbe(outcome: .stats(noiseS))
+bv45NoiseProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45NoiseProbe.lock.withLock { $0.inFlight } }
+check("T-bv45c 2px噪声(低于下限)→无障碍",
+      bv45LayoutObstacles(bv45NoiseProbe, bubble: bv45Bubble).isEmpty, "")
+let bv45TransparentProbe = bv45MakeProbe(
+    outcome: .stats(BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1)))
+bv45TransparentProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45TransparentProbe.lock.withLock { $0.inFlight } }
+check("T-bv45d 完全透明→无障碍",
+      bv45LayoutObstacles(bv45TransparentProbe, bubble: bv45Bubble).isEmpty, "")
+
+// (d) unavailable → 保守 visible 且无内容底边 → 整窗 bounds 避让（不回归）
+let bv45UnavailableProbe = bv45MakeProbe(outcome: .unavailable)
+bv45UnavailableProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45UnavailableProbe.lock.withLock { $0.inFlight } }
+let bv45UnavailableObstacles = bv45LayoutObstacles(bv45UnavailableProbe, bubble: bv45Bubble)
+check("T-bv45e unavailable→保守visible整窗障碍54(无内容信息)",
+      bv45UnavailableObstacles == [CGRect(x: 376, y: 446, width: 200, height: 54)]
+        && bv45UnavailableProbe.observation(for: CGWindowID(544)).contentBottom == nil,
+      "obstacles=\(bv45UnavailableObstacles)")
+
+// (e) 生产组合：FollowLayoutPass → 真实 DockPanel.placeBelow → 实际 frame 紧贴内容底+2。
+// dock x=348（pet 中心），基础 y=446 与横条障碍(446..468)重叠 → 避让到 470；
+// 整窗避让则会到 502（用户看到的图2 多余 32px 空白）。
+let bv45Dock = DockPanel()
+let bv45ProdProbe = bv45MakeProbe(outcome: .stats(bv45BarStats))
+bv45ProdProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45ProdProbe.lock.withLock { $0.inFlight } }
+let bv45ProdPlaced = FollowLayoutPass.placeDock(
+    mascot: mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+    candidates: [
+        mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+        mkw(544, layer: 3, bv45Bubble)
+    ],
+    bubbleProbe: bv45ProdProbe,
+    frameSink: { pet, obstacles in
+        bv45Dock.placeBelow(
+            petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+            movementChanged: false, monotonicNow: bv45Time)
+    })
+let bv45ContentAvoidFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: 348, y: 470, width: 200, height: 48))
+check("T-bv45f 横条→实际panel frame紧贴内容底+2(y=470,非整窗502)",
+      bv45ProdPlaced && dockFrameNear(bv45Dock.frame, bv45ContentAvoidFrame),
+      "frame=\(bv45Dock.frame) expected=\(bv45ContentAvoidFrame)")
+
+// (f) 无内容（噪声）→ 实际 panel 回基础位（pet 底+2 = 446）
+let bv45BaseDock = DockPanel()
+let bv45BaseProbe = bv45MakeProbe(outcome: .stats(noiseS))
+bv45BaseProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45BaseProbe.lock.withLock { $0.inFlight } }
+let bv45BasePlaced = FollowLayoutPass.placeDock(
+    mascot: mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+    candidates: [
+        mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+        mkw(544, layer: 3, bv45Bubble)
+    ],
+    bubbleProbe: bv45BaseProbe,
+    frameSink: { pet, obstacles in
+        bv45BaseDock.placeBelow(
+            petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+            movementChanged: false, monotonicNow: bv45Time)
+    })
+let bv45BaseFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: 348, y: 446, width: 200, height: 48))
+check("T-bv45g 无内容→实际panel回基础位(pet底+2)",
+      bv45BasePlaced && dockFrameNear(bv45BaseDock.frame, bv45BaseFrame),
+      "frame=\(bv45BaseDock.frame) expected=\(bv45BaseFrame)")
+
+// (g) 拖动粘性：bounds 纯平移期间 cache 的 contentBottom（窗口内相对坐标）继续有效，
+// 障碍矩形随窗口平移且高度保持 22。
+var bv45DragBubble = bv45Bubble
+var bv45DragObstaclesOK = true
+let bv45DragProbe = bv45MakeProbe(outcome: .stats(bv45BarStats))
+bv45DragProbe.probe(candidates: [mkw(544, layer: 3, bv45DragBubble)])
+_ = waitPumpingMain { !bv45DragProbe.lock.withLock { $0.inFlight } }
+for _ in 0..<4 {
+    bv45DragBubble.origin.x += 7
+    bv45DragBubble.origin.y += 5
+    bv45Time += 0.016
+    let expected = CGRect(x: bv45DragBubble.minX, y: bv45DragBubble.minY,
+                          width: bv45DragBubble.width, height: 22)
+    if bv45LayoutObstacles(bv45DragProbe, bubble: bv45DragBubble) != [expected] {
+        bv45DragObstaclesOK = false
+    }
+}
+check("T-bv45h 拖动平移期间contentBottom粘性保留→障碍矩形随窗口平移(高度22)",
+      bv45DragObstaclesOK
+        && bv45DragProbe.observation(for: CGWindowID(544)).contentBottom == 21,
+      "obstaclesOK=\(bv45DragObstaclesOK)")
+
+// (h) wake 语义保持：只有可见性状态变化唤醒；内容底变化（visible→visible）不额外唤醒，
+// 由既有 0.1s cadence 的下一次完整 tick 应用。
+let bv45Wakes = OSAllocatedUnfairLock(initialState: 0)
+let bv45WakeProbe = bv45MakeProbe(
+    outcome: .stats(bv45BarStats),
+    onVisibilityChange: { bv45Wakes.withLock { $0 += 1 } })
+bv45WakeProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45WakeProbe.lock.withLock { $0.inFlight } }
+let bv45WakesAfterBar = bv45Wakes.withLock { $0 }
+// 内容底 21→53（visible→visible）：不唤醒，但观察已更新
+let bv45WakeExpand = bv45MakeProbe(
+    outcome: .stats(expandedS),
+    onVisibilityChange: { bv45Wakes.withLock { $0 += 1 } })
+bv45WakeExpand.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45WakeExpand.lock.withLock { $0.inFlight } }
+check("T-bv45i 初始与内容底变化(visible→visible)不wake",
+      bv45WakesAfterBar == 0 && bv45Wakes.withLock { $0 } == 0
+        && bv45WakeExpand.observation(for: CGWindowID(544)).contentBottom == 53,
+      "afterBar=\(bv45WakesAfterBar) wakes=\(bv45Wakes.withLock { $0 })")
+// 随后无内容（hidden 状态变化）→ 恰一次唤醒
+bv45Time += 0.11
+let bv45WakeHide = bv45MakeProbe(
+    outcome: .stats(noiseS),
+    onVisibilityChange: { bv45Wakes.withLock { $0 += 1 } })
+bv45WakeHide.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45WakeHide.lock.withLock { $0.inFlight } }
+check("T-bv45j hidden状态变化→恰一次wake(状态唤醒语义保持)",
+      bv45Wakes.withLock { $0 } == 1
+        && bv45WakeHide.observation(for: CGWindowID(544)).visibility == .hidden,
+      "wakes=\(bv45Wakes.withLock { $0 })")
 
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
 

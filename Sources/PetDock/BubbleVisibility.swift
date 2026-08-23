@@ -4,33 +4,37 @@ import ScreenCaptureKit
 
 // MARK: - 会话气泡可见性（ScreenCaptureKit 像素 alpha 判定）
 
-/// 会话气泡是否实际绘制内容（展开 vs 收起）。
-/// - visible：有内容（展开）→ 作为障碍避让。
-/// - hidden：空/收起 → 不避让，dock 回 pet 下方。
+/// 会话气泡是否实际绘制可见内容。
+/// - visible：有可见内容（非透明像素数 ≥ 噪声下限）→ 作为障碍按内容 bbox 避让。
+/// - hidden：无内容 / 低于噪声下限 → 不避让，dock 回 pet 下方。
 enum BubbleVisibility: Equatable, Sendable {
     case visible
     case hidden
 }
 
-/// 实测校准阈值（同窗口 345×64 真实 collapsed vs expanded 对照）。
-/// collapsed: nonTransparent 34/22080≈0.154%, bbox 48/22080≈0.217%
-/// expanded:  nonTransparent 189/22080≈0.856%, bbox 390/22080≈1.766%
-/// open/close 之间留滞回区，防抖动。
+/// 可见内容噪声下限（像素数）。宿主收起后的状态卡容器仍残留一条 ~7px 高的可见小横条
+///（现场实测 25 个非透明像素、窗口内 y[15,21]，底部 32px 全透明）——它对用户可见，
+/// 必须继续避让；而 1-2 个孤立非透明像素更可能来自捕获噪声，不作为障碍。
+/// 旧的 open/close 比例阈值假设“收起=无卡”，已被该残留横条实测否定，由内容 bbox 方案取代。
 enum BubbleVisibilityThresholds {
-    /// 判 visible：非透明占比 ≥ 此值（0.6%，在 collapsed 0.154% 与 expanded 0.856% 之间）。
-    static let openNonTransparent: Double = 0.006
-    /// 判 visible：bbox 占比 ≥ 此值（1.0%，在 collapsed 0.217% 与 expanded 1.766% 之间）。
-    static let openBBox: Double = 0.010
-    /// 判 hidden：非透明占比 ≤ 此值（0.3%）。
-    static let closeNonTransparent: Double = 0.003
-    /// 判 hidden：bbox 占比 ≤ 此值（0.5%）。
-    static let closeBBox: Double = 0.005
+    /// 非透明像素数 ≥ 此值判 visible（有内容）；低于此值判 hidden（噪声/全透明）。
+    static let minContentPixels = 3
 }
 
 /// 匿名像素 alpha 统计（不记录颜色/文字/图像）。
 struct BubbleAlphaStats: Equatable, Sendable {
-    let nonTransparentRatio: Double   // alpha>0.04 像素 / 总像素
-    let bboxRatio: Double             // 非透明 bbox 面积 / 总像素
+    let nonTransparentPixelCount: Int   // alpha>0.04 像素数（噪声下限输入）
+    /// 非透明内容的窗口内像素底边（maxY）；无内容时为 -1。
+    /// 避让矩形高度 = contentBottom+1，使 dock 紧贴可见内容而非整窗 bounds。
+    let contentBottom: Int
+}
+
+/// 单个气泡候选最近一次已分类观察结果：可见性 + 可见内容的窗口内底边。
+/// - contentBottom 仅来自成功像素统计且判 visible；保守 visible（unavailable / 尚未完成
+///   首次观察）为 nil —— 布局退回整窗 bounds 避让（无内容信息时的保守占位）。
+struct BubbleObservation: Equatable, Sendable {
+    let visibility: BubbleVisibility
+    let contentBottom: Int?
 }
 
 /// ScreenCaptureKit 观察结果的最小策略相关语义。
@@ -83,8 +87,9 @@ struct BubbleCandidateIdentity: Equatable, Sendable {
     }
 }
 
-/// 纯函数分类（有滞回）。
-/// - stats 有值：按 alpha 阈值判 visible/hidden，中间区滞回（沿用 previous）。
+/// 纯函数分类（按可见内容，无滞回）。
+/// - stats：非透明像素数 ≥ 噪声下限 → visible（携带内容底边）；否则 hidden。
+/// - targetMissing：同 generation 已成功观察过 → hidden；从未观察过 → 保守 visible。
 /// - unavailable（capture 失败 / macOS 13 / TCC 抖动）→ `.visible`（保守避让）。
 ///   README 契约："on macOS 13 or capture failure, it conservatively avoids"。
 ///   当前仍存在的气泡（wid 在候选集内），capture 失败时必须保守当障碍避让，
@@ -92,31 +97,26 @@ struct BubbleCandidateIdentity: Equatable, Sendable {
 ///   收起态的正确复位由已观察 WID 的 targetMissing 结果或
 ///   `BubbleVisibilityProbe.knownWids` 失效机制承担，不依赖 unavailable。
 enum BubbleVisibilityClassifier {
-    static func classify(stats: BubbleAlphaStats?, previous: BubbleVisibility) -> BubbleVisibility {
-        guard let s = stats else { return .visible }
-        return classify(stats: s, previous: previous)
-    }
-
-    static func classify(stats: BubbleAlphaStats, previous: BubbleVisibility) -> BubbleVisibility {
-        if stats.nonTransparentRatio >= BubbleVisibilityThresholds.openNonTransparent
-            || stats.bboxRatio >= BubbleVisibilityThresholds.openBBox { return .visible }
-        if stats.nonTransparentRatio <= BubbleVisibilityThresholds.closeNonTransparent
-            && stats.bboxRatio <= BubbleVisibilityThresholds.closeBBox { return .hidden }
-        return previous   // 中间滞回
+    static func classify(stats: BubbleAlphaStats) -> BubbleObservation {
+        guard stats.nonTransparentPixelCount >= BubbleVisibilityThresholds.minContentPixels else {
+            return BubbleObservation(visibility: .hidden, contentBottom: nil)
+        }
+        return BubbleObservation(visibility: .visible, contentBottom: stats.contentBottom)
     }
 
     static func classify(
         outcome: BubbleCaptureOutcome,
-        previous: BubbleVisibility,
         hasSuccessfulObservation: Bool
-    ) -> BubbleVisibility {
+    ) -> BubbleObservation {
         switch outcome {
         case .stats(let stats):
-            return classify(stats: stats, previous: previous)
+            return classify(stats: stats)
         case .targetMissing:
-            return hasSuccessfulObservation ? .hidden : .visible
+            return BubbleObservation(
+                visibility: hasSuccessfulObservation ? .hidden : .visible,
+                contentBottom: nil)
         case .unavailable:
-            return .visible
+            return BubbleObservation(visibility: .visible, contentBottom: nil)
         }
     }
 }
@@ -143,7 +143,7 @@ final class BubbleVisibilityProbe: Sendable {
 
     /// 受锁保护的可变状态（同 module 测试可经 lock 访问）。
     internal struct ProbeState: Sendable {
-        var cached: [CGWindowID: BubbleVisibility] = [:]
+        var cached: [CGWindowID: BubbleObservation] = [:]
         var lastCaptureAt: TimeInterval = -.greatestFiniteMagnitude
         var inFlight = false
         var pendingRetryAt: TimeInterval?
@@ -195,13 +195,12 @@ final class BubbleVisibilityProbe: Sendable {
     /// 必须每帧立即生效，使 `visibility(for:)` 对已消失候选返回 `.hidden`（当前帧失效，回归 A）。
     func probe(candidates: [WinCandidate]) {
         let gen: Int
-        let prev: [CGWindowID: BubbleVisibility]
         let previouslyObserved: Set<CGWindowID>
         let capturedCandidates: [CGWindowID: BubbleCandidateIdentity]
         let shouldStart: Bool
         let identityChanged: Bool
         let captureAllowed = !candidates.isEmpty && canCapture()
-        (gen, prev, previouslyObserved, capturedCandidates, shouldStart, identityChanged) = lock.withLock { s -> (Int, [CGWindowID: BubbleVisibility], Set<CGWindowID>, [CGWindowID: BubbleCandidateIdentity], Bool, Bool) in
+        (gen, previouslyObserved, capturedCandidates, shouldStart, identityChanged) = lock.withLock { s -> (Int, Set<CGWindowID>, [CGWindowID: BubbleCandidateIdentity], Bool, Bool) in
             s.pendingRetryAt = nil
             // 同步刷新 knownWids：当前帧实际存在的候选 wid（每帧事实，立即生效）。
             let nextWids = Set(candidates.map { $0.wid })
@@ -238,14 +237,14 @@ final class BubbleVisibilityProbe: Sendable {
                 // 宠物可见但下方无会话气泡时，moving 态会高频调用 probe([])，
                 // 此早退避免每帧递增 generation + 清空字典的无意义锁写。
                 if s.cached.isEmpty && s.successfullyObservedWids.isEmpty && !s.inFlight {
-                    return (0, [:], [], [:], false, false)
+                    return (0, [], [:], false, false)
                 }
                 // 仍有缓存或在途：与 reset() 一致递增 generation + 清 cached，使旧结果失效。
                 // 旧 Task 仍持有唯一 token，完成时清 inFlight；期间候选重新出现 probe 被拒。
                 s.generation += 1
                 s.cached.removeAll()
                 s.successfullyObservedWids.removeAll()
-                return (0, [:], [], [:], false, false)
+                return (0, [], [:], false, false)
             }
             guard captureAllowed else {
                 // 权限尚未对本进程生效：不进入 ScreenCaptureKit，并清除旧 hidden 缓存，
@@ -255,20 +254,20 @@ final class BubbleVisibilityProbe: Sendable {
                     s.cached.removeAll()
                     s.successfullyObservedWids.removeAll()
                 }
-                return (0, [:], [], [:], false, identityChanged)
+                return (0, [], [:], false, identityChanged)
             }
             let time = monotonicNow()
             guard !s.inFlight else {
-                return (0, [:], [], [:], false, identityChanged)
+                return (0, [], [:], false, identityChanged)
             }
             let elapsed = time - s.lastCaptureAt
             guard elapsed >= Self.minInterval else {
                 s.pendingRetryAt = s.lastCaptureAt + Self.minInterval
-                return (0, [:], [], [:], false, identityChanged)
+                return (0, [], [:], false, identityChanged)
             }
             s.inFlight = true
             s.lastCaptureAt = time
-            return (s.generation, s.cached, s.successfullyObservedWids, s.knownCandidates, true, identityChanged)
+            return (s.generation, s.successfullyObservedWids, s.knownCandidates, true, identityChanged)
         }
         // identity telemetry 必须在 capture gate 之前：候选非空且 known identity 变化时，
         // 即使 capture 未 due 或 inFlight（shouldStart=false），H4b 的 identity 抖动也不能漏计。
@@ -276,20 +275,19 @@ final class BubbleVisibilityProbe: Sendable {
         guard shouldStart else { return }
         let cap = capturer
         let notify = onVisibilityChange
-        // Task.detached：不捕获 self（仅捕获 Sendable 值 lock/cap/gen/prev/candidates/identity）→ 0 #SendableClosureCaptures warning。
+        // Task.detached：不捕获 self（仅捕获 Sendable 值 lock/cap/gen/observed/candidates/identity）→ 0 #SendableClosureCaptures warning。
         // 像素计算（cap → captureStats → computeAlphaStats）在后台线程执行。
         // evidence 只接收枚举计数（outcome kind + classified visibility），不接收 alpha 统计值。
         // 计数延迟到 completion 的 generation+identity 接受校验之后：
         // stale/过期 in-flight 结果不写 cache，也绝不进入真实统计。
         Task.detached { [lock, evidence] in
-            var r: [CGWindowID: BubbleVisibility] = [:]
+            var r: [CGWindowID: BubbleObservation] = [:]
             var observedWids = Set<CGWindowID>()
             var evidencePairs: [(RuntimeCaptureOutcomeKind, BubbleVisibility)] = []
             for c in candidates {
                 let outcome = await cap(c)
-                let classified = BubbleVisibilityClassifier.classify(
+                let observation = BubbleVisibilityClassifier.classify(
                     outcome: outcome,
-                    previous: prev[c.wid] ?? .visible,
                     hasSuccessfulObservation: previouslyObserved.contains(c.wid)
                 )
                 if evidence != nil {
@@ -299,10 +297,10 @@ final class BubbleVisibilityProbe: Sendable {
                     case .targetMissing: kind = .targetMissing
                     case .unavailable: kind = .unavailable
                     }
-                    evidencePairs.append((kind, classified))
+                    evidencePairs.append((kind, observation.visibility))
                 }
                 if case .stats = outcome { observedWids.insert(c.wid) }
-                r[c.wid] = classified
+                r[c.wid] = observation
             }
             let results = r   // var→let：lock 闭包只捕获不可变 Sendable 值
             let successfulWids = observedWids
@@ -313,7 +311,7 @@ final class BubbleVisibilityProbe: Sendable {
                       s.knownCandidates == capturedCandidates else { return (false, false) } // generation/identity 过期 → 不写 cached/通知/证据
                 let changed = results.contains { entry in
                     s.knownWids.contains(entry.key)
-                        && (s.cached[entry.key] ?? .visible) != entry.value
+                        && (s.cached[entry.key]?.visibility ?? .visible) != entry.value.visibility
                 }
                 s.cached = results
                 s.successfullyObservedWids.formUnion(successfulWids)
@@ -340,14 +338,22 @@ final class BubbleVisibilityProbe: Sendable {
         return max(0, deadline - monotonicNow())
     }
 
-    /// 同步读缓存（tick 主线程，非阻塞）。
-    /// - wid 在当前帧候选集（knownWids）中：返回 cached 结果；尚未完成首次探测 → `.visible`（保守避让）。
+    /// 同步读缓存观察结果（tick 主线程，非阻塞）。
+    /// - wid 在当前帧候选集（knownWids）中：返回 cached 观察；尚未完成首次探测 → 保守
+    ///   `.visible` 且 contentBottom=nil（无内容信息 → 整窗避让）。
     /// - wid 不在当前帧候选集（已从 obstaclesNear 消失）→ `.hidden`（当前帧失效，复位，回归 A）。
-    func visibility(for wid: CGWindowID) -> BubbleVisibility {
+    func observation(for wid: CGWindowID) -> BubbleObservation {
         lock.withLock {
-            guard $0.knownWids.contains(wid) else { return .hidden }
-            return $0.cached[wid] ?? .visible
+            guard $0.knownWids.contains(wid) else {
+                return BubbleObservation(visibility: .hidden, contentBottom: nil)
+            }
+            return $0.cached[wid] ?? BubbleObservation(visibility: .visible, contentBottom: nil)
         }
+    }
+
+    /// 同步读可见性状态（wake/telemetry 语义入口；障碍构造请用 observation(for:)）。
+    func visibility(for wid: CGWindowID) -> BubbleVisibility {
+        observation(for: wid).visibility
     }
 
     /// 候选/宠物消失 → 递增 generation（旧 Task 回调失效）+ 清 cached/knownWids/knownCandidates。
@@ -399,20 +405,17 @@ final class BubbleVisibilityProbe: Sendable {
     static func computeAlphaStats(image: CGImage) -> BubbleAlphaStats {
         let rep = NSBitmapImageRep(cgImage: image)
         let w = rep.pixelsWide, h = rep.pixelsHigh
-        guard w > 0, h > 0 else { return BubbleAlphaStats(nonTransparentRatio: 0, bboxRatio: 0) }
-        let total = Double(w * h)
-        var nonTrans = 0, minX = w, minY = h, maxX = 0, maxY = 0
+        guard w > 0, h > 0 else { return BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1) }
+        var nonTrans = 0, maxY = -1
         for y in 0..<h {
             for x in 0..<w {
                 guard let c = rep.colorAt(x: x, y: y) else { continue }
                 if c.alphaComponent > 0.04 {
                     nonTrans += 1
-                    if x < minX { minX = x }; if x > maxX { maxX = x }
-                    if y < minY { minY = y }; if y > maxY { maxY = y }
+                    if y > maxY { maxY = y }
                 }
             }
         }
-        let bbox = nonTrans > 0 ? Double((maxX - minX + 1) * (maxY - minY + 1)) : 0
-        return BubbleAlphaStats(nonTransparentRatio: Double(nonTrans) / total, bboxRatio: bbox / total)
+        return BubbleAlphaStats(nonTransparentPixelCount: nonTrans, contentBottom: maxY)
     }
 }
