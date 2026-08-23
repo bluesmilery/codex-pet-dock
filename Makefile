@@ -2,6 +2,7 @@ PYTHON := $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python;
 BINARY := .build/release/PetDock
 APP    := build/PetDock.app
 IDENT  := io.github.bluesmilery.codexpetdock
+STABLE_SIGN_IDENTITY ?= PetDock Local Development
 
 .PHONY: build app run diagnose clean clean-logs docs-check test-docs test test-ui test-data test-shell test-privacy
 
@@ -15,7 +16,14 @@ app: build
 	@cp build-resources/Info.plist $(APP)/Contents/Info.plist
 	@cp build-resources/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	@printf 'APPL????' > $(APP)/Contents/PkgInfo
-	@codesign -s - --force --identifier $(IDENT) $(APP)
+	@if security find-certificate -c "$(STABLE_SIGN_IDENTITY)" >/dev/null 2>&1 \
+		&& codesign -s "$(STABLE_SIGN_IDENTITY)" --force --identifier "$(IDENT)" "$(APP)"; then \
+		echo "稳定签名: $(STABLE_SIGN_IDENTITY)"; \
+	else \
+		rm -rf $(APP); \
+		echo "错误: 未找到/不可用稳定签名证书 '$(STABLE_SIGN_IDENTITY)'。ad-hoc 签名会使 TCC 屏幕录制授权随每次构建失效，为避免静默退化构建已终止。排查: security find-certificate -c '$(STABLE_SIGN_IDENTITY)'，并检查钥匙串是否锁定。" >&2; \
+		exit 1; \
+	fi
 	@echo "已构建: $(APP)"
 
 run: app

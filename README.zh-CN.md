@@ -73,7 +73,7 @@
 
 **屏幕录制权限（TCC）**：`CGWindowListCopyWindowInfo` 是唯一公开的跨应用窗口枚举 API；macOS 在未授权时会将其过滤为空列表。`PetDock.app` 每个进程至多主动请求一次权限；preflight 不可用期间不进入后台 `ScreenCaptureKit` 捕获，避免反复提示，同时保留气泡保守避让与状态栏提醒。请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 **PetDock**，然后退出并重启 app 使权限生效。
 
-> ⚠️ ad-hoc 签名没有 team ID，TCC 按 ad-hoc 签名的代码目录哈希认证；每次重新签名（如重新执行 `make app`）都会改变该哈希值，使授权失效而需要重新授予。生产环境建议改用稳定开发者签名或 notarized 构建。
+> ⚠️ TCC 按应用代码签名认证屏幕录制授权。ad-hoc 签名没有稳定身份，每次重新签名（如重新执行 `make app`）都会改变代码目录哈希、使授权失效。因此 `make app` 在本机存在自签证书 `PetDock Local Development` 时自动优先用它签名（可用 `STABLE_SIGN_IDENTITY` 覆盖）；用该稳定证书签名时，重新签名后授权在本机继续保留。`STABLE_SIGN_IDENTITY` 的取值应为纯证书名（不含引号、分号、反引号等 shell 元字符）。没有该证书时构建失败并提示原因。该证书为本机自签身份（无 Developer ID、未公证），私钥不会分发。
 
 ---
 
@@ -91,7 +91,7 @@ uv sync --dev     # 按 uv.lock 创建 Python 3.12 的 .venv，并安装 pytest
 
 ```sh
 make build        # swift build -c release，产出 .build/release/PetDock
-make app          # 组装 build/PetDock.app 并 ad-hoc 签名（Identifier=io.github.bluesmilery.codexpetdock）
+make app          # 组装 build/PetDock.app；本机存在 'PetDock Local Development' 证书时自动稳定签名，否则构建失败（Identifier=io.github.bluesmilery.codexpetdock）
 make run          # 构建 app、启动（日志写入 Application Support/PetDock/Logs 私有目录）
 make diagnose     # 构建并跑一次脱敏诊断（写入 Diagnostics/diagnose.txt 私有文件）
 pkill -f PetDock  # 停止运行
@@ -105,13 +105,13 @@ make clean-logs   # 清理 Application Support/PetDock 私有运行 / 诊断日�
 
 日志、诊断与 token 缓存统一位于 `~/Library/Application Support/PetDock/` 私有目录（目录 0700、文件 0600），日志拒绝 symlink 重定向。Codex helper 仅接收最小白名单环境，不继承 API key、cookie、代理凭证或未知变量；依赖环境变量认证的用户请改用 Codex 自身登录态。
 
-**分发**：当前发布包为 ad-hoc 签名（无 team ID）、未 notarized 的 arm64 预编译包。具体校验值与下载方式以发布说明为准。
+**分发**：当前发布包为本机签名（无 team ID）、未 notarized 的 arm64 预编译包。构建机存在 'PetDock Local Development' 证书时 `make app` 自动稳定签名，否则构建失败；实际签名方式、校验值与下载渠道以发布说明为准。
 
 **预览安装**（非一键可信安装）：
 
 1. 下载 `CodexPetDock-0.2.0-macOS-arm64.zip` 并解压。
 2. 将 `PetDock.app` 移至 `/Applications`（或任意固定位置）。
-3. 因应用为 ad-hoc 签名（无 Developer ID、未公证），macOS Gatekeeper 可能拦截首次启动。前往**系统设置 › 隐私与安全性**，点击**仍要打开**（或在 Gatekeeper 对话框中选"打开"）。详见 [Apple 官方指南](https://support.apple.com/guide/mac-help/mh40616/mac)。
+3. 因应用为本机自签证书签名（无 Developer ID、未公证），macOS Gatekeeper 可能拦截首次启动。前往**系统设置 › 隐私与安全性**，点击**仍要打开**（或在 Gatekeeper 对话框中选"打开"）。详见 [Apple 官方指南](https://support.apple.com/guide/mac-help/mh40616/mac)。
 4. 首次启动后，授予**屏幕录制**权限（跨应用窗口枚举所需），然后重启应用。
 5. 确保本机已安装并登录 `codex` CLI（`@openai/codex`）——`WEEK LEFT` 依赖其可用。
 
@@ -192,7 +192,7 @@ make test         # 全量（docs gate + privacy + Swift UI/data/shell fixture�
 
 ## ⚠️ 已知限制
 
-- **ad-hoc 签名 TCC 不稳定**：每次重新签名会改变代码目录哈希，导致屏幕录制授权失效，需重新授予。
+- **缺少证书时构建失败**：本机没有 `PetDock Local Development` 证书时，`make app` 构建失败；ad-hoc 签名会随每次重新签名改变代码目录哈希、使屏幕录制授权失效，因此不允许回落。
 - **屏幕录制权限是硬前提**：未授权时无法枚举到 Codex 窗口，底座不会出现。
 - **`codex app-server` 为 experimental**：协议字段可能随 codex 版本变化；已做稳定子集解析与缺失字段降级。
 - **跨应用窗口相对 z-order 不可控**：以 `.floating` 层级 + 几何不重叠的方式降级处理。

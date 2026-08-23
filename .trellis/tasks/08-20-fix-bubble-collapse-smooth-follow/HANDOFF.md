@@ -1,5 +1,17 @@
 # 气泡收起与平滑跟随：延期交接
 
+## 2026-08-23 增量：宠物识别劫持修复（已停放）
+
+本节为最新状态；以下原有章节保留为上一轮延期记录。
+
+- 根因（现场实锤）：宿主收起会话 UI 后保留隐藏气泡窗口（title 仅应用名、384x95、与宠物精确居中、onscreen/alpha=1）；`selectPet` R4.1 滞回只校验 lastWID 存在，瞬时误选或窗口世代重建间隙会被永久锁定到该窗口。排查时运行中实例的 dock 恰停在隐藏气泡底部+2px 而非 Mascot 底部+2px，图2 持续错位与图4 延迟自愈（宿主重建窗口栈打破滞后）由此完全解释。证据：`research/pet-selection-hijack-2026-08-23.md`。
+- 修复（最小手术）：滞回沿用前再校验 `isReasonablePet || title~Mascot`，不满足即落入既有规则链找回真 Mascot。冻结候选 `dc1d139750fd22537f745dbb3918f72ecbd8bf70`（基线 `7828e4e`），4 文件 +106/-4。
+- 已验证（绑定上述 SHA）：release 0 warning；`make test` 全绿（test-ui 310/310 含 T-hj 7/7）；独立只读 Review（zhipu-bigmodel-coding/glm-5.3 max）P0/P1/P2=0 并独立复放基线红→修复绿；候选归档 `build/candidates/2026-08-23-182331-bubble-pet-selection-fix-fix-bubble-pet-selection-dc1d139/PetDock.app`（签名/一致性校验通过）。
+- 运行时验证（kimi/k3 max 视觉 QA + main 双观察者）：切换候选前后活体对照成立——隐藏气泡窗口在场时 dock 锚定真 Mascot（dy=+2px、中心偏差 0px、距气泡锚定位 38px），重启周期稳定；活体差异复放（真实窗口清单 + lastWID=气泡wid 注入）修复版选真 Mascot、基线版选气泡；runtime evidence（candidateSHA 匹配、obstacles 全 0、dy bucket=base、identityChangeCount=0）由 QA Agent 独立读取核验。
+- 已停放：`feature/fix-bubble-pet-selection` = accepted SHA `dc1d139750fd22537f745dbb3918f72ecbd8bf70`。未合入 `dev`（需专门合入会话）。
+- 保持未验证（不得宣称已修复）：动态交互周期指标（真实收起回位耗时、图4 空白时长）本轮未取得时间线；慢/快拖手感、多屏、Instruments 等上一轮遗留真机项继续 open。
+- 注意：`/Applications/PetDock.app` 仍为 0.2.0 旧版；当前运行中的修复实例来自归档候选路径（带 --runtime-evidence）。是否替换安装版本由用户决定。
+
 ## 当前结论
 
 - 状态：`deferred`，未 `accepted`，任务仍保持 `in_progress`。
