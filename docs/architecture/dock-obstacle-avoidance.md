@@ -29,13 +29,15 @@
 
 主循环的语义是：宠物可见时展示底座并对齐详情，避让失败只隐藏底座；宠物可见性仍由跟随逻辑决定，数据 `pause()` / `resume()` 不与避让隐藏耦合。
 
-## BubbleVisibility 可见性
+## BubbleVisibility 可见性与内容 bbox 避让
 
-窗口的 onscreen、alpha 与 bounds 元数据无法区分展开气泡和收起空背景。`BubbleVisibilityProbe` 在 `CGPreflightScreenCaptureAccess()` 已通过时使用 ScreenCaptureKit 公开 API 捕获候选窗口像素，仅在内存中计算 `alpha > 0.04` 的非透明占比与 bbox 占比，再由纯函数滞回分类：
+窗口的 onscreen、alpha 与 bounds 元数据无法区分展开气泡和收起空背景。`BubbleVisibilityProbe` 在 `CGPreflightScreenCaptureAccess()` 已通过时使用 ScreenCaptureKit 公开 API 捕获候选窗口像素，仅在内存中统计 `alpha > 0.04` 的非透明像素数量与内容底边（窗口内像素 maxY），由纯函数按内容判定：
 
-- open：`nonTransparentRatio >= 0.6%` 或 `bboxRatio >= 1.0%`；
-- close：`nonTransparentRatio <= 0.3%` 且 `bboxRatio <= 0.5%`；
-- 中间区间保持上一次状态；成功取得 SCK 窗口清单但找不到此前同 generation 已成功观察过的 WID 时判定为 hidden；首次观察即 targetMissing 仍判 visible。权限、清单、截图、像素统计失败或 macOS 版本不支持时保守判定为 visible。
+- 非透明像素数 ≥ 3（内容噪声下限）→ visible，并携带窗口内内容底边 `contentBottom`；
+- 非透明像素数 < 3 或完全透明 → hidden，不作为障碍，dock 回宠物下方；
+- 成功取得 SCK 窗口清单但找不到此前同 generation 已成功观察过的 WID 时判定为 hidden；首次观察即 targetMissing 仍判 visible。权限、清单、截图、像素统计失败或 macOS 版本不支持时保守判定为 visible 且无内容底边（退回整窗 bounds 避让）。
+
+宿主收起后的状态卡容器窗口实测会残留一条仍可见的小横条（窗口 200x54，内容只占窗口内 y[15,21]，底部 32px 全透明）。因此“是否展开”不再决定避让：可见气泡的障碍矩形高度 = `contentBottom + 1`（像素≈点，dock 紧贴可见内容底 + gap），水平仍使用整窗 bounds（内容水平居中且窗口本身水平定位，保持水平避让语义）。旧的 open/close 比例阈值与滞回假设“收起=无卡”，无法正确处理该残留形态，已被此方案取代。
 
 像素只在内存中统计，不 OCR、不保存图像、不记录颜色、文字或窗口内容。
 
@@ -45,11 +47,11 @@ macOS 14+ 下一次允许启动捕获的受应用控制等待最长 0.1 秒，�
 
 ### 拖动期间的粘性可见性
 
-拖动宠物时，气泡窗口的 bounds 会逐帧平移/缩放（如 Activity Stack Backing 200x54↔216x64），但 WID、owner、title、layer、alpha、onscreen 与 sharing state 均不变。这类**纯几何变化**不递增 generation、不清空该 WID 的可见性 cache 与成功观察资格（粘性）：拖动期间 `visibility(for:)` 沿用拖动前的判定，布局继续使用拖动前的避让状态，底座不会被默认保守 visible 的隐藏气泡窗口推开，从而避免拖动期间宠物与底座之间出现空白。WID 集合变化或任一身份字段变化（WID 重用/owner/layer 等）仍按上一段清理并回到保守 visible。
+拖动宠物时，气泡窗口的 bounds 会逐帧平移/缩放（如 Activity Stack Backing 200x54↔216x64），但 WID、owner、title、layer、alpha、onscreen 与 sharing state 均不变。这类**纯几何变化**不递增 generation、不清空该 WID 的观察 cache（可见性 + 内容底边）与成功观察资格（粘性）：拖动期间 `visibility(for:)` 沿用拖动前的判定，布局继续使用拖动前的避让状态，底座不会被默认保守 visible 的隐藏气泡窗口推开，从而避免拖动期间宠物与底座之间出现空白。内容底边是窗口内相对坐标，纯平移期间相对位置不变，粘性保留后障碍矩形随窗口平移且高度不变。WID 集合变化或任一身份字段变化（WID 重用/owner/layer 等）仍按上一段清理并回到保守 visible。
 
-写入校验保持严格：捕获完成回调仍要求 generation 与当前 `knownCandidates` 完全一致，拖动中在途的旧捕获结果一律丢弃，不会写入平移后的新几何；拖动结束后 identity 稳定，既有 0.1 秒 cadence 的下一次捕获自然刷新真实状态。代价是拖动过程中用户展开/收起气泡时，粘性判定最迟在拖动结束后的下一次捕获（0.1 秒 cadence 加捕获耗时，通常不超过 0.2 秒）收敛——这是接受的权衡。自动回归见 `make test-ui` 的 T-bv43/T-bv44；真实拖动体感仍需真机 QA 验证。
+写入校验保持严格：捕获完成回调仍要求 generation 与当前 `knownCandidates` 完全一致，拖动中在途的旧捕获结果一律丢弃，不会写入平移后的新几何；拖动结束后 identity 稳定，既有 0.1 秒 cadence 的下一次捕获自然刷新真实状态。代价是拖动过程中用户展开/收起气泡时，粘性判定最迟在拖动结束后的下一次捕获（0.1 秒 cadence 加捕获耗时，通常不超过 0.2 秒）收敛——这是接受的权衡。自动回归见 `make test-ui` 的 T-bv43/T-bv44/T-bv45；真实拖动体感仍需真机 QA 验证。
 
-成功结果写入缓存后，只有当前 `knownWids` 中候选的可见性实际变化才发出一次 `onVisibilityChange`；结果不变、空候选、reset 与旧 generation 均不通知。运行时由 `FollowTickScheduler` 把后台通知合并为最多一个待执行主线程 tick；若通知在 tick 执行中到达，只保留一次 follow-up。该 tick 的生产 `FollowLayoutPass` 走候选分类、probe/cache 重读、可见障碍筛选与 frame sink，再由 sink 执行 `safeDockFrame` 和面板 frame 回写。因此即使宠物 rect 未变化，气泡从 visible 变为 hidden 后，底座也会在该完整 tick 中回到宠物正下方。
+成功结果写入缓存后，只有当前 `knownWids` 中候选的可见性状态（visible/hidden）实际变化才发出一次 `onVisibilityChange`；结果不变、仅内容底边变化、空候选、reset 与旧 generation 均不通知。内容底边变化（例如展开大卡收成残留横条，可见性保持 visible）由既有 0.1 秒 cadence 的下一次完整 tick 应用，不额外唤醒。运行时由 `FollowTickScheduler` 把后台通知合并为最多一个待执行主线程 tick；若通知在 tick 执行中到达，只保留一次 follow-up。该 tick 的生产 `FollowLayoutPass` 走候选分类、probe/cache 重读、可见障碍筛选（气泡按内容 bbox 高度构造）与 frame sink，再由 sink 执行 `safeDockFrame` 和面板 frame 回写。因此即使宠物 rect 未变化，气泡从 visible 变为 hidden 后，底座也会在该完整 tick 中回到宠物正下方。
 
 moving 状态在 macOS 14+ 且底座可见、实际 `panel.screen` 非空时使用 `NSWindow.displayLink(target:selector:)`，随窗口所在显示器同步；可见窗口暂时没有所属屏幕时使 link 失效并使用 Timer fallback，窗口 screen 变化通过同一 coalesced wake 触发重新选择。macOS 13 使用 `.common` run-loop mode 的 repeating Timer，周期取当前屏幕 `maximumFramesPerSecond` 的倒数并 capped 到 120 Hz，无有效能力值时回退 60 Hz；moving tick 发现能力变化时会重建 Timer。display/timer callback 都只请求 latest-only tick，主线程忙时丢弃过期节拍；不使用已弃用的 `CVDisplayLink`。moving 进入 stable 使用单调 elapsed time 与名义 `4/60s` 静止窗口，并相对固定静止锚点吸收抖动，连续小位移累计越过容差会重置变化时刻。stable 的 0.1 秒 one-shot 由每次完整 tick 的单调起点派生，外部 wake 重置相位；若本次生产布局中的气泡 probe 因 cadence 尚未 due 而跳过，probe 保存绝对 due deadline，scheduler 在 tick 完成时重新计算剩余 delay 并取更早的 one-shot。若本 tick 工作已经跨过 probe deadline，则只立即合并一次 latest-only follow-up；不回放历史节拍。hidden 降为 1 秒 one-shot Timer。
 
