@@ -3106,25 +3106,30 @@ check("T-bv45h 拖动平移期间contentBottom粘性保留→障碍矩形随窗�
         && bv45DragProbe.observation(for: CGWindowID(544)).contentBottom == 21,
       "obstaclesOK=\(bv45DragObstaclesOK)")
 
-// (h) wake 语义保持：只有可见性状态变化唤醒；内容底变化（visible→visible）不额外唤醒，
-// 由既有 0.1s cadence 的下一次完整 tick 应用。
+// (h) wake 语义保持：只有可见性状态变化唤醒；同一 probe 的内容底变化（visible→visible）
+// 不额外唤醒，由既有 0.1s cadence 的下一次完整 tick 应用。
 let bv45Wakes = OSAllocatedUnfairLock(initialState: 0)
-let bv45WakeProbe = bv45MakeProbe(
-    outcome: .stats(bv45BarStats),
+let bv45WakeStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(bv45BarStats))
+let bv45WakeProbe = BubbleVisibilityProbe(
+    monotonicNow: { bv45Time }, canCapture: { true },
+    capturer: { _ in bv45WakeStats.withLock { $0 } },
     onVisibilityChange: { bv45Wakes.withLock { $0 += 1 } })
 bv45WakeProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
 _ = waitPumpingMain { !bv45WakeProbe.lock.withLock { $0.inFlight } }
 let bv45WakesAfterBar = bv45Wakes.withLock { $0 }
-// 内容底 21→53（visible→visible）：不唤醒，但观察已更新
-let bv45WakeExpand = bv45MakeProbe(
-    outcome: .stats(expandedS),
-    onVisibilityChange: { bv45Wakes.withLock { $0 += 1 } })
-bv45WakeExpand.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
-_ = waitPumpingMain { !bv45WakeExpand.lock.withLock { $0.inFlight } }
-check("T-bv45i 初始与内容底变化(visible→visible)不wake",
-      bv45WakesAfterBar == 0 && bv45Wakes.withLock { $0 } == 0
-        && bv45WakeExpand.observation(for: CGWindowID(544)).contentBottom == 53,
-      "afterBar=\(bv45WakesAfterBar) wakes=\(bv45Wakes.withLock { $0 })")
+let bv45BottomAfterBar = bv45WakeProbe.observation(for: CGWindowID(544)).contentBottom
+// 同一 probe：cache 已写入 visible/21，0.1s cadence 后二次捕获内容底 53（visible→visible）
+bv45WakeStats.withLock { $0 = .stats(expandedS) }
+bv45Time += 0.11
+bv45WakeProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45WakeProbe.lock.withLock { $0.inFlight } }
+check("T-bv45i 同probe内容底21→53(visible→visible)不wake且观察更新",
+      bv45WakesAfterBar == 0 && bv45BottomAfterBar == 21
+        && bv45Wakes.withLock { $0 } == 0
+        && bv45WakeProbe.observation(for: CGWindowID(544)).visibility == .visible
+        && bv45WakeProbe.observation(for: CGWindowID(544)).contentBottom == 53,
+      "afterBar=\(bv45WakesAfterBar) bottomAfterBar=\(String(describing: bv45BottomAfterBar)) "
+        + "wakes=\(bv45Wakes.withLock { $0 })")
 // 随后无内容（hidden 状态变化）→ 恰一次唤醒
 bv45Time += 0.11
 let bv45WakeHide = bv45MakeProbe(
@@ -3136,6 +3141,22 @@ check("T-bv45j hidden状态变化→恰一次wake(状态唤醒语义保持)",
       bv45Wakes.withLock { $0 } == 1
         && bv45WakeHide.observation(for: CGWindowID(544)).visibility == .hidden,
       "wakes=\(bv45Wakes.withLock { $0 })")
+
+// (i) 粘性缩窗 cap：障碍高度 = min(contentBottom+1, bounds.height)。粘性期间窗口纯几何
+// 收高（216x64 → 200x54），stale contentBottom+1(64) 超过当前高度 → cap 到 54，
+// 不产生越界/超高矩形；等值边界（contentBottom+1 == height）已由 T-bv45b 覆盖。
+let bv45ShrinkProbe = bv45MakeProbe(
+    outcome: .stats(BubbleAlphaStats(nonTransparentPixelCount: 25, contentBottom: 63)))
+let bv45ShrinkWindow216 = CGRect(x: 376, y: 446, width: 216, height: 64)
+bv45ShrinkProbe.probe(candidates: [mkw(544, layer: 3, bv45ShrinkWindow216)])
+_ = waitPumpingMain { !bv45ShrinkProbe.lock.withLock { $0.inFlight } }
+bv45Time += 0.016   // 0.1s cadence 内不重捕获：布局消费 stale 粘性 cache
+let bv45ShrinkWindow54 = CGRect(x: 376, y: 446, width: 200, height: 54)
+let bv45ShrinkObstacles = bv45LayoutObstacles(bv45ShrinkProbe, bubble: bv45ShrinkWindow54)
+check("T-bv45k 粘性缩窗stale contentBottom+1(64)>高度54→cap到54不越界",
+      bv45ShrinkObstacles == [CGRect(x: 376, y: 446, width: 200, height: 54)]
+        && bv45ShrinkProbe.observation(for: CGWindowID(544)).contentBottom == 63,
+      "obstacles=\(bv45ShrinkObstacles)")
 
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
 
