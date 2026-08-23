@@ -79,7 +79,7 @@ runtime 聚合诊断默认关闭：不提供启动参数时不创建诊断文件
 
 ## 开发候选产物归档
 
-`make app` 会删除并重新组装、ad-hoc 签名当前 worktree 的 `build/PetDock.app`。该路径是可变的 staging，不是交给用户测试的开发候选。候选归档是最终 QA 的最后阶段：必须从同一 worktree 的精确清洁 Git 状态开始，先捕获完整与 7 位提交 SHA，再运行门禁和 `make app`，复核 SHA 与清洁状态未变后，才把候选归档到**主工作树**的 `build/candidates/`，即使构建发生在 linked worktree 内：
+`make app` 会删除并重新组装当前 worktree 的 `build/PetDock.app`，并自动优先用本机稳定自签证书签名（默认 `PetDock Local Development`，可用 `STABLE_SIGN_IDENTITY` 覆盖）；证书未命中或签名失败时回落 ad-hoc 签名并在输出中明确提示，构建不因此失败。该路径是可变的 staging，不是交给用户测试的开发候选。候选归档是最终 QA 的最后阶段：必须从同一 worktree 的精确清洁 Git 状态开始，先捕获完整与 7 位提交 SHA，再运行门禁和 `make app`，复核 SHA 与清洁状态未变后，才把候选归档到**主工作树**的 `build/candidates/`，即使构建发生在 linked worktree 内：
 
 ```text
 <primary>/build/candidates/YYYY-MM-DD-HHmmss-<label>-<worktree>-<shortSHA>/PetDock.app
@@ -222,7 +222,7 @@ EXIT trap 使用 macOS 13+ 自带的 BSD `/bin/rm` 清理，并始终保留原�
 
 ## 风险与边界
 
-- ad-hoc 签名没有稳定的开发者身份，重新签名可能要求重新授予屏幕录制权限；发布时应使用稳定签名或 notarized 构建。
+- `make app` 自动优先本机稳定自签证书（默认 `PetDock Local Development`，可用 `STABLE_SIGN_IDENTITY` 覆盖）：命中时重新签名后 TCC 屏幕录制授权在本机保留；回落 ad-hoc 时没有稳定开发者身份，重新签名可能要求重新授予屏幕录制权限。自签证书与 ad-hoc 均无 Developer ID、未公证，不改变 Gatekeeper 手动放行流程。
 - 屏幕录制权限是窗口枚举和像素探测的前提；无授权时只能依赖自动测试与静态结论。
 - `codex app-server` 为 experimental 协议，字段可能随 CLI 版本变化；客户端只解析稳定子集并对缺失字段降级。
 - 跨应用 z-order 不能由公开 API 完全控制；产品降级是 `.floating` level 加几何不重叠，而不是私有 API。
