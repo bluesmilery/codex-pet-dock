@@ -12,13 +12,19 @@ enum BubbleVisibility: Equatable, Sendable {
     case hidden
 }
 
-/// 可见内容噪声下限（像素数）。宿主收起后的状态卡容器仍残留一条 ~7px 高的可见小横条
-///（现场实测 25 个非透明像素、窗口内 y[15,21]，底部 32px 全透明）——它对用户可见，
-/// 必须继续避让；而 1-2 个孤立非透明像素更可能来自捕获噪声，不作为障碍。
-/// 旧的 open/close 比例阈值假设“收起=无卡”，已被该残留横条实测否定，由内容 bbox 方案取代。
+/// 可见内容噪声下限（像素数）。2026-08-24 现场像素级校准：宿主收起后 ACT 容器仅剩
+/// 39-57 个非透明像素的不可见小点（6-7px 宽、窗口内 y[21,28]，截屏放大肉眼不可见）；
+/// 控制按钮出现时实测 189-194px。取 80：噪声上 margin 57<80、按钮下 margin 80<189，
+/// 双向 ≥40% 余量。旧阈值 3 基于“25/34px 可见横条”旧测量，已被新现场证据取代。
+/// 该阈值只影响“有无内容”判定；Composition Surface 因宠物像素恒为 visible，不受影响。
 enum BubbleVisibilityThresholds {
     /// 非透明像素数 ≥ 此值判 visible（有内容）；低于此值判 hidden（噪声/全透明）。
-    static let minContentPixels = 3
+    static let minContentPixels = 80
+    /// 窗口面积（原始像素）超过该值的候选捕获时等比降采样（性能保护：
+    /// Composition Surface 768x912 大窗若全尺寸捕获并逐像素统计，7 个实例不可接受）。
+    static let downsampleAreaThreshold: Double = 100_000
+    /// 降采样后最长边上限（像素）；像素探测只需内容底边，几像素误差可接受。
+    static let downsampleMaxSide: CGFloat = 240
 }
 
 /// 匿名像素 alpha 统计（不记录颜色/文字/图像）。
@@ -378,6 +384,37 @@ final class BubbleVisibilityProbe: Sendable {
 
     // MARK: - ScreenCaptureKit 捕获（static，后台执行）
 
+    /// 计算降采样捕获尺寸（保持纵横比、最长边 ≤ downsampleMaxSide）；
+    /// 面积未超 downsampleAreaThreshold 返回 nil（小窗不降采样，路径不变）。
+    static func downsampleCaptureSize(width: Int, height: Int) -> (width: Int, height: Int)? {
+        let area = Double(width) * Double(height)
+        guard area > BubbleVisibilityThresholds.downsampleAreaThreshold else { return nil }
+        let longest = Double(max(width, height))
+        let scale = Double(BubbleVisibilityThresholds.downsampleMaxSide) / longest
+        return (max(1, Int((Double(width) * scale).rounded())),
+                max(1, Int((Double(height) * scale).rounded())))
+    }
+
+    /// 把降采样捕获的统计换算回原始窗口坐标：contentBottom 按行高比例放大
+    ///（round(maxY * origH/capH)，随后的避让矩形仍受整窗高度 cap），
+    /// nonTransparentPixelCount 按面积比例放大（count * origArea/capArea，用于阈值比较）。
+    static func rescaleDownsampledStats(
+        _ stats: BubbleAlphaStats,
+        captureWidth: Int, captureHeight: Int,
+        originalWidth: Int, originalHeight: Int
+    ) -> BubbleAlphaStats {
+        guard captureWidth > 0, captureHeight > 0, originalWidth > 0, originalHeight > 0 else {
+            return stats
+        }
+        let rowScale = Double(originalHeight) / Double(captureHeight)
+        let areaScale = (Double(originalWidth) * Double(originalHeight))
+            / (Double(captureWidth) * Double(captureHeight))
+        let contentBottom = stats.contentBottom >= 0
+            ? Int((Double(stats.contentBottom) * rowScale).rounded()) : -1
+        let count = Int((Double(stats.nonTransparentPixelCount) * areaScale).rounded())
+        return BubbleAlphaStats(nonTransparentPixelCount: count, contentBottom: contentBottom)
+    }
+
     @available(macOS 14.0, *)
     private static func captureStats(_ candidate: WinCandidate) async -> BubbleCaptureOutcome {
         let content: SCShareableContent
@@ -390,15 +427,28 @@ final class BubbleVisibilityProbe: Sendable {
             return .targetMissing
         }
         let filter = SCContentFilter(desktopIndependentWindow: win)
+        let originalWidth = Int(candidate.bounds.width.rounded())
+        let originalHeight = Int(candidate.bounds.height.rounded())
+        let downsampled = downsampleCaptureSize(width: originalWidth, height: originalHeight)
         let config = SCStreamConfiguration()
-        config.width = Int(candidate.bounds.width.rounded())
-        config.height = Int(candidate.bounds.height.rounded())
+        if let size = downsampled {
+            config.width = size.width
+            config.height = size.height
+        } else {
+            config.width = originalWidth
+            config.height = originalHeight
+        }
         config.scalesToFit = false
         config.showsCursor = false
         guard let img = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else {
             return .unavailable
         }
-        return .stats(computeAlphaStats(image: img))
+        let captured = computeAlphaStats(image: img)
+        guard let size = downsampled else { return .stats(captured) }
+        return .stats(rescaleDownsampledStats(
+            captured,
+            captureWidth: size.width, captureHeight: size.height,
+            originalWidth: originalWidth, originalHeight: originalHeight))
     }
 
     /// 内存计算 alpha 统计（不保存图/OCR/记录颜色文字）。static → 后台 Task 内执行。

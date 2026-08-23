@@ -319,3 +319,29 @@
 
 - 本 implement 沙箱与前两轮相同无 WindowServer（`NSScreen.screens.count==0`）：`make test-ui` 运行时在既有 `tests/main.swift` NSScreen guard 崩溃。test-ui 语义由 headless 驱动副本承担：复制 `tests/main.swift` 到 /tmp，仅替换该 guard 为固定负 origin 合成屏 frame（primary fixture 走既有合成负坐标分支）并把 3 处 `#filePath` 根固定为本 worktree，其余测试、源文件清单、`-warnings-as-errors -DPETDOCK_TESTING` flags 与 `make test-ui` 完全一致。基线红测在同一 headless 驱动上叠加 test-only 红测块执行，产品源零改动。
 - `swift build`/swiftc 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`（外层 seatbelt 禁止写 `~/.cache`）；`swift build` 另用 `--disable-sandbox` 与 /tmp 缓存路径；python 门禁使用任务指定 venv python。privacy 编译探针子进程同样需要该 env。
+
+---
+
+## Composition Surface 气泡渲染通道 + 噪声下限校准（impl-comp 轮，2026-08-24）
+
+- 任务：fix-bubble-collapse-smooth-follow（延续轮，两个用户症状均已被主 Agent 现场像素级证据锁定，fixture 直接取自现场实测）。
+- 批准产品基线：`4ddbc0e19163643cd2f54d816072f9fbd7d02417`（本 worktree 创建时 HEAD，实现前 Sources 未修改；红测仅叠加 tests/main.swift 的 test-only 改动）。
+- 现场根因（主 Agent 采集，派发记录为证）：S1 展开气泡卡渲染在 "Codex Pet Composition Surface" 768x912 大窗（layer 3、7 个同 bounds 重复实例、内容延伸到宠物下方 y467），但 obstaclesNear 纯几何通道（height<223 / maxSide≤600）把它排除 → dock 只避让 ACT（内容到 y422）→ 停 y424-425 压在气泡中段。S2 收起后宠物下方唯一内容是 ACT 内 39-57px 的 6-7px 宽不可见小点（截屏放大肉眼不可见），超过旧 minContentPixels=3 → dock 停 y415 不归位；控制按钮出现时 ACT 内容实测 189-194px。
+- 最小修复（3 个产品点）：① `PetTracker.obstaclesNear` 新增标题精确匹配 "Codex Pet Composition Surface" 的气泡通道（同 owner/浮层/水平重叠且 bounds.maxY>pet.maxY，不受高度/边长上限约束），`obstacleKind` 同步把该类候选判 `.bubble`（走像素探测），输出边界按 (owner,title,layer,bounds) 去重（wid 升序代表）使布局障碍集与 probe 候选集一致；② `minContentPixels` 3→80（噪声 57<80<按钮 189，双向 ≥40% 余量）；③ `captureStats` 对面积 >100,000px 候选等比降采样到最长边 ≤240（保持纵横比），contentBottom 按行高比换算回原始像素行、非透明计数按面积比放大，小窗路径不变。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S1 展开气泡时 dock 与气泡重叠（dock 停 ~424-425 压气泡中段） | behavior（生产组合，T-cs1/capture 计数 T-cs2） | 现场展开态 fixture：宠物 172x179@<现场坐标> petMaxY=386 + Composition Surface 768x912 ×7 重复实例（内容底窗口内 470）+ ACT 214x74（194px、内容底窗口内 38）；capturer 按 wid 返回现场 stats；两 tick 生产布局（tick1 启动捕获/保守，tick2 cadence 内消费 cache） | 基线 `4ddbc0e` + 仅 test-only 红测（headless 驱动副本）：T-cs1 FAIL——实际 `DockPanel.frame` y=425（只避让 ACT），精确复现现场 y424-425；T-cs2 captured=[ACT]（大窗完全未探测）；T-cs3/4 FAIL（无标题通道/无去重） | fake capturer（按 wid）→ 真实 `BubbleVisibilityProbe.probe/classifier/cache` → `FollowLayoutPass.placeDock`（obstaclesNear 标题通道 + 去重 + obstacleKind=.bubble）→ `frameSink` → **真实 `DockPanel.placeBelow`** | T-cs1：实际 `DockPanel.frame`（setFrame 后 owner 回读，容差<1.0）= 气泡内容底+2（y=470）；T-cs2：捕获 wid 集合恰为 {代表 27814, ACT}（7 实例→1 次 probe 候选） | headless 驱动（同 test-ui 源清单+flags）：基线 329 passed/9 failed（红）→ 修复树 342 passed/0 failed（绿） | 真机展开/收起视觉与 SCK 真实捕获（含真实降采样图像）留视觉 QA |
+| S2 收起后 dock 不归位（停 y415，期望 ~388） | behavior（生产组合，T-cs6/T-cs6b） | 现场收起态 fixture：Composition Surface 内容全在 petMaxY 以上（contentBottom=362→矩形底 abs 360）+ ACT 噪声点 41px 窗口内 y[21,28]；同一两 tick 生产布局 | 基线同上：T-cs6 FAIL——实际 frame y=415（41px>3 判 visible 避让噪声点），精确复现现场；T-cs6b FAIL（噪声点判 visible） | 同上（classifier 阈值 80 消费 41px stats → hidden） | T-cs6：实际 `DockPanel.frame` 回基础位 petMaxY+2=388；T-cs6b：ACT 观察=hidden、Composition 代表=visible（宠物像素） | 同上（红→绿） | 真机收起视觉（阴影进宠物窗口内、y386 以上）留视觉 QA |
+| 收起态 Composition Surface 不过度避让 | behavior（T-cs7，护栏） | 仅 7 个 Composition 实例（内容=宠物像素、全在 petMaxY 以上），无 ACT | 基线即 PASS（大窗不在障碍集；帧同为 388），修复树保持并新增障碍计数断言 | obstaclesNear 标题通道 → 像素 stats（30,000px@362）→ 避让矩形底 abs 360 与 dock(388..436) 无垂直相交 → safeDockFrame 不下推 | 实际 frame 仍基础位 388；障碍计数 [1,1]（visible 但无垂直重叠） | 同上（绿） | 无 |
+| 标题精确匹配边界 | behavior（T-cs5 + 既有 T-a5） | 同尺寸 768x912 但标题不同（"Codex Pet Other Surface"/默认空标题）的大窗 | 基线与修复树均 PASS（护栏） | obstaclesNear 精确标题通道 | 不纳入障碍集（不做几何猜测） | 同上（绿） | 无 |
+| obstacleKind 分类 | behavior（T-cs3 + 既有 T-ctrl10） | Composition Surface 代表候选（768x912，几何气泡通道不匹配） | 基线 FAIL（判 .control）；修复树 .bubble | `PetTracker.obstacleKind` 消费标题通道 | .bubble → 进入像素探测（T-cs2 捕获集合为其直接证据） | 同上（红→绿） | 无 |
+| 大窗捕获降采样换算 | behavior（纯函数，T-cs8/8b/9/9b） | orig 768x912（700,416px>100k）→ cap 202x240；已知内容位置（原始行 470↔cap 行 124）；ACT 214x74（15,836px） | 新增覆盖（新纯函数） | `downsampleCaptureSize`/`rescaleDownsampledStats`（`captureStats` 消费：config 尺寸与换算回写） | 尺寸 (202,240) 纵横比保持且 ≤240；ACT 返回 nil（不降采样）；contentBottom 换算 471（误差 1px≤2）；计数按 origArea/capArea 放大（202→2918） | 同上（绿）；真实 SCScreenshotManager 图像路径属真机 QA | 真实 ScreenCaptureKit 大窗捕获与降采样实测留真机 QA |
+| 噪声阈值边界与既有用例改写 | behavior（T-bv1/3/4/4b、T-bv45 全系改写） | 41/57px 噪声点、80px 边界、189/194px 控制按钮级内容；T-bv45 横条形态内容量 25→194px（形态断言不变：障碍高度=contentBottom+1） | 基线：T-bv1/T-bv4b FAIL（41/57px 判 visible）；修复树全绿，无覆盖删除（T-bv2/3/5x、T-bv45a-k、T-ctrl/T-a/T-hj/T-bv39-44 全保持） | `BubbleVisibilityClassifier.classify` 阈值消费 | 57px→hidden、80px→visible（边界）、189px→visible+内容底 | 同上（红→绿） | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | `swift build -c release --disable-sandbox` Build complete、代码 0 warning（仅 4 条沙箱导致的 SwiftPM 用户缓存环境 warning；test-ui swiftc `-warnings-as-errors` 亦 0 warning）；`make docs-check` 14 files 0 findings；`make test-docs` 10 OK；`make test-privacy` 28 passed；`make test-data` 全部通过；`make test-shell` exit 0（headless 下 NSStatusBar 区段 10 项未执行，另由同源 headless 副本验证其余 89/0，见环境限制）；test-ui 同源 headless 驱动 342/0 | 完整 `make test`（GUI 会话 test-ui/test-shell 运行时）需对冻结 SHA 复跑 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与前几轮相同无 WindowServer（`NSScreen.screens.count==0`）：test-ui 语义由同源 headless 驱动副本承担（仅替换既有 NSScreen guard 为固定负 origin 合成屏 + 3 处 `#filePath` 根固定，其余源清单/flags 与 `make test-ui` 完全一致）；基线红测在同一驱动上仅叠加 test-only 红测块执行，产品源零改动。
+- `make test-shell` 在本沙箱 exit 0 但其 NSStatusBar 区段（SB1-SB4、SBV0-SBV5 共 10 项，需 WindowServer）静默提前终止（TTY 证据：前 89 项 PASS 后止于该区段标题）。另用同源 headless 副本（仅截除该区段、保留标准汇总）验证其余 89 passed/0 failed；这 10 项需 GUI 会话对冻结 SHA 复跑，不得宣称已验证。
+- swiftc/SwiftPM 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`（外层 seatbelt 禁止写 `~/.cache`）；`swift build` 另用 `--disable-sandbox`（外层 seatbelt 禁止 SwiftPM 内层 sandbox-exec，仅禁用内层，不放宽外层）；python 门禁使用任务指定 venv python。privacy 编译探针子进程同样需要该 env（不带则 3 个编译探针用例环境性失败，带上后 28/28）。

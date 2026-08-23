@@ -35,6 +35,8 @@
 
 `isReasonablePet` 要求 `maxSide <= 300`、`area <= 70_000`、最小边至少 50，并排除 Voice Controls、Composition Surface、Backing、Glass 等辅助控件 title。无合理候选时宁可隐藏，也不误绑宽扁或过小辅助窗。底座宽度固定为 200，不由宠物窗口宽度撑大。
 
+辅助控件 title 只用于宠物选择排除（包含匹配）；底座避让另有一条对 `Codex Pet Composition Surface` 的**精确**标题障碍通道（该大窗承载展开气泡卡渲染），语义、去重与去重后的像素探测见 [`dock-obstacle-avoidance.md`](./dock-obstacle-avoidance.md)。两条通道互不改变对方的候选集。
+
 ### R5：歧义与无候选
 
 - 没有非主窗口候选但存在可见窗口时不选，避免误跟主窗口。
@@ -61,4 +63,4 @@
 
 曾观察到 Mascot 本体与 Composition Surface、Voice Controls 等周边窗口同时存在，且周边 layer 可能更高、尺寸跨度更大。仅按 layer 会选中辅助窗，因此当前规则把 title 含 `Mascot` 的合理候选置于高 layer 回退之前，并用最小边与标题黑名单排除辅助控件。该顺序由纯函数回归用例持续锁定。
 
-`Mascot` title 是当前可观测的稳定标识，但 Codex 未来可能改名或移除该 title。届时识别会降级到 layer + `isReasonablePet` 几何回退；需要同步更新规则、fixture 与本说明，不能把 title 命中视为永久协议。
+`Mascot` title 是当前可观测的稳定标识，但 Codex 未来可能改名或移除该 title。届时识别会降级到 layer + `isReasonablePet` 几何回退；需要同步更新规则、fixture 与本说明，不能把 title 命中视为永久协议。`Codex Pet Composition Surface` 精确标题障碍通道同理：宿主改名或移除该标题时，展开气泡卡避让会退化为仅几何/ACT 通道，需按新的现场证据重新校准。

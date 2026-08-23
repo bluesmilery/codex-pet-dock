@@ -806,22 +806,30 @@ check("T-bv0b preflight=false重复检查不再请求", !requestGate.shouldReque
 var grantedGate = ScreenCapturePermissionRequestGate()
 check("T-bv0c preflight=true不请求", !grantedGate.shouldRequest(preflightGranted: true), "")
 check("T-bv0d preflight后续false仍可首次请求", grantedGate.shouldRequest(preflightGranted: false), "")
-// 实测基线（同窗口 345×64 真实对照演化）：宿主收起后残留可见小横条（34px，内容底 y=21）
-// 仍是 visible——按内容 bbox 避让而非 hidden；open/close 比例滞回已被内容噪声下限取代。
-let collapsedS = BubbleAlphaStats(nonTransparentPixelCount: 34, contentBottom: 21)
+// 噪声下限现场校准（2026-08-24 像素级重测）：宿主收起后 ACT 容器仅剩 39-57 个非透明
+// 像素的不可见小点（6-7px 宽、窗口内 y[21,28]，截屏放大肉眼不可见）；控制按钮出现时
+// 实测 189-194px。minContentPixels=80（上 margin 57<80、下 margin 80<189，双向 ≥40% 余量）。
+// 旧阈值 3 基于“25/34px 可见横条”旧测量，已被该现场证据取代：低于 80 → hidden。
+let collapsedS = BubbleAlphaStats(nonTransparentPixelCount: 41, contentBottom: 28)
 let expandedS = BubbleAlphaStats(nonTransparentPixelCount: 189, contentBottom: 53)
 let noiseS = BubbleAlphaStats(nonTransparentPixelCount: 2, contentBottom: 21)
-let floorS = BubbleAlphaStats(nonTransparentPixelCount: 3, contentBottom: 21)
+let floorS = BubbleAlphaStats(nonTransparentPixelCount: 80, contentBottom: 21)
 let bv1Obs = BubbleVisibilityClassifier.classify(stats: collapsedS)
-check("T-bv1 收起残留横条(34px)→visible+内容底21(按内容避让,非hidden)",
-      bv1Obs.visibility == .visible && bv1Obs.contentBottom == 21, "")
+check("T-bv1 收起噪声点(41px<80)→hidden(2026-08-24现场校准)",
+      bv1Obs.visibility == .hidden && bv1Obs.contentBottom == nil, "")
 let bv2Obs = BubbleVisibilityClassifier.classify(stats: expandedS)
 check("T-bv2 expanded(189px)→visible+内容底53",
       bv2Obs.visibility == .visible && bv2Obs.contentBottom == 53, "")
 check("T-bv3 低于噪声下限(2px)→hidden(无滞回,不沿用previous)",
       BubbleVisibilityClassifier.classify(stats: noiseS).visibility == .hidden, "")
-check("T-bv4 恰达噪声下限(3px)→visible(边界)",
+check("T-bv4 恰达噪声下限(80px)→visible(边界)",
       BubbleVisibilityClassifier.classify(stats: floorS).visibility == .visible, "")
+check("T-bv4b 校准边界:噪声上margin 57px→hidden,控制按钮189px→visible",
+      BubbleVisibilityClassifier.classify(
+        stats: BubbleAlphaStats(nonTransparentPixelCount: 57, contentBottom: 28)).visibility == .hidden
+        && BubbleVisibilityClassifier.classify(
+          stats: BubbleAlphaStats(nonTransparentPixelCount: 189, contentBottom: 38)).visibility == .visible,
+      "")
 // P1 unavailable 保守语义（README: capture failure conservatively avoids）：
 // 当前仍存在的气泡，SC 捕获失败（macOS13/TCC 抖动/窗口刚注册未进 SC content）
 // 必须保守判 visible 且无内容底边（整窗避让），不能因捕获失败当成收起导致底座重叠气泡。
@@ -2963,14 +2971,15 @@ check("T-bv44c 拖动结束后真实捕获刷新→wake→完整tick→实际pan
 bv44Scheduler.stop()
 
 // T-bv45 (气泡障碍按可见内容 bbox 避让·现场形态回归): 宿主状态卡容器窗口 200x54，
-// 可见内容（白色小横条）只占窗口内 y[15,21]（25 个非透明像素、7px 高），底部 32px 全透明。
+// 可见内容只占窗口内 y[15,21]，底部 32px 全透明。内容量按 2026-08-24 校准取
+// 控制按钮级（194px ≥ minContentPixels 80）；25px 旧测量已被判为不可见噪声。
 // 旧 open/close 比例阈值把该形态滞回成 visible→整窗避让（多让 32px 透明尾巴，图2 症状）
-// 或 hidden→遮住横条；新语义：有内容（非透明像素 ≥3）→ 障碍高度=contentBottom+1，
+// 或 hidden→遮住横条；新语义：有内容（非透明像素 ≥80）→ 障碍高度=contentBottom+1，
 // dock 紧贴内容底+gap；无内容→不避让；保守 visible（unavailable）→ 整窗 bounds。
 let bv45Base = fail
 let bv45Pet = CGRect(x: 362, y: 382, width: 172, height: 62)      // maxY=444
 let bv45Bubble = CGRect(x: 376, y: 446, width: 200, height: 54)    // 现场形态窗口
-let bv45BarStats = BubbleAlphaStats(nonTransparentPixelCount: 25, contentBottom: 21)
+let bv45BarStats = BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 21)
 var bv45Time: TimeInterval = 19_000
 func bv45MakeProbe(
     outcome: BubbleCaptureOutcome,
@@ -3000,7 +3009,7 @@ let bv45BarProbe = bv45MakeProbe(outcome: .stats(bv45BarStats))
 bv45BarProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
 _ = waitPumpingMain { !bv45BarProbe.lock.withLock { $0.inFlight } }
 let bv45BarObstacles = bv45LayoutObstacles(bv45BarProbe, bubble: bv45Bubble)
-check("T-bv45a 小横条(25px,y15-21)→障碍高度22(contentBottom+1),水平仍整窗",
+check("T-bv45a 内容条(194px,y15-21)→障碍高度22(contentBottom+1),水平仍整窗",
       bv45BarObstacles == [CGRect(x: 376, y: 446, width: 200, height: 22)],
       "obstacles=\(bv45BarObstacles)")
 
@@ -3146,7 +3155,7 @@ check("T-bv45j hidden状态变化→恰一次wake(状态唤醒语义保持)",
 // 收高（216x64 → 200x54），stale contentBottom+1(64) 超过当前高度 → cap 到 54，
 // 不产生越界/超高矩形；等值边界（contentBottom+1 == height）已由 T-bv45b 覆盖。
 let bv45ShrinkProbe = bv45MakeProbe(
-    outcome: .stats(BubbleAlphaStats(nonTransparentPixelCount: 25, contentBottom: 63)))
+    outcome: .stats(BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 63)))
 let bv45ShrinkWindow216 = CGRect(x: 376, y: 446, width: 216, height: 64)
 bv45ShrinkProbe.probe(candidates: [mkw(544, layer: 3, bv45ShrinkWindow216)])
 _ = waitPumpingMain { !bv45ShrinkProbe.lock.withLock { $0.inFlight } }
@@ -3159,6 +3168,170 @@ check("T-bv45k 粘性缩窗stale contentBottom+1(64)>高度54→cap到54不越�
       "obstacles=\(bv45ShrinkObstacles)")
 
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
+
+// ---- T-cs: Composition Surface 气泡渲染通道 + 噪声下限校准（2026-08-24 现场像素级 fixture）----
+// 现场几何：宠物 172x179@(1487,207)（petMaxY=386、centerX=1573）；
+// Composition Surface 768x912@(1189,-3) ×7 个同 bounds 重复实例（气泡卡只渲染在该大窗，
+// 展开内容延伸到 abs y467）；ACT "Codex Pet Activity Stack Backing" 214x74@(1466,384)
+// 只承载控制按钮（189-194px）与收起噪声点（39-57px）。
+let csBase = fail, csPass = pass
+let csPet = CGRect(x: 1487, y: 207, width: 172, height: 179)   // petMaxY=386
+let csMascot = mkw(900, layer: 2, csPet, title: "Codex Pet Mascot Effect")
+let csSurfaceBounds = CGRect(x: 1189, y: -3, width: 768, height: 912)
+let csSurfaces = [27814, 27815, 27816, 27817, 28787, 28788, 28789].map {
+    mkw(UInt32($0), layer: 3, csSurfaceBounds, title: "Codex Pet Composition Surface")
+}
+let csAct = mkw(27900, layer: 3, CGRect(x: 1466, y: 384, width: 214, height: 74),
+                title: "Codex Pet Activity Stack Backing")
+let csDockX = csPet.minX + (csPet.width - 200) / 2   // pet 中心对齐（1473）
+func csAppKitFrame(y: CGFloat) -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(x: csDockX, y: y, width: 200, height: 48))
+}
+
+// 单元：标题通道纳入 + 7 重复实例去重（wid 升序代表 27814）+ obstacleKind 像素探测。
+let csObstacles = PetTracker.obstaclesNear(mascot: csMascot, candidates: [csMascot] + csSurfaces + [csAct])
+check("T-cs4 标题通道纳入Composition Surface且7实例去重为1代表(wid升序27814)+ACT",
+      csObstacles.count == 2
+        && csObstacles.filter { $0.title == "Codex Pet Composition Surface" }.count == 1
+        && csObstacles.first { $0.title == "Codex Pet Composition Surface" }?.wid == CGWindowID(27814),
+      "obstacles=\(csObstacles.map { (Int($0.wid), $0.title) })")
+check("T-cs3 Composition Surface候选obstacleKind=.bubble(走像素探测)",
+      PetTracker.obstacleKind(csSurfaces[0], petMaxY: csPet.maxY) == .bubble, "")
+// 标题不匹配的同尺寸大窗不纳入（标题精确匹配，不做几何猜测）。
+let csMismatch = [28100, 28101, 28102].map {
+    mkw(UInt32($0), layer: 3, csSurfaceBounds, title: "Codex Pet Other Surface")
+}
+check("T-cs5 标题不匹配的同尺寸大窗不纳入(精确标题通道)",
+      PetTracker.obstaclesNear(mascot: csMascot, candidates: [csMascot] + csMismatch).isEmpty, "")
+
+// 生产组合：FollowLayoutPass → 真实 DockPanel.placeBelow → DockPanel.frame。
+// tick1 启动捕获（首次观察前保守 visible），捕获完成后 tick2（0.1s cadence 内不重捕获）
+// 应用缓存结果——与生产 0.1s 节拍消费路径一致。
+var csTime: TimeInterval = 22_000
+func csRunTwoTickLayout(
+    probe: BubbleVisibilityProbe,
+    dock: DockPanel,
+    obstacleCounts: OSAllocatedUnfairLock<[Int]>,
+    candidates: [WinCandidate]
+) -> Bool {
+    func place() -> Bool {
+        FollowLayoutPass.placeDock(
+            mascot: csMascot,
+            candidates: candidates,
+            bubbleProbe: probe,
+            frameSink: { pet, obstacles in
+                obstacleCounts.withLock { $0.append(obstacles.count) }
+                return dock.placeBelow(
+                    petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                    movementChanged: false, monotonicNow: csTime)
+            })
+    }
+    _ = place()
+    let completed = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    _ = place()
+    return completed
+}
+
+// RED-S1 展开态：气泡卡渲染进 Composition Surface（内容底 abs y467 → 窗口内 contentBottom=470）；
+// ACT 承载控制按钮（194px、内容底 abs y422 → 窗口内 38）。期望 dock 避让到气泡内容底+2
+//（abs y470）；基线（标题通道缺失）只避让 ACT → y425，压在气泡中段。
+let csExpandedCaptured = OSAllocatedUnfairLock(initialState: [CGWindowID]())
+let csExpandedStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 38),
+]
+let csExpandedCap: BubbleCapturer = { c in
+    csExpandedCaptured.withLock { $0.append(c.wid) }
+    return .stats(csExpandedStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let csExpandedProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: csExpandedCap)
+let csExpandedDock = DockPanel()
+let csExpandedObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csExpandedOK = csRunTwoTickLayout(
+    probe: csExpandedProbe, dock: csExpandedDock,
+    obstacleCounts: csExpandedObstacleCounts, candidates: [csMascot] + csSurfaces + [csAct])
+check("T-cs1 RED-S1 展开态→实际panel避让到气泡内容底+2(y=470,非仅ACT的~425)",
+      csExpandedOK && dockFrameNear(csExpandedDock.frame, csAppKitFrame(y: 470)),
+      "frame=\(csExpandedDock.frame) expected=\(csAppKitFrame(y: 470))")
+check("T-cs2 7重复实例去重→恰好1个Composition probe候选(捕获={27814,27900})",
+      csExpandedCaptured.withLock { $0 } == [CGWindowID(27814), CGWindowID(27900)],
+      "captured=\(csExpandedCaptured.withLock { $0.map { Int($0) } })")
+
+// RED-S2 收起态：Composition Surface 内容全在 petMaxY 以上（contentBottom=362 → 避让矩形底
+// abs y360，与 dock(388..436) 无垂直重叠）；ACT 仅剩 41px 不可见噪声点（窗口内 y[21,28]）。
+// 期望 dock 回基础位 petMaxY+2=388；基线（下限 3）把 41px 判 visible → 停 y415。
+csTime = 23_000
+let csCollapsedStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 41, contentBottom: 28),
+]
+let csCollapsedCap: BubbleCapturer = { c in
+    .stats(csCollapsedStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let csCollapsedProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: csCollapsedCap)
+let csCollapsedDock = DockPanel()
+let csCollapsedObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csCollapsedOK = csRunTwoTickLayout(
+    probe: csCollapsedProbe, dock: csCollapsedDock,
+    obstacleCounts: csCollapsedObstacleCounts, candidates: [csMascot] + csSurfaces + [csAct])
+check("T-cs6 RED-S2 收起态噪声点(41px)→hidden→实际panel回基础位388(非415)",
+      csCollapsedOK && dockFrameNear(csCollapsedDock.frame, csAppKitFrame(y: 388)),
+      "frame=\(csCollapsedDock.frame) expected=\(csAppKitFrame(y: 388))")
+check("T-cs6b ACT噪声点观察=hidden;Composition代表=visible(宠物像素)",
+      csCollapsedProbe.observation(for: CGWindowID(27900)).visibility == .hidden
+        && csCollapsedProbe.observation(for: CGWindowID(27814)).visibility == .visible, "")
+
+// 收起态仅有 Composition Surface（内容=宠物像素，全在 petMaxY 以上）→ 避让矩形与 dock
+// 无垂直重叠 → 不避让，dock 基础位（防止标题通道引入过度避让）。
+csTime = 24_000
+let csSurfOnlyCap: BubbleCapturer = { _ in
+    .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362))
+}
+let csSurfOnlyProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: csSurfOnlyCap)
+let csSurfOnlyDock = DockPanel()
+let csSurfOnlyCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csSurfOnlyOK = csRunTwoTickLayout(
+    probe: csSurfOnlyProbe, dock: csSurfOnlyDock,
+    obstacleCounts: csSurfOnlyCounts, candidates: [csMascot] + csSurfaces)
+check("T-cs7 收起态仅Composition(矩形底abs360)→无垂直重叠→dock基础位388",
+      csSurfOnlyOK && dockFrameNear(csSurfOnlyDock.frame, csAppKitFrame(y: 388))
+        && csSurfOnlyCounts.withLock { $0 } == [1, 1],
+      "frame=\(csSurfOnlyDock.frame) counts=\(csSurfOnlyCounts.withLock { $0 })")
+
+// 大窗捕获降采样（性能保护）：>100k 面积候选等比缩到 maxSide<=240（保持纵横比）；
+// 小窗（ACT）不降采样、路径不变。
+let csSize = BubbleVisibilityProbe.downsampleCaptureSize(width: 768, height: 912)
+check("T-cs8 大窗(768x912,699k px)→降采样(202,240)纵横比保持",
+      csSize?.width == 202 && csSize?.height == 240,
+      "size=\(String(describing: csSize))")
+check("T-cs8b 小窗(ACT 214x74)不降采样(路径不变)",
+      BubbleVisibilityProbe.downsampleCaptureSize(width: 214, height: 74) == nil, "")
+
+// 换算正确性（纯函数，>100k 候选 768x912 → cap 202x240）：已知内容位置——原始行 470
+//（展开气泡内容底）对应 cap 行 470*240/912≈123.7；捕获统计报 124 → rescale 回原始行
+// 误差 ≤2px；像素计数按面积比 origArea/capArea 放大（202px → 2913px 等价）。
+if let size = csSize {
+    let captured = BubbleAlphaStats(nonTransparentPixelCount: 202, contentBottom: 124)
+    let rescaled = BubbleVisibilityProbe.rescaleDownsampledStats(
+        captured, captureWidth: size.width, captureHeight: size.height,
+        originalWidth: 768, originalHeight: 912)
+    let expectedCount = Int((202.0 * 768.0 * 912.0 / (202.0 * 240.0)).rounded())
+    check("T-cs9 降采样contentBottom换算误差<=2px(原行470)",
+          abs(rescaled.contentBottom - 470) <= 2,
+          "rescaled=\(rescaled.contentBottom)")
+    check("T-cs9b 像素计数按面积比换算(origArea/capArea)",
+          rescaled.nonTransparentPixelCount == expectedCount,
+          "rescaled=\(rescaled.nonTransparentPixelCount) expected=\(expectedCount)")
+} else {
+    check("T-cs9/T-cs9b 降采样尺寸", false, "size=\(String(describing: csSize))")
+}
+
+print("\n[Composition Surface 气泡通道] \(pass - csPass) passed, \(fail - csBase) failed")
 
 // ---- T-clamp: clampDockX 纯函数 + safeDockFrame 水平 clamp ----
 let clBase = fail, clPass = pass
