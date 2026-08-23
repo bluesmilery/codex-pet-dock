@@ -73,7 +73,7 @@
 
 **屏幕录制权限（TCC）**：`CGWindowListCopyWindowInfo` 是唯一公开的跨应用窗口枚举 API；macOS 在未授权时会将其过滤为空列表。`PetDock.app` 每个进程至多主动请求一次权限；preflight 不可用期间不进入后台 `ScreenCaptureKit` 捕获，避免反复提示，同时保留气泡保守避让与状态栏提醒。请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 **PetDock**，然后退出并重启 app 使权限生效。
 
-> ⚠️ TCC 按应用代码签名认证屏幕录制授权。ad-hoc 签名没有稳定身份，每次重新签名（如重新执行 `make app`）都会改变代码目录哈希、使授权失效。因此 `make app` 在本机存在自签证书 `PetDock Local Development` 时自动优先用它签名（可用 `STABLE_SIGN_IDENTITY` 覆盖）；用该稳定证书签名时，重新签名后授权在本机继续保留。没有该证书时回落 ad-hoc 签名并明确提示。该证书为本机自签身份（无 Developer ID、未公证），私钥不会分发。
+> ⚠️ TCC 按应用代码签名认证屏幕录制授权。ad-hoc 签名没有稳定身份，每次重新签名（如重新执行 `make app`）都会改变代码目录哈希、使授权失效。因此 `make app` 在本机存在自签证书 `PetDock Local Development` 时自动优先用它签名（可用 `STABLE_SIGN_IDENTITY` 覆盖）；用该稳定证书签名时，重新签名后授权在本机继续保留。`STABLE_SIGN_IDENTITY` 的取值应为纯证书名（不含引号、分号、反引号等 shell 元字符）。没有该证书时回落 ad-hoc 签名并明确提示。该证书为本机自签身份（无 Developer ID、未公证），私钥不会分发。
 
 ---
 

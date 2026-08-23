@@ -216,13 +216,14 @@ runtime 聚合诊断默认关闭：不提供启动参数时不创建诊断文件
 
 EXIT trap 使用 macOS 13+ 自带的 BSD `/bin/rm` 清理，并始终保留原命令退出码。执行前同时验证非空路径、词法直属父目录与 `pwd -P` 解析父目录；临时路径还必须使用 `.candidate-` 隐藏名称，最终路径还必须是本轮原子占有的精确目录。因此 cleanup 不接受宽泛路径，也不会清理竞争者目录。若 `/bin/rm` 被安全钩子拦截、返回失败或清理后路径仍存在，必须把错误中报告的**唯一精确残留路径**移到回收站，并禁止报告候选已交付；不依赖 Finder 自动化或 TCC。
 
-即使归档前已经存在可通过签名检查的 staging，也不得跳过本流程中的 `make app`；该命令按 Makefile 删除并重建 staging，避免复用旧 bundle。前后两次 Git 检查证明门禁与构建期间 HEAD 未变化，且 tracked / 非忽略 untracked 状态保持清洁；`codesign` 只验证 app 的签名结构，`diff` 与 `cmp` 只验证它与刚生成的 staging 内容一致。精确来源由 QA 记录把捕获的完整 SHA、上述命令及其实际输出绑定在一起，不能仅凭签名结果推断。
+即使归档前已经存在可通过签名检查的 staging，也不得跳过本流程中的 `make app`；该命令按 Makefile 删除并重建 staging，避免复用旧 bundle。前后两次 Git 检查证明门禁与构建期间 HEAD 未变化，且 tracked / 非忽略 untracked 状态保持清洁；`codesign` 只验证 app 的签名结构，`diff` 与 `cmp` 只验证它与刚生成的 staging 内容一致。稳定签名候选的 strict verify 假定验证机存在该证书与信任上下文：无该证书的机器或证书日后被删除时，即使签名结构完好也可能 verify 失败；QA 交付记录应同时捕获 `make app` 输出的签名分支行（稳定签名或 ad-hoc 提示）。精确来源由 QA 记录把捕获的完整 SHA、上述命令及其实际输出绑定在一起，不能仅凭签名结果推断。
 
 交付报告必须给出完整提交 SHA、主工作树归档后的 app 路径、各门禁与 `make app` 的实际结果，以及针对归档路径的 `codesign` 和当前 worktree staging 内容一致性结果。不能由这些检查推断 app 已启动、TCC 已授权或 UI / 真机交互已通过。可保留当前 worktree 的 `build/PetDock.app` 供后续 staging 使用，但面向用户的测试说明必须指向主工作树归档候选路径。归档过程不得启动或安装 app，也不得写入或覆盖 `/Applications`。
 
 ## 风险与边界
 
 - `make app` 自动优先本机稳定自签证书（默认 `PetDock Local Development`，可用 `STABLE_SIGN_IDENTITY` 覆盖）：命中时重新签名后 TCC 屏幕录制授权在本机保留；回落 ad-hoc 时没有稳定开发者身份，重新签名可能要求重新授予屏幕录制权限。自签证书与 ad-hoc 均无 Developer ID、未公证，不改变 Gatekeeper 手动放行流程。
+- 钥匙串锁定时 `codesign` 可能弹出 GUI 解锁框，使 `make app` 等待人工操作而不是自动回落 ad-hoc；这是接受的已知边界。
 - 屏幕录制权限是窗口枚举和像素探测的前提；无授权时只能依赖自动测试与静态结论。
 - `codex app-server` 为 experimental 协议，字段可能随 CLI 版本变化；客户端只解析稳定子集并对缺失字段降级。
 - 跨应用 z-order 不能由公开 API 完全控制；产品降级是 `.floating` level 加几何不重叠，而不是私有 API。
