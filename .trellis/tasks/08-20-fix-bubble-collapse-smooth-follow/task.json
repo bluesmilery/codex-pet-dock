@@ -24,7 +24,7 @@
   "notes": "",
   "meta": {
     "delivery_path": "L2",
-    "subagent_model": "zhipu/glm-5.3",
+    "subagent_model": "zhipu-bigmodel-coding/glm-5.3",
     "subagent_reasoning": "max",
     "visual_qa_model": "kimi/k3",
     "visual_qa_reasoning": "max",
