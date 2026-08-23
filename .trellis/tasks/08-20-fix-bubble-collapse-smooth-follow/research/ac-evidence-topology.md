@@ -249,3 +249,26 @@
 | MW4 复验 | test-data 行尾 dangling `-D` | — | W5 FAIL（保持既有覆盖） |
 
 - 全部 mutation 后完全恢复；恢复树与实现树逐字节一致后 clean gate `make test-privacy` 28 passed。mutation 均在隔离 /tmp 副本执行，结束后移入废纸篓，未污染 worktree。
+
+---
+
+## 宠物识别被隐藏气泡窗口劫持修复（impl-selection 轮，2026-08-23）
+
+- 任务：fix-bubble-collapse-smooth-follow（用户症状修复轮：宠物识别被隐藏气泡窗口劫持）。
+- 批准产品基线：`7828e4ed1798f9d5d47fb190be660c9bc1f10787`（本 worktree 创建时 HEAD，实现前 Sources 未修改）。
+- 根因证据：`research/pet-selection-hijack-2026-08-23.md`（现场只读 CGWindowList 采样 + 生产 `selectPet` 离线回放 + 运行中底座实际 frame 核对：底座 y=隐藏气泡窗口底部+2px 而非 Mascot 底部+2px）。
+- 最小修复：`PetTracker.selectPet` R4.1 滞回沿用前增加宠物有效性再校验（`isReasonablePet` 或 title 含 `Mascot` 才可沿用；否则落入既有规则链）。不改其他选择规则、障碍分类、布局与调度。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S-hj 图2/图3：会话 UI 隐藏后底座仍跟随宠物移动但保持旧避让间距（锚定隐藏气泡窗口） | behavior（生产组合） | 候选集含真 Mascot（title 含 Mascot、172x179、layer=2）与隐藏气泡窗口（title 仅应用名、384x95、layer=3、与宠物水平精确居中、垂直覆盖下半部且底部低于宠物 45px、onscreen/alpha=1）；`selectPet(lastWID=气泡wid)` 处于劫持锁定态；另含 768x912 组合面与 24x6 控件两种劫持形态 | 基线 `7828e4ed1798f9d5d47fb190be660c9bc1f10787`（git show 提取基线版 PetTracker.swift 编译进驱动）：T-hj1/2/3/6a/6b 全 FAIL——底座实际 frame y=326=气泡底部(324)+2，精确复现现场症状；T-hj4/5（不变性保护）PASS | CGWindowList 候选快照 → `PetTracker.selectPet(lastWID:)` 滞回分支（生产 `AppDelegate.tick` 同一入口）→ `FollowLayoutPass.placeDock` → `PetTracker.obstaclesNear/obstacleKind` → 真实 `DockPanel.placeBelow` | T-hj6b：实际 `DockPanel.frame`（setFrame 后 owner 状态）回到真 Mascot 正下方基础位（y=281，由 `Geometry.appKitRectFromQuartz` 独立换算，容差<1.0）、obstacles=[0]；修复后 T-hj 全块 7/7 PASS | 独立驱动以与 `make test-ui` 完全相同的源文件清单编译真实源码：基线 2 passed / 5 failed（红）→ 修复树 7 passed / 0 failed（绿） | 真机复现图1→图2→图3 由视觉 QA 在精确候选上执行；本表为自动行为证据 |
+| 滞回不变性 | behavior | lastWID=Mascot wid；lastWID=120x120 合理回退窗口（title 无 Mascot） | 基线与修复树均 PASS（T-hj4/5） | 同上（滞回分支） | 选择结果与 `hysteresis:lastWID` hitFlag 保持 | 见上；既有 T4（100x100 滞回）在修复树 15/15 PASS 中保持 | 无 |
+| 既有 selectPet 回归 | behavior | T1–T14 既有全部用例（主窗口排除、Mascot 优先、高 layer/尺寸回退、辅助控件排除） | 修复树 15/15 PASS（独立驱动） | `selectPet` 全规则链 | 既有断言全部保持 | 见上 | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | release 0 warning；docs 0 finding；privacy 28 passed；test-data/test-shell 通过 | `swift build -c release` Build complete!（0 warning）；`make docs-check` 14 files 0 findings；`make test-docs` 10 OK；`make test-privacy` 28 passed；`make test-data` 全部通过；`make test-shell` exit 0 | `make test-ui` 运行时受实现沙箱限制（见下） |
+
+### 实现环境限制（如实记录，供 Review/QA 复核）
+
+- 本 implement 沙箱（seatbelt）无 WindowServer 访问（`NSScreen.screens.count==0`）：`make test-ui` 编译阶段 0 warning 通过（`-warnings-as-errors`），但运行时在**既有** `tests/main.swift:180` `guard let main = NSScreen.screens.first else { fatalError("无屏幕") }` 崩溃，先于本候选全部新增测试；该崩溃与本候选改动无关。
+- 替代证据：新增 T-hj 全块（含 `DockPanel.frame` sink）与既有 T1–T14 selectPet 块已用与 `make test-ui` 相同的源文件清单抽成独立 main.swift 驱动，分别在基线（`git show 7828e4e:Sources/PetDock/PetTracker.swift`）与修复树上真实运行并记录（红→绿）。
+- 遗留：完整 test-ui 套件运行需在 GUI 会话环境对冻结 SHA 复跑（历史参考：上一冻结候选记录 282 passed，结论不跨 SHA 复用）；本候选产品改动仅 selectPet 滞回分支，已由上述驱动覆盖其全部非 nil lastWID 用例。
+- 构建命令差异：外层 seatbelt 禁止 SwiftPM 内层 sandbox-exec 嵌套与 `~/Library` 缓存写入，故 `swift build` 使用 `--disable-sandbox --cache-path/--config-path/--security-path /tmp/...`，swiftc 类目标设置 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`，`test-privacy` 使用 conda base python（系统 python3 无 pytest）。编译产物与门禁语义不变。

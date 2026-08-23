@@ -3244,5 +3244,80 @@ check("P9d pv=F dv=F → hideUI", FollowTickPlanner.decide(input: FollowTickInpu
 
 print("\n[FollowTickPlan] \(pass - plPass) passed, \(fail - plBase) failed")
 
+// ---- T-hj: 宠物识别被隐藏气泡窗口劫持（2026-08-23 现场证据回归） ----
+// 现场：宿主收起会话 UI 后保留隐藏气泡窗口（title 仅应用名、384x95、layer=3、与宠物水平精确居中、
+// 垂直覆盖宠物下半部且底部低于宠物）。旧滞回只校验 wid 存在，瞬时误选/窗口世代切换后底座被永久
+// 锚定到该隐藏窗口（底座 frame = 气泡底部+gap 而非 Mascot 底部+gap）。
+let hjBase = fail, hjPass = pass
+let hjPetRect = CGRect(x: 100, y: 100, width: 172, height: 179)                  // Mascot 本体 172x179
+// 隐藏气泡窗口：384x95、与宠物水平居中（中心差 0）、minY 在 pet 中部（几何上不是障碍），底部低于宠物 45px
+let hjBubbleRect = CGRect(x: hjPetRect.midX - 192, y: hjPetRect.maxY - 50, width: 384, height: 95)
+let hjMain = mk(804, layer: 0, w: 1728, h: 1050, title: "ChatGPT")
+let hjMascot = mkw(802, layer: 2, hjPetRect, title: "Codex Pet Mascot Effect")
+let hjHiddenBubble = mkw(801, layer: 3, hjBubbleRect, title: "Codex")            // title 仅应用名
+
+// T-hj1: 滞回锁定隐藏气泡窗口 → 必须不再沿用，回落 title 规则找回真 Mascot
+let hj1 = PetTracker.selectPet(candidates: [hjMain, hjMascot, hjHiddenBubble], lastWID: hjHiddenBubble.wid)
+check("T-hj1 滞回锁定隐藏气泡(384x95,title=应用名)→找回Mascot",
+      hj1.selected?.wid == hjMascot.wid, hj1.selected?.detailed() ?? hj1.reason)
+
+// T-hj2: 滞回锁定 768x912 组合面 → 不再沿用，回落 Mascot
+let hj2 = PetTracker.selectPet(candidates: [
+    hjMain, hjMascot,
+    mkw(803, layer: 3, CGRect(x: 0, y: 0, width: 768, height: 912), title: "Codex Pet Composition Surface")
+], lastWID: 803)
+check("T-hj2 滞回锁定组合面(768x912)→找回Mascot", hj2.selected?.wid == hjMascot.wid, hj2.reason)
+
+// T-hj3: 滞回锁定 24x6 控件 → 不再沿用，回落 Mascot
+let hj3 = PetTracker.selectPet(candidates: [
+    hjMain, hjMascot,
+    mkw(805, layer: 3, CGRect(x: 150, y: 300, width: 24, height: 6), title: "Codex Pet Voice Controls Backing")
+], lastWID: 805)
+check("T-hj3 滞回锁定控件(24x6)→找回Mascot", hj3.selected?.wid == hjMascot.wid, hj3.reason)
+
+// T-hj4: 真 Mascot 窗口滞回行为不变（title 含 Mascot 且 isReasonablePet）
+let hj4 = PetTracker.selectPet(candidates: [hjMain, hjMascot, hjHiddenBubble], lastWID: hjMascot.wid)
+check("T-hj4 滞回沿用真Mascot不变", hj4.selected?.wid == hjMascot.wid
+      && hj4.hitFlags.contains { $0.hasPrefix("hysteresis:lastWID=") }, hj4.reason)
+
+// T-hj5: 仅满足 isReasonablePet 的回退选中窗口（title 无 Mascot）滞回行为不变
+let hjFallback = mkw(806, layer: 3, CGRect(x: 100, y: 100, width: 120, height: 120), title: "Codex Pet Something")
+let hj5 = PetTracker.selectPet(candidates: [hjMain, hjMascot, hjFallback], lastWID: hjFallback.wid)
+check("T-hj5 滞回沿用合理回退窗口(isReasonablePet)不变", hj5.selected?.wid == hjFallback.wid, hj5.reason)
+
+// T-hj6: 生产组合 —— selectPet(lastWID=气泡wid) → FollowLayoutPass.placeDock → 实际 DockPanel.placeBelow。
+// 劫持态下底座最终 frame 必须回到真 Mascot 正下方基础位，而不是隐藏气泡窗口下方。
+let hjDock = DockPanel()
+let hjObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let hjProbe = BubbleVisibilityProbe(
+    monotonicNow: { 21_000 }, canCapture: { true }, capturer: { _ in .unavailable }
+)
+let hjSelection = PetTracker.selectPet(candidates: [hjMain, hjMascot, hjHiddenBubble], lastWID: hjHiddenBubble.wid)
+check("T-hj6a 生产组合:劫持态selectPet找回Mascot", hjSelection.selected?.wid == hjMascot.wid, hjSelection.reason)
+let hjPlaced = FollowLayoutPass.placeDock(
+    mascot: hjSelection.selected!,
+    candidates: [hjMain, hjMascot, hjHiddenBubble],
+    bubbleProbe: hjProbe,
+    frameSink: { pet, obstacles in
+        hjObstacleCounts.withLock { $0.append(obstacles.count) }
+        return hjDock.placeBelow(
+            petQuartzRect: pet,
+            avoiding: obstacles,
+            visibleScreen: nil,
+            movementChanged: false,
+            monotonicNow: 21_000
+        )
+    }
+)
+let hjDockBaseX = hjPetRect.origin.x + (hjPetRect.width - 200) / 2
+let hjExpectedFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: hjDockBaseX, y: hjPetRect.maxY + 2, width: 200, height: 48))
+check("T-hj6b 劫持态底座实际frame回到真Mascot下方(非气泡下方)",
+      hjPlaced && dockFrameNear(hjDock.frame, hjExpectedFrame)
+        && hjObstacleCounts.withLock { $0 } == [0],
+      "frame=\(hjDock.frame) expected=\(hjExpectedFrame) obstacles=\(hjObstacleCounts.withLock { $0 })")
+
+print("\n[pet-selection hijack] \(pass - hjPass) passed, \(fail - hjBase) failed")
+
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)

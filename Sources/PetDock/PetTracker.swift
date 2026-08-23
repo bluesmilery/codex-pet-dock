@@ -159,8 +159,12 @@ enum PetTracker {
         let visible = candidates.filter(\.isOnscreen)
         let nonMain = visible.filter { !$0.isLikelyMainWindow }
 
-        // R4.1 滞回：上次选中的仍有效则沿用
-        if let last = lastWID, let w = nonMain.first(where: { $0.wid == last }) {
+        // R4.1 滞回：上次选中的仍有效则沿用。沿用前再校验该窗口仍具宠物特征
+        // （合理候选或 title 含 Mascot）：宿主收起会话 UI 后隐藏气泡窗口仍存活（onscreen、
+        // 与宠物居中），瞬时误选或窗口世代切换一旦把它写入 lastWID，仅凭 wid 存在的滞回会
+        // 永久锁定该窗口；不满足则落入后续规则链（title 规则找回真 Mascot）。
+        if let last = lastWID, let w = nonMain.first(where: { $0.wid == last }),
+           w.isReasonablePet || w.title.localizedCaseInsensitiveContains("Mascot") {
             return SelectionResult(
                 selected: w,
                 reason: "滞回：沿用上次选中 wid=\(last) (\(Int(w.bounds.width))x\(Int(w.bounds.height)), layer=\(w.layer))",
