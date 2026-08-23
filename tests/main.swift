@@ -3195,8 +3195,11 @@ check("T-cs4 标题通道纳入Composition Surface且7实例去重为1代表(wid
         && csObstacles.filter { $0.title == "Codex Pet Composition Surface" }.count == 1
         && csObstacles.first { $0.title == "Codex Pet Composition Surface" }?.wid == CGWindowID(27814),
       "obstacles=\(csObstacles.map { (Int($0.wid), $0.title) })")
-check("T-cs3 Composition Surface候选obstacleKind=.bubble(走像素探测)",
-      PetTracker.obstacleKind(csSurfaces[0], petMaxY: csPet.maxY) == .bubble, "")
+// 三类分类契约：CS 标题通道优先 → .compositionSurface（仍走像素探测）；ACT 等几何小窗 →
+// .bubble；控制按钮 → .control（由 T-ctrl10b/c 覆盖）。
+check("T-cs3 obstacleKind三类:CS=.compositionSurface(标题优先),ACT=.bubble",
+      PetTracker.obstacleKind(csSurfaces[0], petMaxY: csPet.maxY) == .compositionSurface
+        && PetTracker.obstacleKind(csAct, petMaxY: csPet.maxY) == .bubble, "")
 // 标题不匹配的同尺寸大窗不纳入（标题精确匹配，不做几何猜测）。
 let csMismatch = [28100, 28101, 28102].map {
     mkw(UInt32($0), layer: 3, csSurfaceBounds, title: "Codex Pet Other Surface")
@@ -3286,7 +3289,8 @@ check("T-cs6b ACT噪声点观察=hidden;Composition代表=visible(宠物像素)"
         && csCollapsedProbe.observation(for: CGWindowID(27814)).visibility == .visible, "")
 
 // 收起态仅有 Composition Surface（内容=宠物像素，全在 petMaxY 以上）→ 避让矩形与 dock
-// 无垂直重叠 → 不避让，dock 基础位（防止标题通道引入过度避让）。
+// 无垂直重叠 → 不避让，dock 基础位（防止标题通道引入过度避让）。首 tick 无观察数据
+// → 跳过（计数 0）；次 tick stats visible 内容 bbox 进入障碍集（计数 1）但无垂直重叠。
 csTime = 24_000
 let csSurfOnlyCap: BubbleCapturer = { _ in
     .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362))
@@ -3300,8 +3304,90 @@ let csSurfOnlyOK = csRunTwoTickLayout(
     obstacleCounts: csSurfOnlyCounts, candidates: [csMascot] + csSurfaces)
 check("T-cs7 收起态仅Composition(矩形底abs360)→无垂直重叠→dock基础位388",
       csSurfOnlyOK && dockFrameNear(csSurfOnlyDock.frame, csAppKitFrame(y: 388))
-        && csSurfOnlyCounts.withLock { $0 } == [1, 1],
+        && csSurfOnlyCounts.withLock { $0 } == [0, 1],
       "frame=\(csSurfOnlyDock.frame) counts=\(csSurfOnlyCounts.withLock { $0 })")
+
+// Reviewer P1 回归（保守路径不整窗避让）：Composition Surface 是常驻大窗（768x912），障碍性
+// 完全取决于宠物下方的像素内容；保守 visible 无 contentBottom（macOS 13 / TCC 拒绝 / 捕获失败 /
+// 冷启动首次观察前）时没有任何依据整窗避让——旧行为把 dock 推到大窗底部且降级模式下永久如此。
+// 跳过后降级模式与本功能引入前一致。
+csTime = 24_500
+let csDegradeProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: { _ in .unavailable })
+let csDegradeDock = DockPanel()
+let csDegradeCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csDegradeOK = csRunTwoTickLayout(
+    probe: csDegradeProbe, dock: csDegradeDock,
+    obstacleCounts: csDegradeCounts, candidates: [csMascot] + csSurfaces)
+check("T-cs10 恒unavailable(macOS13/捕获失败)→CS无观察数据不作障碍→dock基础位388(非大窗底)",
+      csDegradeOK && dockFrameNear(csDegradeDock.frame, csAppKitFrame(y: 388))
+        && csDegradeCounts.withLock { $0 } == [0, 0]
+        && csDegradeProbe.observation(for: CGWindowID(27814)).visibility == .visible
+        && csDegradeProbe.observation(for: CGWindowID(27814)).contentBottom == nil,
+      "frame=\(csDegradeDock.frame) counts=\(csDegradeCounts.withLock { $0 })")
+
+csTime = 24_600
+let csTccProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { false }, capturer: { _ in .unavailable })
+let csTccDock = DockPanel()
+let csTccCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csTccOK = csRunTwoTickLayout(
+    probe: csTccProbe, dock: csTccDock,
+    obstacleCounts: csTccCounts, candidates: [csMascot] + csSurfaces)
+check("T-cs10b TCC拒绝(canCapture=false)→CS保守visible无数据同样跳过→基础位388",
+      csTccOK && dockFrameNear(csTccDock.frame, csAppKitFrame(y: 388))
+        && csTccCounts.withLock { $0 } == [0, 0],
+      "frame=\(csTccDock.frame) counts=\(csTccCounts.withLock { $0 })")
+
+// 降级下 ACT（.bubble 几何小窗）保守整窗避让语义不回归：只被 ACT 整窗（maxY 458）推到 460，
+// 不再被 CS 大窗叠加推到大窗底部。
+csTime = 24_700
+let csDegradeActProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: { _ in .unavailable })
+let csDegradeActDock = DockPanel()
+let csDegradeActCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csDegradeActOK = csRunTwoTickLayout(
+    probe: csDegradeActProbe, dock: csDegradeActDock,
+    obstacleCounts: csDegradeActCounts, candidates: [csMascot] + csSurfaces + [csAct])
+check("T-cs10c 降级下ACT(.bubble)保守整窗避让不回归→仅ACT整窗推到460(CS跳过)",
+      csDegradeActOK && dockFrameNear(csDegradeActDock.frame, csAppKitFrame(y: 460))
+        && csDegradeActCounts.withLock { $0 } == [1, 1],
+      "frame=\(csDegradeActDock.frame) counts=\(csDegradeActCounts.withLock { $0 })")
+
+// Reviewer P1 回归（冷启动闪跳消除）：首 tick 无 cache → CS 跳过，dock 停基础位；第二 tick
+// stats 到达 → 按内容 bbox 避让。序列 = [基础位 388 → 内容位 470]，不再出现首 tick 整窗
+// 避让闪跳到大窗底部再回来。
+csTime = 24_800
+let csColdProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true },
+    capturer: { _ in .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470)) })
+let csColdDock = DockPanel()
+let csColdFrames = OSAllocatedUnfairLock(initialState: [NSRect]())
+let csColdCounts = OSAllocatedUnfairLock(initialState: [Int]())
+func csColdPlace() -> Bool {
+    let placed = FollowLayoutPass.placeDock(
+        mascot: csMascot,
+        candidates: [csMascot] + csSurfaces,
+        bubbleProbe: csColdProbe,
+        frameSink: { pet, obstacles in
+            csColdCounts.withLock { $0.append(obstacles.count) }
+            return csColdDock.placeBelow(
+                petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                movementChanged: false, monotonicNow: csTime)
+        })
+    csColdFrames.withLock { $0.append(csColdDock.frame) }
+    return placed
+}
+_ = csColdPlace()   // tick1：捕获在途、无 cache → 跳过（基础位）
+let csColdCompleted = waitPumpingMain { !csColdProbe.lock.withLock { $0.inFlight } }
+_ = csColdPlace()   // tick2：stats 已入 cache → 内容 bbox 避让
+check("T-cs11 冷启动首tick无cache→基础位388;次tick stats→内容避让470(序列无大窗底闪跳)",
+      csColdCompleted
+        && csColdFrames.withLock { $0.count } == 2
+        && dockFrameNear(csColdFrames.withLock { $0 }[0], csAppKitFrame(y: 388))
+        && dockFrameNear(csColdFrames.withLock { $0 }[1], csAppKitFrame(y: 470))
+        && csColdCounts.withLock { $0 } == [0, 1],
+      "frames=\(csColdFrames.withLock { $0 }) counts=\(csColdCounts.withLock { $0 })")
 
 // 大窗捕获降采样（性能保护）：>100k 面积候选等比缩到 maxSide<=240（保持纵横比）；
 // 小窗（ACT）不降采样、路径不变。
@@ -3314,7 +3400,7 @@ check("T-cs8b 小窗(ACT 214x74)不降采样(路径不变)",
 
 // 换算正确性（纯函数，>100k 候选 768x912 → cap 202x240）：已知内容位置——原始行 470
 //（展开气泡内容底）对应 cap 行 470*240/912≈123.7；捕获统计报 124 → rescale 回原始行
-// 误差 ≤2px；像素计数按面积比 origArea/capArea 放大（202px → 2913px 等价）。
+// 误差 ≤2px；像素计数按面积比 origArea/capArea 放大（202px → 2918px 等价）。
 if let size = csSize {
     let captured = BubbleAlphaStats(nonTransparentPixelCount: 202, contentBottom: 124)
     let rescaled = BubbleVisibilityProbe.rescaleDownsampledStats(

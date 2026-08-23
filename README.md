@@ -195,6 +195,7 @@ Privacy boundaries are pinned by fixture tests: data-layer results contain no co
 
 - **Missing certificate fails the build**: when the local `PetDock Local Development` certificate is unavailable, `make app` fails instead of producing an ad-hoc signature, because each ad-hoc re-signing would change the code-directory hash and invalidate the screen-recording authorization.
 - **Screen-recording permission is a hard requirement**: without it, Codex windows can't be enumerated and the dock won't appear.
+- **Composition Surface bubble avoidance requires pixel observation**: on degraded capture paths (macOS 13, screen-recording permission denied, or capture failures), the Composition Surface bubble is not treated as an obstacle and may overlap the dock — identical to the behavior before this channel existed; in normal mode, a bubble already expanded at cold start may briefly overlap the dock (≤~0.3s) until the first observation moves the dock below the content.
 - **`codex app-server` is experimental**: protocol fields may change across codex versions; a stable subset is parsed with graceful degradation for missing fields.
 - **Cross-app relative z-order is not controllable**: mitigated with a `.floating` level and non-overlapping geometry.
 - **Limited platform scope**: currently only Apple Silicon on macOS 13+, and only for the Codex desktop pet.
