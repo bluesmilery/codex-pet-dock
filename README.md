@@ -74,7 +74,7 @@ This project follows strict privacy boundaries (pinned by fixture tests):
 
 **Screen-recording permission (TCC)**: `CGWindowListCopyWindowInfo` is the only public API for cross-app window enumeration; macOS filters it to an empty list when ungranted. `PetDock.app` requests access at most once per process and does not enter background `ScreenCaptureKit` capture while preflight access is unavailable, preventing repeated prompts while preserving conservative bubble avoidance and the status-bar warning. Grant **PetDock** under "System Settings › Privacy & Security › Screen Recording", then quit and relaunch the app for access to take effect.
 
-> ⚠️ TCC authenticates the screen-recording grant by the app's code signature. An ad-hoc signature has no stable identity, so every re-signing (e.g. re-running `make app`) changes the code-directory hash and invalidates the grant. `make app` therefore prefers signing with the local self-signed certificate `PetDock Local Development` when it exists on the build machine (override with `STABLE_SIGN_IDENTITY`); with that stable certificate the grant survives re-signings on this machine. `STABLE_SIGN_IDENTITY` must be the plain certificate name, without quotes, semicolons, backticks, or other shell metacharacters. Without the certificate it falls back to ad-hoc signing and says so explicitly. The certificate is a machine-local self-signed identity — no Developer ID, no notarization — and its private key is never distributed.
+> ⚠️ TCC authenticates the screen-recording grant by the app's code signature. An ad-hoc signature has no stable identity, so every re-signing (e.g. re-running `make app`) changes the code-directory hash and invalidates the grant. `make app` therefore prefers signing with the local self-signed certificate `PetDock Local Development` when it exists on the build machine (override with `STABLE_SIGN_IDENTITY`); with that stable certificate the grant survives re-signings on this machine. `STABLE_SIGN_IDENTITY` must be the plain certificate name, without quotes, semicolons, backticks, or other shell metacharacters. Without the certificate the build fails with an explicit error instead of an ad-hoc fallback. The certificate is a machine-local self-signed identity — no Developer ID, no notarization — and its private key is never distributed.
 
 ---
 
@@ -92,7 +92,7 @@ uv sync --dev     # creates .venv with Python 3.12 and pytest from uv.lock
 
 ```sh
 make build        # swift build -c release, produces .build/release/PetDock
-make app          # assembles build/PetDock.app; signs with the local 'PetDock Local Development' certificate when available, otherwise ad-hoc (Identifier=io.github.bluesmilery.codexpetdock)
+make app          # assembles build/PetDock.app; signs with the local 'PetDock Local Development' certificate, fails when it is unavailable (Identifier=io.github.bluesmilery.codexpetdock)
 make run          # builds the app and launches it (private log under Application Support/PetDock/Logs)
 make diagnose     # builds and runs a one-shot redacted diagnostic (private Diagnostics/diagnose.txt)
 pkill -f PetDock  # stop the app
@@ -106,13 +106,13 @@ Diagnostic mode (`--diagnose`) enumerates windows, locates the Codex pet, and wr
 
 PetDock stores logs and the token cache under its private `~/Library/Application Support/PetDock/` directories (0700 directories, 0600 files). The Codex helper receives a minimal environment and does not inherit API keys, cookies, proxy credentials, or unknown variables; use Codex's own login state rather than environment-variable authentication.
 
-**Distribution**: the current release is a locally signed (no team ID), unnotarized arm64 prebuilt package. `make app` signs it with the stable local self-signed certificate when the build machine has one, otherwise ad-hoc; the actual signing mode, checksums, and download channels are stated in the release notes.
+**Distribution**: the current release is a locally signed (no team ID), unnotarized arm64 prebuilt package. `make app` signs it with the stable local self-signed certificate and fails when the build machine has none; the actual signing mode, checksums, and download channels are stated in the release notes.
 
 **Preview installation** (not a one-click trusted install):
 
 1. Download `CodexPetDock-0.2.0-macOS-arm64.zip` and extract it.
 2. Move `PetDock.app` to `/Applications` (or any fixed location).
-3. Because the app is locally signed (stable self-signed certificate or ad-hoc; either way no Developer ID and not notarized), macOS Gatekeeper may block the first launch. Go to **System Settings › Privacy & Security** and click **Open Anyway** (or "Open Anyway" in the Gatekeeper dialog). See [Apple's guide](https://support.apple.com/guide/mac-help/mh40616/mac) for details.
+3. Because the app is locally signed with a self-signed certificate (no Developer ID and not notarized), macOS Gatekeeper may block the first launch. Go to **System Settings › Privacy & Security** and click **Open Anyway** (or "Open Anyway" in the Gatekeeper dialog). See [Apple's guide](https://support.apple.com/guide/mac-help/mh40616/mac) for details.
 4. On first launch, grant **Screen Recording** permission (required for cross-app window enumeration) and restart the app.
 5. Ensure the `codex` CLI (`@openai/codex`) is installed and signed in — `WEEK LEFT` depends on it being available on the local machine.
 
@@ -193,7 +193,7 @@ Privacy boundaries are pinned by fixture tests: data-layer results contain no co
 
 ## ⚠️ Known Limitations
 
-- **Ad-hoc fallback TCC instability**: when the local `PetDock Local Development` certificate is unavailable, `make app` falls back to ad-hoc signing; each re-signing then changes the code-directory hash and invalidates the screen-recording authorization.
+- **Missing certificate fails the build**: when the local `PetDock Local Development` certificate is unavailable, `make app` fails instead of producing an ad-hoc signature, because each ad-hoc re-signing would change the code-directory hash and invalidate the screen-recording authorization.
 - **Screen-recording permission is a hard requirement**: without it, Codex windows can't be enumerated and the dock won't appear.
 - **`codex app-server` is experimental**: protocol fields may change across codex versions; a stable subset is parsed with graceful degradation for missing fields.
 - **Cross-app relative z-order is not controllable**: mitigated with a `.floating` level and non-overlapping geometry.

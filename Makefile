@@ -20,8 +20,9 @@ app: build
 		&& codesign -s "$(STABLE_SIGN_IDENTITY)" --force --identifier "$(IDENT)" "$(APP)"; then \
 		echo "稳定签名: $(STABLE_SIGN_IDENTITY)"; \
 	else \
-		codesign -s - --force --identifier "$(IDENT)" "$(APP)" \
-			&& echo "未找到/不可用稳定证书，已 ad-hoc 签名（TCC 授权将随构建失效）"; \
+		rm -rf $(APP); \
+		echo "错误: 未找到/不可用稳定签名证书 '$(STABLE_SIGN_IDENTITY)'。ad-hoc 签名会使 TCC 屏幕录制授权随每次构建失效，为避免静默退化构建已终止。排查: security find-certificate -c '$(STABLE_SIGN_IDENTITY)'，并检查钥匙串是否锁定。" >&2; \
+		exit 1; \
 	fi
 	@echo "已构建: $(APP)"
 
