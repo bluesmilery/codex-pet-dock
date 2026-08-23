@@ -272,3 +272,25 @@
 - 替代证据：新增 T-hj 全块（含 `DockPanel.frame` sink）与既有 T1–T14 selectPet 块已用与 `make test-ui` 相同的源文件清单抽成独立 main.swift 驱动，分别在基线（`git show 7828e4e:Sources/PetDock/PetTracker.swift`）与修复树上真实运行并记录（红→绿）。
 - 遗留：完整 test-ui 套件运行需在 GUI 会话环境对冻结 SHA 复跑（历史参考：上一冻结候选记录 282 passed，结论不跨 SHA 复用）；本候选产品改动仅 selectPet 滞回分支，已由上述驱动覆盖其全部非 nil lastWID 用例。
 - 构建命令差异：外层 seatbelt 禁止 SwiftPM 内层 sandbox-exec 嵌套与 `~/Library` 缓存写入，故 `swift build` 使用 `--disable-sandbox --cache-path/--config-path/--security-path /tmp/...`，swiftc 类目标设置 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`，`test-privacy` 使用 conda base python（系统 python3 无 pytest）。编译产物与门禁语义不变。
+
+---
+
+## 拖动期间空白症状修复（impl-sticky 轮，2026-08-23）
+
+- 任务：fix-bubble-collapse-smooth-follow（用户症状修复轮：拖动宠物期间 dock 与宠物之间出现空白）。
+- 批准产品基线：`ccb35f22b9d6ec995249cc7e8dff0ccac6bc97c5`（本 worktree 创建时 HEAD，实现前 Sources 未修改）。
+- 根因证据（主 Agent 现场采样，见派发记录）：拖动时气泡窗口（Activity Stack Backing 200x54/216x64）bounds 逐帧跟随宠物 → `BubbleCandidateIdentity`（含 bounds）逐 tick 变化 → `candidatesChanged` → generation 递增 + `cached`/`successfullyObservedWids` 清空 → `visibility(for:)` 对仍在 knownWids 的 WID 返回默认 `.visible`（保守避让）且在途捕获完成回调全部因 generation/knownCandidates 失配被丢弃 → 整个拖动期间 dock 持续避让隐藏气泡 → 空白；拖动停止后 identity 稳定，下一次捕获（≤0.1s cadence + 捕获耗时）恢复，与用户观察的 ~0.3s 吻合。运行时证据：拖动测试 identityChangeCount 从稳定态个/两位数涨至 418。
+- 最小修复（`Sources/PetDock/BubbleVisibility.swift`）：区分纯几何变化（WID 集合与 owner/title/layer/alpha/isOnscreen/sharingState 全部不变，仅 bounds 变）与真身份变化；纯几何 → 保留 cache 与成功观察集合（粘性）、不递增 generation；真身份 → 维持现行 generation 递增 + 清空 + 保守 visible。捕获写入校验保持现行严格语义（generation + knownCandidates 精确相等）：bounds 平移期间启动的旧捕获结果一律丢弃，不写入新几何；粘性只影响 cache 保留（理由：可见性分类基于窗口内容 alpha 统计而非几何，风险仅限于拖动期间状态变化延迟到拖动后 ≤0.2s 收敛，已在代码注释与架构文档写明）。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S-drag 拖动宠物期间 dock 与宠物之间出现空白（dy 跳到避让值 54-67，拖动停止 ~0.3s 后恢复） | behavior（生产组合，T-bv44） | 气泡先捕获为 hidden；拖动序列 8 tick，宠物与同 WID 气泡候选 bounds 每步平移 (7,5)（生产 `FollowLayoutPass.placeDock` 内真实 `probe(candidates:)` 消费），时间步 0.016s；拖动结束后 capturer 改 `.stats(expanded)` 注入真实状态变化 | 基线 `ccb35f22b9d6ec995249cc7e8dff0ccac6bc97c5`（Sources 未修改，仅叠加 test-only tests/main.swift）：T-bv44b FAIL——拖动期间 obstacles=[0,1,1,1,1,1,1,1,…]、实际 `DockPanel.frame` y=376（避让位）而非 321（基础位），空白症状精确复现 | `FollowLayoutPass.placeDock` → `BubbleVisibilityProbe.probe/visibility(for:)` → 可见障碍筛选 → frameSink → **真实 `DockPanel.placeBelow`**（与生产 `AppDelegate.tick` 同构；tick 经 `onVisibilityChange: scheduler.visibilityChangeCallback` + coalescer 驱动） | T-bv44b：拖动期间每 tick 实际 `DockPanel.frame` 保持当步无障碍基础位（obstacles=[0]×9，容差 <1.0）；T-bv44c：拖动结束后 hidden→visible 经 wake→coalescer→完整 tick 写回实际避让 frame（y=376） | headless 驱动（同 test-ui 源清单+flags）基线 313 passed / 5 failed（红）→ 修复树 318 passed / 0 failed（绿）；真实输出已存档 | 真机拖动体感（高刷/60Hz、展开收起叠加拖动）留视觉 QA |
+| 拖动期间粘性可见性语义（probe 级，T-bv43） | behavior | 同 WID 候选 bounds 逐 tick 平移+中途 200x54→216x64 尺寸变化（10 tick）；visible/hidden 两组前置；拖动后 `.targetMissing`/`.stats(expanded)` 刷新；拖动中在途捕获经 continuation gate 释放；owner/layer/WID 集合三种真身份变化 | 同上基线：T-bv43b/d/f/g FAIL（visibility=visible、cached=nil、无 wake——根因精确复现）；T-bv43a/c/h1-h3 基线即 PASS（保守/不变性用例） | `BubbleVisibilityProbe.probe` 消费每个候选快照；`BubbleVisibilityClassifier`、lock 内 generation/knownCandidates/knownWids/successfullyObservedWids 状态机 | T-bv43b/c：拖动期间 hidden 保持 hidden、visible 保持 visible（cached 保留）；T-bv43d：纯几何拖动保留成功观察资格→拖动后首次 `.targetMissing` 权威 hidden；T-bv43f：拖动结束后 hidden→visible 刷新并恰好唤醒一次；T-bv43g：拖动中在途旧结果拒绝写入且不启动第二捕获（single-flight 保持）；T-bv43h1-3：owner/layer/WID 变化仍清空回保守 visible 且观察资格同步清空 | 同上（红→绿） | 无 |
+| 既有回归不破坏 | behavior | 既有全部 test-ui 用例（T-bv33-42 回归A/保守避让/generation/identity、T-re5d/9/10 bounds 抖动 telemetry 与 in-flight 拒绝、T-bv39f 系列） | 修复树全部保持 PASS（identityChangeCount 语义不变：bounds 抖动仍计数） | 同 test-ui 全套生产/纯函数链 | 318/0 | 同上 | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | `swift build -c release` 0 warning；docs/test-docs/privacy/data/shell 全绿；test-ui 经 headless 驱动（见环境限制） | 完整 `make test`（含真实 test-ui）需 GUI 会话对冻结 SHA 复跑 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与上一轮相同无 WindowServer（`NSScreen.screens.count==0`）：`make test-ui` 的既有 `tests/main.swift:180` guard 会 fatalError。test-ui 改用 headless 驱动副本运行：复制 `tests/main.swift` 到 /tmp，仅替换该 NSScreen guard 为固定负 origin 合成屏 frame（primary fixture 走既有合成负坐标分支），并把 3 处 `#filePath` 推导的仓库根固定为本 worktree 绝对路径（T-sch4f/T-re8/T-re12b source guard 需要），其余测试与源文件清单、`-warnings-as-errors -DPETDOCK_TESTING` flags 与 `make test-ui` 完全一致。
+- 该差异只影响 Geometry 屏幕 fixture 与 source guard 的路径解析；本候选新增测试（T-bv43/T-bv44）与被测生产链不依赖 NSScreen。完整 `make test` 需在 GUI 会话对冻结 SHA 复跑。
+- `swift build` 使用 `--disable-sandbox` 与 /tmp 缓存路径（外层 seatbelt 禁止 SwiftPM 内层 sandbox 与 `~/Library` 写入）；python 门禁使用任务指定 `/Users/<user>/workspace/codex-pet-dock/.venv/bin/python`。

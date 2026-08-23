@@ -41,7 +41,13 @@
 
 应用启动时，`ScreenCapturePermissionRequestGate` 保证每个进程最多主动调用一次权限请求。每次 `probe` 都先同步刷新 `knownWids`；preflight 尚未通过时不进入 capturer 或 ScreenCaptureKit，并清除旧 hidden 缓存，使当前候选继续按 visible 保守避让。权限在重启后的进程中生效时，后续 probe 自动恢复捕获，不持久化权限副本。
 
-macOS 14+ 下一次允许启动捕获的受应用控制等待最长 0.1 秒，且始终 strict single-flight；捕获未完成时的新 probe 直接合并，不堆积截图任务。捕获 cadence、绝对 retry deadline 与 follow scheduler 共用 `systemUptime` 单调时钟，墙钟前跳或后跳不会改变探测频率和等待。异步任务只有在 generation 与启动时的候选 identity（bounds、owner、layer 等）仍有效时才能写入缓存；候选集合/identity 变化、候选消失或 `reset()` 都会清理该 generation 的成功观察资格，旧任务不能写回缓存或发出通知。完全空闲（无候选、无缓存、无在途）直接早退，不递增 generation。
+macOS 14+ 下一次允许启动捕获的受应用控制等待最长 0.1 秒，且始终 strict single-flight；捕获未完成时的新 probe 直接合并，不堆积截图任务。捕获 cadence、绝对 retry deadline 与 follow scheduler 共用 `systemUptime` 单调时钟，墙钟前跳或后跳不会改变探测频率和等待。异步任务只有在 generation 与启动时的候选 identity（bounds、owner、layer 等）仍有效时才能写入缓存；候选集合变化、同 WID 的任一非 bounds 身份字段变化、候选消失或 `reset()` 都会清理该 generation 的成功观察资格，旧任务不能写回缓存或发出通知。完全空闲（无候选、无缓存、无在途）直接早退，不递增 generation。
+
+### 拖动期间的粘性可见性
+
+拖动宠物时，气泡窗口的 bounds 会逐帧平移/缩放（如 Activity Stack Backing 200x54↔216x64），但 WID、owner、title、layer、alpha、onscreen 与 sharing state 均不变。这类**纯几何变化**不递增 generation、不清空该 WID 的可见性 cache 与成功观察资格（粘性）：拖动期间 `visibility(for:)` 沿用拖动前的判定，布局继续使用拖动前的避让状态，底座不会被默认保守 visible 的隐藏气泡窗口推开，从而避免拖动期间宠物与底座之间出现空白。WID 集合变化或任一身份字段变化（WID 重用/owner/layer 等）仍按上一段清理并回到保守 visible。
+
+写入校验保持严格：捕获完成回调仍要求 generation 与当前 `knownCandidates` 完全一致，拖动中在途的旧捕获结果一律丢弃，不会写入平移后的新几何；拖动结束后 identity 稳定，既有 0.1 秒 cadence 的下一次捕获自然刷新真实状态。代价是拖动过程中用户展开/收起气泡时，粘性判定最迟在拖动结束后的下一次捕获（0.1 秒 cadence 加捕获耗时，通常不超过 0.2 秒）收敛——这是接受的权衡。自动回归见 `make test-ui` 的 T-bv43/T-bv44；真实拖动体感仍需真机 QA 验证。
 
 成功结果写入缓存后，只有当前 `knownWids` 中候选的可见性实际变化才发出一次 `onVisibilityChange`；结果不变、空候选、reset 与旧 generation 均不通知。运行时由 `FollowTickScheduler` 把后台通知合并为最多一个待执行主线程 tick；若通知在 tick 执行中到达，只保留一次 follow-up。该 tick 的生产 `FollowLayoutPass` 走候选分类、probe/cache 重读、可见障碍筛选与 frame sink，再由 sink 执行 `safeDockFrame` 和面板 frame 回写。因此即使宠物 rect 未变化，气泡从 visible 变为 hidden 后，底座也会在该完整 tick 中回到宠物正下方。
 

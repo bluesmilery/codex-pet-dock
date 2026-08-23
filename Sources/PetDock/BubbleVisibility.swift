@@ -65,6 +65,22 @@ struct BubbleCandidateIdentity: Equatable, Sendable {
         sharingState = candidate.sharingState
         bounds = candidate.bounds
     }
+
+    /// 除 bounds 外的身份字段是否完全一致（同窗口纯几何平移/缩放判定）。
+    /// 拖动宠物时气泡窗口 bounds 逐帧跟随变化，但 WID/owner/title/layer/alpha/onscreen/
+    /// sharing 均不变；这类纯几何变化保留可见性 cache（粘性），不当作候选身份切换。
+    /// 代价：拖动期间展开/收起的真实状态变化最迟在拖动结束后的下一次捕获（≤0.1s cadence
+    /// + 捕获耗时）收敛——接受的权衡；捕获写入校验仍要求 knownCandidates 精确相等，
+    /// bounds 平移期间启动的旧捕获结果不会写入新几何。
+    func sameWindowIgnoringBounds(_ other: BubbleCandidateIdentity) -> Bool {
+        ownerPID == other.ownerPID
+            && ownerName == other.ownerName
+            && title == other.title
+            && layer == other.layer
+            && alpha == other.alpha
+            && isOnscreen == other.isOnscreen
+            && sharingState == other.sharingState
+    }
 }
 
 /// 纯函数分类（有滞回）。
@@ -137,7 +153,8 @@ final class BubbleVisibilityProbe: Sendable {
         /// `visibility(for:)` 对不在此集合中的 wid 返回 `.hidden`（当前帧失效），
         /// 防止已从 obstaclesNear 消失的候选残留 visible 缓存导致底座不复位（回归 A）。
         var knownWids: Set<CGWindowID> = []
-        /// 当前候选 WID 对应的完整身份快照；同 WID 但 bounds/owner/layer 变化也会换 generation。
+        /// 当前候选 WID 对应的完整身份快照；同 WID 但任一非 bounds 身份字段变化会换 generation
+        /// （纯 bounds 平移/缩放不换，见 probe 的粘性可见性判定）。
         var knownCandidates: [CGWindowID: BubbleCandidateIdentity] = [:]
         /// 当前 generation 内至少一次成功取得 alpha 统计的目标 WID。
         /// 只有这些 WID 的后续 targetMissing 才是权威 hidden；unavailable 永远保守 visible。
@@ -191,8 +208,24 @@ final class BubbleVisibilityProbe: Sendable {
             let nextCandidates = candidates.reduce(into: [CGWindowID: BubbleCandidateIdentity]()) { result, candidate in
                 result[candidate.wid] = BubbleCandidateIdentity(candidate)
             }
-            let candidatesChanged = s.knownWids != nextWids || s.knownCandidates != nextCandidates
-            if candidatesChanged {
+            let widsChanged = s.knownWids != nextWids
+            // 纯几何 vs 真身份：WID 集合相同且除 bounds 外身份字段全部一致 → 只是窗口平移/缩放
+            // （拖动宠物时气泡窗口逐帧跟随）。此时保留 cache 与 successfullyObservedWids（粘性）
+            // 且不递增 generation，避免拖动期间每帧清空 cache 使 visibility(for:) 回落默认
+            // .visible、dock 持续避让隐藏气泡（拖动期间宠物与底座之间出现空白的根因）。
+            // WID 集合或任一身份字段变化（WID 重用/owner/layer/alpha/...）→ 维持现行
+            // generation 递增 + cache/observed 清空 + 保守 visible。写入校验不变：完成回调仍
+            // 要求 generation 与 knownCandidates 完全相等，拖动中在途的旧捕获结果一律丢弃。
+            var windowIdentityChanged = widsChanged
+            if !windowIdentityChanged {
+                for (wid, identity) in nextCandidates
+                where s.knownCandidates[wid]?.sameWindowIgnoringBounds(identity) != true {
+                    windowIdentityChanged = true
+                    break
+                }
+            }
+            let candidatesChanged = widsChanged || s.knownCandidates != nextCandidates
+            if windowIdentityChanged {
                 s.generation += 1
                 s.cached.removeAll()
                 s.successfullyObservedWids.removeAll()
