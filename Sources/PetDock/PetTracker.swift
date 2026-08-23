@@ -19,6 +19,10 @@ enum PetHeuristics {
     static let ctrlHeightMax: CGFloat = 32      // 控制按钮高度上限（与气泡 bubbleHeightMin 互补，不重叠）
     static let ctrlMinSide: CGFloat = 18        // 最小边下限（排除 17x6 细长 voice control：minSide=6）
     static let ctrlMaxSide: CGFloat = 160       // 最大边上限（紧凑控件，排除大面合成层）
+    /// Composition Surface 气泡通道标题：宿主实测稳定标识（2026-08-24 现场像素级取证，
+    /// 展开气泡卡只渲染在该标题的大窗内），与 selectPet 依赖的 "Mascot" 标题同级。
+    /// 精确匹配（非包含），避免误纳同尺寸的其他宿主窗口。
+    static let compositionSurfaceTitle = "Codex Pet Composition Surface"
 }
 
 /// 一个可观测的窗口候选（来自 CGWindowList）。
@@ -237,26 +241,31 @@ enum PetTracker {
         return merged
     }
 
-    /// 与选中 Mascot 同 owner 的障碍（用于底座避让），合并两类**独立动态占用区域**：
+    /// 与选中 Mascot 同 owner 的障碍（用于底座避让），合并三类**独立动态占用区域**：
     /// - **会话气泡**（消息框展开）：高度 ∈ [bubbleHeightMin, bubbleHeightMax)，minY 允许小负偏差。
     /// - **控制按钮**（移动/交互时出现）：高度 < bubbleHeightMin，minY 严格 ≥ petMaxY（pet 正下方紧邻）。
+    /// - **Composition Surface 气泡卡**：标题精确匹配通道（见 isCompositionSurfaceObstacle），
+    ///   展开气泡卡渲染在该大窗里，几何上限不适用。
     ///
-    /// 两类分别基于当前帧几何判定（消息框在上/下与按钮出现/消失互不依赖），再合并成唯一障碍集。
-    /// **动态几何窗，不依赖 title**：共用前置（同 owner / onscreen / alpha>0 / layer>=3 / 非主窗 / 水平投影与 pet 重叠）。
+    /// 三类分别基于当前帧判定（消息框在上/下与按钮出现/消失互不依赖），再合并成唯一障碍集。
+    /// 前两类为**动态几何窗**，第三类依赖宿主实测稳定标题：共用前置（同 owner / onscreen / alpha>0 / layer>=3 / 非主窗 / 水平投影与 pet 重叠）。
     /// 排除 Mascot 自身与 main(layer0)。**不改变 selectPet 的合理回退**（障碍仅用于几何避让）。
     static func obstaclesNear(mascot: WinCandidate, candidates: [WinCandidate]) -> [WinCandidate] {
         guard !mascot.ownerName.isEmpty else { return [] }
         let pet = mascot.bounds
         let petMaxY = pet.maxY
-        return candidates.filter { c in
+        let filtered = candidates.filter { c in
             // 共用前置：同 owner / 在屏 / 可见 / 浮层 / 非主窗 / 排除 mascot 自身 / 水平投影与 pet 重叠
             c.wid != mascot.wid
                 && c.ownerName == mascot.ownerName
                 && c.isOnscreen && c.alpha > 0 && c.layer >= 3
                 && !c.isLikelyMainWindow
                 && c.bounds.origin.x < pet.maxX && c.bounds.origin.x + c.bounds.width > pet.minX
-                && (isBubbleObstacle(c, petMaxY: petMaxY) || isControlObstacle(c, petMaxY: petMaxY))
+                && (isCompositionSurfaceObstacle(c, petMaxY: petMaxY)
+                    || isBubbleObstacle(c, petMaxY: petMaxY)
+                    || isControlObstacle(c, petMaxY: petMaxY))
         }
+        return deduplicatedObstacles(filtered)
     }
 
     /// 障碍种类：决定可见性判定方式（消息框 vs 控制按钮分别基于当前帧计算）。
@@ -267,7 +276,42 @@ enum PetTracker {
     /// - `.control`：控制按钮，可见性即窗口存在性（已在 obstaclesNear 的 isOnscreen/alpha>0 保证），
     ///   不经像素探测 —— 避免小窗口 SC 捕获失败(nil)被误判收起。
     static func obstacleKind(_ c: WinCandidate, petMaxY: CGFloat) -> ObstacleKind {
-        isBubbleObstacle(c, petMaxY: petMaxY) ? .bubble : .control
+        (isCompositionSurfaceObstacle(c, petMaxY: petMaxY) || isBubbleObstacle(c, petMaxY: petMaxY))
+            ? .bubble : .control
+    }
+
+    /// Composition Surface 气泡通道：展开气泡卡渲染在该标题的大窗（现场实测 768x912、
+    /// layer 3、与宠物水平重叠、bounds 延伸到宠物下方）里；纯几何通道的
+    /// bubbleHeightMax/maxSide 会把它排除（S1 症状根因）。标题精确匹配取代几何猜测，
+    /// 不受高度/边长上限约束（共用前置已由 obstaclesNear 保证，此处只补标题与 petMaxY 关系）。
+    private static func isCompositionSurfaceObstacle(_ c: WinCandidate, petMaxY: CGFloat) -> Bool {
+        c.title == PetHeuristics.compositionSurfaceTitle && c.bounds.maxY > petMaxY
+    }
+
+    /// 障碍去重：宿主可能为同一窗口注册多个同 (owner,title,layer,bounds) 实例（现场实测
+    /// Composition Surface 有 7 个同 bounds 重复 wid）。wid 升序取首个代表，避免对同一
+    /// 大窗重复像素捕获（性能不可接受）。去重发生在 obstaclesNear 输出边界，保证布局
+    /// 障碍集与 BubbleVisibilityProbe 候选集一致——代表以外的实例不会因无 cache 回退
+    /// 保守 visible 的整窗 bounds 避让。
+    private static func deduplicatedObstacles(_ obstacles: [WinCandidate]) -> [WinCandidate] {
+        struct Signature: Hashable {
+            let ownerName: String
+            let title: String
+            let layer: Int
+            let bounds: CGRect
+        }
+        var seen = Set<Signature>()
+        var deduplicated: [WinCandidate] = []
+        for obstacle in obstacles.sorted(by: { $0.wid < $1.wid }) {
+            guard seen.insert(Signature(
+                ownerName: obstacle.ownerName,
+                title: obstacle.title,
+                layer: obstacle.layer,
+                bounds: obstacle.bounds
+            )).inserted else { continue }
+            deduplicated.append(obstacle)
+        }
+        return deduplicated
     }
 
     /// 会话气泡障碍：高度 ∈ [bubbleHeightMin, bubbleHeightMax)，maxSide<=600，

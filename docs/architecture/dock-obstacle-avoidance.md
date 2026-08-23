@@ -6,12 +6,14 @@
 
 ## 障碍识别
 
-`PetTracker.obstaclesNear(mascot:candidates:)` 使用与 `selectPet` 同一批 `CGWindowList` 快照，筛选与选中 Mascot 同 owner 的短会话浮层。识别依赖动态几何，不依赖 title：
+`PetTracker.obstaclesNear(mascot:candidates:)` 使用与 `selectPet` 同一批 `CGWindowList` 快照，筛选与选中 Mascot 同 owner 的短会话浮层。识别以动态几何为主，另有一条宿主实测标题通道：
 
 - `ownerName == mascot.ownerName`、`isOnscreen && alpha > 0 && layer >= 3`，且不是主窗口；
-- 高度在 `bubbleHeightMin`（32）到 `bubbleHeightMax`（223）之间，`maxSide <= 600`；
+- 几何气泡通道：高度在 `bubbleHeightMin`（32）到 `bubbleHeightMax`（223）之间，`maxSide <= 600`；
 - `minY >= pet.maxY - bubbleMinYSlack`（32），并且水平投影与 pet 重叠；
-- 排除 Mascot 自身、main（layer 0）、Composition Surface（`maxSide > 600`）、voice controls（`height < 32`）及包含整个宠物的 wrapper；高度达到 223 且远低于宠物底部的 512×223 wrapper，以及不在宠物底部附近的 384×95 / 17×6 辅助窗，都不会被当作会话气泡。
+- 标题气泡通道：标题精确等于 `Codex Pet Composition Surface` 的窗口（宿主实测稳定标识，与 `selectPet` 依赖的 "Mascot" 标题同级）不受高度/边长上限约束——现场取证显示展开气泡卡只渲染在该标题的 768×912 大窗里（7 个同 bounds 重复实例），几何通道会把它排除；纳入条件是同 owner 浮层、水平投影与 pet 重叠且 `bounds.maxY > pet.maxY`（窗口延伸到宠物下方）。
+- 除 Mascot 自身、main（layer 0）与几何/标题通道都不匹配的窗口外，voice controls（`height < 32`）及包含整个宠物的 wrapper 仍被排除；高度达到 223 且远低于宠物底部的 512×223 wrapper，以及不在宠物底部附近的 384×95 / 17×6 辅助窗，都不会被当作会话气泡；标题不匹配的同尺寸大窗同样不纳入（精确匹配，不做几何猜测）。
+- 输出边界按 `(owner, title, layer, bounds)` 去重（wid 升序保留一个代表）：同一大窗的多个重复实例只产生一个布局障碍和一个 probe 候选，避免对同一大窗重复像素捕获；这也保证布局障碍集与像素探测候选集一致。
 
 辅助窗口不会成为跟随目标：`selectPet` 仍使用 `isReasonablePet` 排除宽扁或过小控件；障碍集合只用于几何避让。
 
@@ -33,17 +35,19 @@
 
 窗口的 onscreen、alpha 与 bounds 元数据无法区分展开气泡和收起空背景。`BubbleVisibilityProbe` 在 `CGPreflightScreenCaptureAccess()` 已通过时使用 ScreenCaptureKit 公开 API 捕获候选窗口像素，仅在内存中统计 `alpha > 0.04` 的非透明像素数量与内容底边（窗口内像素 maxY），由纯函数按内容判定：
 
-- 非透明像素数 ≥ 3（内容噪声下限）→ visible，并携带窗口内内容底边 `contentBottom`；
-- 非透明像素数 < 3 或完全透明 → hidden，不作为障碍，dock 回宠物下方；
+- 非透明像素数 ≥ 80（内容噪声下限）→ visible，并携带窗口内内容底边 `contentBottom`；
+- 非透明像素数 < 80 或完全透明 → hidden，不作为障碍，dock 回宠物下方；
 - 成功取得 SCK 窗口清单但找不到此前同 generation 已成功观察过的 WID 时判定为 hidden；首次观察即 targetMissing 仍判 visible。权限、清单、截图、像素统计失败或 macOS 版本不支持时保守判定为 visible 且无内容底边（退回整窗 bounds 避让）。
 
-宿主收起后的状态卡容器窗口实测会残留一条仍可见的小横条（窗口 200x54，内容只占窗口内 y[15,21]，底部 32px 全透明）。因此“是否展开”不再决定避让：可见气泡的障碍矩形高度 = `contentBottom + 1`（像素≈点，dock 紧贴可见内容底 + gap），水平仍使用整窗 bounds（内容水平居中且窗口本身水平定位，保持水平避让语义）。旧的 open/close 比例阈值与滞回假设“收起=无卡”，无法正确处理该残留形态，已被此方案取代。
+噪声下限 80 来自 2026-08-24 现场像素级校准：宿主收起后 ACT 容器仅剩 39-57 个非透明像素的不可见小点（6-7px 宽，截屏放大肉眼不可见）；控制按钮出现时实测 189-194px。57 < 80 < 189，双向 ≥40% 余量。该阈值只影响“有无内容”判定；Composition Surface 因宠物像素恒为 visible。因此“是否展开”不再决定避让：可见气泡的障碍矩形高度 = `contentBottom + 1`（像素≈点，dock 紧贴可见内容底 + gap），水平仍使用整窗 bounds（内容水平居中且窗口本身水平定位，保持水平避让语义）。旧的 open/close 比例阈值与滞回假设“收起=无卡”，已被该方案取代。
 
 像素只在内存中统计，不 OCR、不保存图像、不记录颜色、文字或窗口内容。
 
 应用启动时，`ScreenCapturePermissionRequestGate` 保证每个进程最多主动调用一次权限请求。每次 `probe` 都先同步刷新 `knownWids`；preflight 尚未通过时不进入 capturer 或 ScreenCaptureKit，并清除旧 hidden 缓存，使当前候选继续按 visible 保守避让。权限在重启后的进程中生效时，后续 probe 自动恢复捕获，不持久化权限副本。
 
 macOS 14+ 下一次允许启动捕获的受应用控制等待最长 0.1 秒，且始终 strict single-flight；捕获未完成时的新 probe 直接合并，不堆积截图任务。捕获 cadence、绝对 retry deadline 与 follow scheduler 共用 `systemUptime` 单调时钟，墙钟前跳或后跳不会改变探测频率和等待。异步任务只有在 generation 与启动时的候选 identity（bounds、owner、layer 等）仍有效时才能写入缓存；候选集合变化、同 WID 的任一非 bounds 身份字段变化、候选消失或 `reset()` 都会清理该 generation 的成功观察资格，旧任务不能写回缓存或发出通知。完全空闲（无候选、无缓存、无在途）直接早退，不递增 generation。
+
+大面积候选（窗口面积超过 100,000 原始像素，如 Composition Surface 768×912）捕获时按比例降采样：`SCStreamConfiguration` 目标尺寸等比缩到最长边 ≤ 240 并保持纵横比，小窗（ACT 等）不降采样、路径不变。像素探测只需要内容底边，降采样的几像素误差可接受：`contentBottom` 按行高比例换算回原始像素行（`round(maxY × origH/capH)`，随后的避让矩形仍受整窗高度 cap），非透明像素计数按面积比例放大（`count × origArea/capArea`）用于噪声下限比较。
 
 ### 拖动期间的粘性可见性
 
