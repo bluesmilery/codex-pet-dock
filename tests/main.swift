@@ -2323,10 +2323,12 @@ final class AsyncCaptureEntryGate: @unchecked Sendable {
     }
 }
 
-// T-re10 (review r1 P1 修复 / v7 P2-2): in-flight identity replacement ——
+// T-re10 (review r1 P1 修复 / v7 P2-2): in-flight bounds-only move ——
 // capturer 进入后经 continuation gate 挂起（不阻塞 executor）；主线程 pump RunLoop
-// 直到 entered/calls/inFlight 状态确定，再注入 identity replacement 并断言
-// single-flight；手工 release 恰好 resume 一次后收尾。不使用固定 sleep 或时序巧合。
+// 直到 entered/calls/inFlight 状态确定，再注入同 WID 纯几何平移（bounds 345→345.5，
+// 粘性语义：cache 保留、generation 不变）并断言 single-flight；手工 release 恰好
+// resume 一次后收尾。stale 完成的拒绝由写入校验的 knownCandidates 精确不等保证
+//（generation 在纯几何路径不递增）。不使用固定 sleep 或时序巧合。
 var reITime: TimeInterval = 27_000
 let reIRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-inflight-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
@@ -2355,7 +2357,7 @@ check("T-re10 前置 gate: capturer已进入且calls==1",
       },
       "calls=\(reICaptureCalls.withLock { $0 })")
 reITime = 27_000.01
-reIProbe.probe(candidates: [reIJittered]) // in-flight 期间 identity 替换（single-flight 合并）
+reIProbe.probe(candidates: [reIJittered]) // in-flight 期间 bounds-only 平移（粘性保留 cache；single-flight 合并）
 let reIAfterReplacement = reICollector.snapshot()
 check("T-re10a in-flight jitter→identity计1且不启动第二捕获",
       (reIAfterReplacement["identityChangeCount"] as? Int) == 2
@@ -2373,7 +2375,7 @@ check("T-re10b stale完成被拒绝→outcome/visibility/wake均不计入",
       "stats=\(reIAfterStale["captureStatsCount"] ?? -1) "
         + "visible=\(reIAfterStale["visibilityVisibleCount"] ?? -1) "
         + "wake=\(reIAfterStale["wakeCallbackCount"] ?? -1)")
-reITime = 27_001   // 新 generation 下 due → 接受的捕获必须计数
+reITime = 27_001   // 同一 generation 下 due（knownCandidates 已更新为 jittered）→ 接受的捕获必须计数
 reIProbe.probe(candidates: [reIJittered])
 _ = waitPumpingMain { reIEntryGate.enteredCount == 2 && reICaptureCalls.withLock { $0 } == 2 }
 reIEntryGate.release()   // 释放第二段捕获
