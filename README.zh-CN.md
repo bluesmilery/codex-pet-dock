@@ -194,6 +194,7 @@ make test         # 全量（docs gate + privacy + Swift UI/data/shell fixture�
 
 - **缺少证书时构建失败**：本机没有 `PetDock Local Development` 证书时，`make app` 构建失败；ad-hoc 签名会随每次重新签名改变代码目录哈希、使屏幕录制授权失效，因此不允许回落。
 - **屏幕录制权限是硬前提**：未授权时无法枚举到 Codex 窗口，底座不会出现。
+- **Composition Surface 气泡避让依赖像素观察**：降级路径（macOS 13、屏幕录制授权被拒或捕获失败）下 Composition Surface 气泡不作为障碍，可能与底座重叠（与该通道引入前行为一致）；正常模式冷启动首次探测完成前（≤~0.3s），若气泡恰好已展开，同样短暂重叠后由首次探测自动纠正。
 - **`codex app-server` 为 experimental**：协议字段可能随 codex 版本变化；已做稳定子集解析与缺失字段降级。
 - **跨应用窗口相对 z-order 不可控**：以 `.floating` 层级 + 几何不重叠的方式降级处理。
 - **平台范围有限**：当前仅适配 Apple Silicon 上的 macOS 13+，且仅针对 Codex 桌面宠物。

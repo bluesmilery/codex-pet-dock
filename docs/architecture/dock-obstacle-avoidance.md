@@ -37,7 +37,7 @@
 
 - 非透明像素数 ≥ 80（内容噪声下限）→ visible，并携带窗口内内容底边 `contentBottom`；
 - 非透明像素数 < 80 或完全透明 → hidden，不作为障碍，dock 回宠物下方；
-- 成功取得 SCK 窗口清单但找不到此前同 generation 已成功观察过的 WID 时判定为 hidden；首次观察即 targetMissing 仍判 visible。权限、清单、截图、像素统计失败或 macOS 版本不支持时保守判定为 visible 且无内容底边（退回整窗 bounds 避让）。
+- 成功取得 SCK 窗口清单但找不到此前同 generation 已成功观察过的 WID 时判定为 hidden；首次观察即 targetMissing 仍判 visible。权限、清单、截图、像素统计失败或 macOS 版本不支持时保守判定为 visible 且无内容底边：几何气泡通道（ACT 等小窗）退回整窗 bounds 避让（既有降级语义不变）；标题通道的 Composition Surface 则跳过、不作为障碍（见下文「Composition Surface 无观察数据语义」）。
 
 噪声下限 80 来自 2026-08-24 现场像素级校准：宿主收起后 ACT 容器仅剩 39-57 个非透明像素的不可见小点（6-7px 宽，截屏放大肉眼不可见）；控制按钮出现时实测 189-194px。57 < 80 < 189，双向 ≥40% 余量。该阈值只影响“有无内容”判定；Composition Surface 因宠物像素恒为 visible。因此“是否展开”不再决定避让：可见气泡的障碍矩形高度 = `contentBottom + 1`（像素≈点，dock 紧贴可见内容底 + gap），水平仍使用整窗 bounds（内容水平居中且窗口本身水平定位，保持水平避让语义）。旧的 open/close 比例阈值与滞回假设“收起=无卡”，已被该方案取代。
 
@@ -58,6 +58,16 @@ macOS 14+ 下一次允许启动捕获的受应用控制等待最长 0.1 秒，�
 成功结果写入缓存后，只有当前 `knownWids` 中候选的可见性状态（visible/hidden）实际变化才发出一次 `onVisibilityChange`；结果不变、仅内容底边变化、空候选、reset 与旧 generation 均不通知。内容底边变化（例如展开大卡收成残留横条，可见性保持 visible）由既有 0.1 秒 cadence 的下一次完整 tick 应用，不额外唤醒。运行时由 `FollowTickScheduler` 把后台通知合并为最多一个待执行主线程 tick；若通知在 tick 执行中到达，只保留一次 follow-up。该 tick 的生产 `FollowLayoutPass` 走候选分类、probe/cache 重读、可见障碍筛选（气泡按内容 bbox 高度构造）与 frame sink，再由 sink 执行 `safeDockFrame` 和面板 frame 回写。因此即使宠物 rect 未变化，气泡从 visible 变为 hidden 后，底座也会在该完整 tick 中回到宠物正下方。
 
 moving 状态在 macOS 14+ 且底座可见、实际 `panel.screen` 非空时使用 `NSWindow.displayLink(target:selector:)`，随窗口所在显示器同步；可见窗口暂时没有所属屏幕时使 link 失效并使用 Timer fallback，窗口 screen 变化通过同一 coalesced wake 触发重新选择。macOS 13 使用 `.common` run-loop mode 的 repeating Timer，周期取当前屏幕 `maximumFramesPerSecond` 的倒数并 capped 到 120 Hz，无有效能力值时回退 60 Hz；moving tick 发现能力变化时会重建 Timer。display/timer callback 都只请求 latest-only tick，主线程忙时丢弃过期节拍；不使用已弃用的 `CVDisplayLink`。moving 进入 stable 使用单调 elapsed time 与名义 `4/60s` 静止窗口，并相对固定静止锚点吸收抖动，连续小位移累计越过容差会重置变化时刻。stable 的 0.1 秒 one-shot 由每次完整 tick 的单调起点派生，外部 wake 重置相位；若本次生产布局中的气泡 probe 因 cadence 尚未 due 而跳过，probe 保存绝对 due deadline，scheduler 在 tick 完成时重新计算剩余 delay 并取更早的 one-shot。若本 tick 工作已经跨过 probe deadline，则只立即合并一次 latest-only follow-up；不回放历史节拍。hidden 降为 1 秒 one-shot Timer。
+
+## Composition Surface 无观察数据语义
+
+Composition Surface 是常驻大窗（现场实测 768×912）：像素内容全透明或只在宠物上方时它都不是障碍，只有宠物下方实际渲染的气泡卡内容才是。因此该标题通道候选的障碍性完全取决于观察数据，`obstacleKind` 单独分类为 `.compositionSurface`，布局消费规则为：
+
+- `visibility != visible` → 不作为障碍（内容不可见 / 噪声以下）；
+- `visible` 且无 `contentBottom`（macOS 13 恒 unavailable、屏幕录制授权被拒、捕获失败、冷启动首次观察前、代表 wid churn 清 cache 后）→ 跳过，不作为障碍：无观察数据时没有任何依据把整窗 bounds 当障碍——那会把 dock 长距离推离基础位（自动测试实测推到整窗底部）且降级模式下永久如此；
+- `visible` 且有 `contentBottom` → 按内容 bbox 避让（高度 = `contentBottom + 1`，受整窗高度 cap），与其他像素通道一致。
+
+由此产生两条已知限制：降级模式（macOS 13 / 无屏幕录制授权 / 捕获失败）下 Composition Surface 气泡不做避让，展开的气泡卡可能与 dock 重叠——这与该通道引入前的行为完全一致；正常模式冷启动首次探测完成前（≤~0.3s），若气泡恰好已展开，同样短暂重叠后由首次探测自动纠正（dock 先停在基础位再下移）。ACT 等几何小窗在降级模式下仍保守整窗避让，既有语义不变。
 
 ## 控制按钮与边界
 

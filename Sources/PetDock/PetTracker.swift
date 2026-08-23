@@ -268,16 +268,20 @@ enum PetTracker {
         return deduplicatedObstacles(filtered)
     }
 
-    /// 障碍种类：决定可见性判定方式（消息框 vs 控制按钮分别基于当前帧计算）。
-    enum ObstacleKind { case bubble, control }
+    /// 障碍种类：决定可见性判定方式与保守降级语义（三类，见 obstacleKind）。
+    enum ObstacleKind { case bubble, control, compositionSurface }
 
     /// 判定候选相对 petMaxY 的障碍种类（已被 obstaclesNear 纳入的候选）。
-    /// - `.bubble`：会话气泡，可见性由像素 alpha（bubbleProbe）判定（展开/收起）。
+    /// - `.bubble`：会话气泡（ACT 等几何小窗），可见性由像素 alpha（bubbleProbe）判定（展开/收起）；
+    ///   保守 visible 无 contentBottom 时整窗 bounds 避让（降级语义与既有版本一致）。
     /// - `.control`：控制按钮，可见性即窗口存在性（已在 obstaclesNear 的 isOnscreen/alpha>0 保证），
     ///   不经像素探测 —— 避免小窗口 SC 捕获失败(nil)被误判收起。
+    /// - `.compositionSurface`：Composition Surface 常驻大窗的气泡卡。标题通道命中时优先返回该
+    ///   种类（几何通道的高度/边长上限本就排除该大窗）；其障碍性完全取决于宠物下方像素内容，
+    ///   无观察数据时跳过避让（见 FollowLayoutPass），不做整窗保守避让。
     static func obstacleKind(_ c: WinCandidate, petMaxY: CGFloat) -> ObstacleKind {
-        (isCompositionSurfaceObstacle(c, petMaxY: petMaxY) || isBubbleObstacle(c, petMaxY: petMaxY))
-            ? .bubble : .control
+        if isCompositionSurfaceObstacle(c, petMaxY: petMaxY) { return .compositionSurface }
+        return isBubbleObstacle(c, petMaxY: petMaxY) ? .bubble : .control
     }
 
     /// Composition Surface 气泡通道：展开气泡卡渲染在该标题的大窗（现场实测 768x912、

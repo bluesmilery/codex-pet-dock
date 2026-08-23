@@ -56,6 +56,8 @@ release 构建属于上述自动门禁；构建通过不能推导 `.app` 已启�
 10. 验证三种内置主题切换，以及外部 JSON 主题文件的安全解析和热加载。
 11. 在已登录的真实 Codex 环境中验证 WEEK LEFT / WEEK TOKENS 刷新、窗口边界和独立退避；不输出账户或会话内容。
 12. 分别在 60 Hz 和可用的高刷屏观察 moving 跟随、最长 32ms 线性跟随、stable 降频、隐藏与重捕的实际性能和体感；若有 macOS 13 环境，单独验证 repeating Timer fallback。
+13. Composition Surface 降级路径：在 macOS 13、拒绝屏幕录制授权或捕获失败环境下展开气泡，确认 Composition Surface 不作为障碍（气泡可能与底座重叠，与该通道引入前一致），底座不被推到大窗底部/屏幕底部。
+14. Composition Surface 冷启动：正常授权下启动且气泡恰好已展开时，确认底座先短暂停在基础位（≤~0.3s）再下移到气泡内容下方，不闪跳到大窗底部。
 
 这些项目依赖 TCC、ScreenCaptureKit、Accessibility、真实多显示器和 `.app` 运行环境，不能由 `make test` 代替。`make app` 属于发布 / 真机阶段命令，本页不把其执行状态写成当前候选结论。
 
