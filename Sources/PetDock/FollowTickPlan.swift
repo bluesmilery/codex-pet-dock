@@ -314,7 +314,29 @@ enum FollowLayoutPass {
                 visibleObstacles: visibleBounds.count
             )
         }
-        return frameSink(mascot.bounds, visibleBounds)
+        // 布局锚：基础位锚定“宠物+其下方可见内容”的实时底边，而非 Mascot 窗口底。
+        // Mascot 窗口底部有大量透明 padding（现场实测可见内容底 abs y328 vs 窗口底 369），
+        // 宠物/气泡卡像素实际渲染在 Composition Surface（obstaclesNear 去重后恰一个代表），
+        // 其 contentBottom 观察即可见内容底。visible 且有 contentBottom 时：
+        // effectivePetMaxY = 代表.bounds.minY + contentBottom + 1（Quartz 全局 y；
+        // contentBottom 为窗口内像素行，与上方避让矩形高度 contentBottom+1 同口径——
+        // 展开态障碍底边 == effectivePetMaxY，基础位即内容底+gap，不产生双重下移）。
+        // 否则（hidden / 降级 / 冷启动首 tick 无 cache）回退 Mascot 窗口底，降级行为不变。
+        // 已知权衡：宠物动画（叶子摆动等）会使 contentBottom 逐帧微变 → dock 基础位微跳；
+        // 本轮不加平滑，若真机观察到 >4px 高频抖动，后续轮再加滞回。
+        var effectivePetMaxY = mascot.bounds.maxY
+        if let rep = classified.first(where: { $0.1 == .compositionSurface })?.0 {
+            let observation = bubbleProbe.observation(for: rep.wid)
+            if observation.visibility == .visible, let contentBottom = observation.contentBottom {
+                effectivePetMaxY = max(mascot.bounds.minY,
+                                       rep.bounds.minY + CGFloat(contentBottom + 1))
+            }
+        }
+        // 水平居中仍按 Mascot 窗口（origin.x/width 不变）；仅高度随内容底收缩/延伸。
+        let adjustedPet = CGRect(x: mascot.bounds.minX, y: mascot.bounds.minY,
+                                 width: mascot.bounds.width,
+                                 height: effectivePetMaxY - mascot.bounds.minY)
+        return frameSink(adjustedPet, visibleBounds)
     }
 }
 
