@@ -250,22 +250,38 @@ enum PetTracker {
     /// 三类分别基于当前帧判定（消息框在上/下与按钮出现/消失互不依赖），再合并成唯一障碍集。
     /// 前两类为**动态几何窗**，第三类依赖宿主实测稳定标题：共用前置（同 owner / onscreen / alpha>0 / layer>=3 / 非主窗 / 水平投影与 pet 重叠）。
     /// 排除 Mascot 自身与 main(layer0)。**不改变 selectPet 的合理回退**（障碍仅用于几何避让）。
+    ///
+    /// Composition Surface 通道按**标题**去重（跨 bounds）：candidates 输入顺序即
+    /// CGWindowList 的前到后顺序，首个命中的实例保留为唯一代表，其余 CS 实例不论
+    /// bounds 全部跳过。CS 是宿主的重复合成层，仅最前层内容对用户可见；后层可能包含
+    /// 宿主布局切换后的残影（desktopIndependentWindow 捕获窗口自身内容、感知不到前层
+    /// 遮挡），把它当障碍会在气泡位于宠物上方时把 dock 推到幽灵卡片下方（2026-08-24
+    /// 现场：多 bounds CS 并存，后层 86px 幽灵内容使 dock 多让 ~31px 出现大片空白）。
     static func obstaclesNear(mascot: WinCandidate, candidates: [WinCandidate]) -> [WinCandidate] {
         guard !mascot.ownerName.isEmpty else { return [] }
         let pet = mascot.bounds
         let petMaxY = pet.maxY
-        let filtered = candidates.filter { c in
+        var compositionSurfaceRep: WinCandidate?
+        var geometricObstacles: [WinCandidate] = []
+        for c in candidates {
             // 共用前置：同 owner / 在屏 / 可见 / 浮层 / 非主窗 / 排除 mascot 自身 / 水平投影与 pet 重叠
-            c.wid != mascot.wid
-                && c.ownerName == mascot.ownerName
-                && c.isOnscreen && c.alpha > 0 && c.layer >= 3
-                && !c.isLikelyMainWindow
-                && c.bounds.origin.x < pet.maxX && c.bounds.origin.x + c.bounds.width > pet.minX
-                && (isCompositionSurfaceObstacle(c, petMaxY: petMaxY)
-                    || isBubbleObstacle(c, petMaxY: petMaxY)
-                    || isControlObstacle(c, petMaxY: petMaxY))
+            guard c.wid != mascot.wid,
+                  c.ownerName == mascot.ownerName,
+                  c.isOnscreen, c.alpha > 0, c.layer >= 3,
+                  !c.isLikelyMainWindow,
+                  c.bounds.origin.x < pet.maxX, c.bounds.origin.x + c.bounds.width > pet.minX
+            else { continue }
+            if isCompositionSurfaceObstacle(c, petMaxY: petMaxY) {
+                // 标题级去重：仅保留输入顺序（前到后）首个 CS 实例，被遮挡的后层残影
+                // 不产生障碍/锚/像素捕获（见函数头注释）。
+                if compositionSurfaceRep == nil { compositionSurfaceRep = c }
+            } else if isBubbleObstacle(c, petMaxY: petMaxY) || isControlObstacle(c, petMaxY: petMaxY) {
+                geometricObstacles.append(c)
+            }
         }
-        return deduplicatedObstacles(filtered)
+        var obstacles = deduplicatedObstacles(geometricObstacles)
+        if let rep = compositionSurfaceRep { obstacles.append(rep) }
+        return obstacles.sorted { $0.wid < $1.wid }   // 与既有输出口径一致的稳定排序
     }
 
     /// 障碍种类：决定可见性判定方式与保守降级语义（三类，见 obstacleKind）。
@@ -292,11 +308,12 @@ enum PetTracker {
         c.title == PetHeuristics.compositionSurfaceTitle && c.bounds.maxY > petMaxY
     }
 
-    /// 障碍去重：宿主可能为同一窗口注册多个同 (owner,title,layer,bounds) 实例（现场实测
-    /// Composition Surface 有 7 个同 bounds 重复 wid）。wid 升序取首个代表，避免对同一
-    /// 大窗重复像素捕获（性能不可接受）。去重发生在 obstaclesNear 输出边界，保证布局
-    /// 障碍集与 BubbleVisibilityProbe 候选集一致——代表以外的实例不会因无 cache 回退
-    /// 保守 visible 的整窗 bounds 避让。
+    /// 障碍去重（非 Composition Surface 通道）：宿主可能为同一窗口注册多个同
+    /// (owner,title,layer,bounds) 实例。wid 升序取首个代表，避免重复像素捕获。
+    /// 去重发生在 obstaclesNear 输出边界，保证布局障碍集与 BubbleVisibilityProbe 候选集
+    /// 一致——代表以外的实例不会因无 cache 回退保守 visible 的整窗 bounds 避让。
+    /// Composition Surface 通道不经过此处：它按标题跨 bounds 去重并取列表顺序首位
+    ///（前到后最可见层），见 obstaclesNear。
     private static func deduplicatedObstacles(_ obstacles: [WinCandidate]) -> [WinCandidate] {
         struct Signature: Hashable {
             let ownerName: String

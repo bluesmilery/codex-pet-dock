@@ -13,7 +13,7 @@
 - `minY >= pet.maxY - bubbleMinYSlack`（32），并且水平投影与 pet 重叠；
 - 标题气泡通道：标题精确等于 `Codex Pet Composition Surface` 的窗口（宿主实测稳定标识，与 `selectPet` 依赖的 "Mascot" 标题同级）不受高度/边长上限约束——现场取证显示展开气泡卡只渲染在该标题的 768×912 大窗里（7 个同 bounds 重复实例），几何通道会把它排除；纳入条件是同 owner 浮层、水平投影与 pet 重叠且 `bounds.maxY > pet.maxY`（窗口延伸到宠物下方）。
 - 除 Mascot 自身、main（layer 0）与几何/标题通道都不匹配的窗口外，voice controls（`height < 32`）及包含整个宠物的 wrapper 仍被排除；高度达到 223 且远低于宠物底部的 512×223 wrapper，以及不在宠物底部附近的 384×95 / 17×6 辅助窗，都不会被当作会话气泡；标题不匹配的同尺寸大窗同样不纳入（精确匹配，不做几何猜测）。
-- 输出边界按 `(owner, title, layer, bounds)` 去重（wid 升序保留一个代表）：同一大窗的多个重复实例只产生一个布局障碍和一个 probe 候选，避免对同一大窗重复像素捕获；这也保证布局障碍集与像素探测候选集一致。
+- 输出边界去重分两条通道：**Composition Surface 通道按标题去重（跨 bounds）**——candidates 输入顺序即 CGWindowList 的前到后顺序，首个命中的实例保留为唯一代表，其余同标题实例不论 bounds 全部跳过。CS 是宿主的重复合成层，仅最前层内容对用户可见；宿主布局切换后可能同时存在多种 bounds 的 CS 窗口，而 desktopIndependentWindow 像素捕获感知不到前层遮挡——后层残留的旧布局“幽灵”气泡卡会被当成真实内容，在气泡位于宠物上方时把 dock 推到幽灵卡片下方（2026-08-24 现场实测：多 bounds CS 并存，后层 86px 残影使 dock 多让 ~31px、宠物与 dock 间出现大气泡尺寸空白）。只保留最前层实例后，被遮挡的后层残影不再产生障碍、内容锚或像素捕获。**其余通道（几何 bubble/control）维持 (owner, title, layer, bounds) 签名去重**（wid 升序保留一个代表）：同一窗口的多个重复实例只产生一个布局障碍和一个 probe 候选；这也保证布局障碍集与像素探测候选集一致。
 
 辅助窗口不会成为跟随目标：`selectPet` 仍使用 `isReasonablePet` 排除宽扁或过小控件；障碍集合只用于几何避让。
 
