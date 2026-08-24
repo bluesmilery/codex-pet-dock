@@ -249,3 +249,187 @@
 | MW4 复验 | test-data 行尾 dangling `-D` | — | W5 FAIL（保持既有覆盖） |
 
 - 全部 mutation 后完全恢复；恢复树与实现树逐字节一致后 clean gate `make test-privacy` 28 passed。mutation 均在隔离 /tmp 副本执行，结束后移入废纸篓，未污染 worktree。
+
+---
+
+## 宠物识别被隐藏气泡窗口劫持修复（impl-selection 轮，2026-08-23）
+
+- 任务：fix-bubble-collapse-smooth-follow（用户症状修复轮：宠物识别被隐藏气泡窗口劫持）。
+- 批准产品基线：`7828e4ed1798f9d5d47fb190be660c9bc1f10787`（本 worktree 创建时 HEAD，实现前 Sources 未修改）。
+- 根因证据：`research/pet-selection-hijack-2026-08-23.md`（现场只读 CGWindowList 采样 + 生产 `selectPet` 离线回放 + 运行中底座实际 frame 核对：底座 y=隐藏气泡窗口底部+2px 而非 Mascot 底部+2px）。
+- 最小修复：`PetTracker.selectPet` R4.1 滞回沿用前增加宠物有效性再校验（`isReasonablePet` 或 title 含 `Mascot` 才可沿用；否则落入既有规则链）。不改其他选择规则、障碍分类、布局与调度。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S-hj 图2/图3：会话 UI 隐藏后底座仍跟随宠物移动但保持旧避让间距（锚定隐藏气泡窗口） | behavior（生产组合） | 候选集含真 Mascot（title 含 Mascot、172x179、layer=2）与隐藏气泡窗口（title 仅应用名、384x95、layer=3、与宠物水平精确居中、垂直覆盖下半部且底部低于宠物 45px、onscreen/alpha=1）；`selectPet(lastWID=气泡wid)` 处于劫持锁定态；另含 768x912 组合面与 24x6 控件两种劫持形态 | 基线 `7828e4ed1798f9d5d47fb190be660c9bc1f10787`（git show 提取基线版 PetTracker.swift 编译进驱动）：T-hj1/2/3/6a/6b 全 FAIL——底座实际 frame y=326=气泡底部(324)+2，精确复现现场症状；T-hj4/5（不变性保护）PASS | CGWindowList 候选快照 → `PetTracker.selectPet(lastWID:)` 滞回分支（生产 `AppDelegate.tick` 同一入口）→ `FollowLayoutPass.placeDock` → `PetTracker.obstaclesNear/obstacleKind` → 真实 `DockPanel.placeBelow` | T-hj6b：实际 `DockPanel.frame`（setFrame 后 owner 状态）回到真 Mascot 正下方基础位（y=281，由 `Geometry.appKitRectFromQuartz` 独立换算，容差<1.0）、obstacles=[0]；修复后 T-hj 全块 7/7 PASS | 独立驱动以与 `make test-ui` 完全相同的源文件清单编译真实源码：基线 2 passed / 5 failed（红）→ 修复树 7 passed / 0 failed（绿） | 真机复现图1→图2→图3 由视觉 QA 在精确候选上执行；本表为自动行为证据 |
+| 滞回不变性 | behavior | lastWID=Mascot wid；lastWID=120x120 合理回退窗口（title 无 Mascot） | 基线与修复树均 PASS（T-hj4/5） | 同上（滞回分支） | 选择结果与 `hysteresis:lastWID` hitFlag 保持 | 见上；既有 T4（100x100 滞回）在修复树 15/15 PASS 中保持 | 无 |
+| 既有 selectPet 回归 | behavior | T1–T14 既有全部用例（主窗口排除、Mascot 优先、高 layer/尺寸回退、辅助控件排除） | 修复树 15/15 PASS（独立驱动） | `selectPet` 全规则链 | 既有断言全部保持 | 见上 | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | release 0 warning；docs 0 finding；privacy 28 passed；test-data/test-shell 通过 | `swift build -c release` Build complete!（0 warning）；`make docs-check` 14 files 0 findings；`make test-docs` 10 OK；`make test-privacy` 28 passed；`make test-data` 全部通过；`make test-shell` exit 0 | `make test-ui` 运行时受实现沙箱限制（见下） |
+
+### 实现环境限制（如实记录，供 Review/QA 复核）
+
+- 本 implement 沙箱（seatbelt）无 WindowServer 访问（`NSScreen.screens.count==0`）：`make test-ui` 编译阶段 0 warning 通过（`-warnings-as-errors`），但运行时在**既有** `tests/main.swift:180` `guard let main = NSScreen.screens.first else { fatalError("无屏幕") }` 崩溃，先于本候选全部新增测试；该崩溃与本候选改动无关。
+- 替代证据：新增 T-hj 全块（含 `DockPanel.frame` sink）与既有 T1–T14 selectPet 块已用与 `make test-ui` 相同的源文件清单抽成独立 main.swift 驱动，分别在基线（`git show 7828e4e:Sources/PetDock/PetTracker.swift`）与修复树上真实运行并记录（红→绿）。
+- 遗留：完整 test-ui 套件运行需在 GUI 会话环境对冻结 SHA 复跑（历史参考：上一冻结候选记录 282 passed，结论不跨 SHA 复用）；本候选产品改动仅 selectPet 滞回分支，已由上述驱动覆盖其全部非 nil lastWID 用例。
+- 构建命令差异：外层 seatbelt 禁止 SwiftPM 内层 sandbox-exec 嵌套与 `~/Library` 缓存写入，故 `swift build` 使用 `--disable-sandbox --cache-path/--config-path/--security-path /tmp/...`，swiftc 类目标设置 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`，`test-privacy` 使用 conda base python（系统 python3 无 pytest）。编译产物与门禁语义不变。
+
+---
+
+## 拖动期间空白症状修复（impl-sticky 轮，2026-08-23）
+
+- 任务：fix-bubble-collapse-smooth-follow（用户症状修复轮：拖动宠物期间 dock 与宠物之间出现空白）。
+- 批准产品基线：`ccb35f22b9d6ec995249cc7e8dff0ccac6bc97c5`（本 worktree 创建时 HEAD，实现前 Sources 未修改）。
+- 根因证据（主 Agent 现场采样，见派发记录）：拖动时气泡窗口（Activity Stack Backing 200x54/216x64）bounds 逐帧跟随宠物 → `BubbleCandidateIdentity`（含 bounds）逐 tick 变化 → `candidatesChanged` → generation 递增 + `cached`/`successfullyObservedWids` 清空 → `visibility(for:)` 对仍在 knownWids 的 WID 返回默认 `.visible`（保守避让）且在途捕获完成回调全部因 generation/knownCandidates 失配被丢弃 → 整个拖动期间 dock 持续避让隐藏气泡 → 空白；拖动停止后 identity 稳定，下一次捕获（≤0.1s cadence + 捕获耗时）恢复，与用户观察的 ~0.3s 吻合。运行时证据：拖动测试 identityChangeCount 从稳定态个/两位数涨至 418。
+- 最小修复（`Sources/PetDock/BubbleVisibility.swift`）：区分纯几何变化（WID 集合与 owner/title/layer/alpha/isOnscreen/sharingState 全部不变，仅 bounds 变）与真身份变化；纯几何 → 保留 cache 与成功观察集合（粘性）、不递增 generation；真身份 → 维持现行 generation 递增 + 清空 + 保守 visible。捕获写入校验保持现行严格语义（generation + knownCandidates 精确相等）：bounds 平移期间启动的旧捕获结果一律丢弃，不写入新几何；粘性只影响 cache 保留（理由：可见性分类基于窗口内容 alpha 统计而非几何，风险仅限于拖动期间状态变化延迟到拖动后 ≤0.2s 收敛，已在代码注释与架构文档写明）。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S-drag 拖动宠物期间 dock 与宠物之间出现空白（dy 跳到避让值 54-67，拖动停止 ~0.3s 后恢复） | behavior（生产组合，T-bv44） | 气泡先捕获为 hidden；拖动序列 8 tick，宠物与同 WID 气泡候选 bounds 每步平移 (7,5)（生产 `FollowLayoutPass.placeDock` 内真实 `probe(candidates:)` 消费），时间步 0.016s；拖动结束后 capturer 改 `.stats(expanded)` 注入真实状态变化 | 基线 `ccb35f22b9d6ec995249cc7e8dff0ccac6bc97c5`（Sources 未修改，仅叠加 test-only tests/main.swift）：T-bv44b FAIL——拖动期间 obstacles=[0,1,1,1,1,1,1,1,…]、实际 `DockPanel.frame` y=376（避让位）而非 321（基础位），空白症状精确复现 | `FollowLayoutPass.placeDock` → `BubbleVisibilityProbe.probe/visibility(for:)` → 可见障碍筛选 → frameSink → **真实 `DockPanel.placeBelow`**（与生产 `AppDelegate.tick` 同构；tick 经 `onVisibilityChange: scheduler.visibilityChangeCallback` + coalescer 驱动） | T-bv44b：拖动期间每 tick 实际 `DockPanel.frame` 保持当步无障碍基础位（obstacles=[0]×9，容差 <1.0）；T-bv44c：拖动结束后 hidden→visible 经 wake→coalescer→完整 tick 写回实际避让 frame（y=376） | headless 驱动（同 test-ui 源清单+flags）基线 313 passed / 5 failed（红）→ 修复树 318 passed / 0 failed（绿）；真实输出已存档 | 真机拖动体感（高刷/60Hz、展开收起叠加拖动）留视觉 QA |
+| 拖动期间粘性可见性语义（probe 级，T-bv43） | behavior | 同 WID 候选 bounds 逐 tick 平移+中途 200x54→216x64 尺寸变化（10 tick）；visible/hidden 两组前置；拖动后 `.targetMissing`/`.stats(expanded)` 刷新；拖动中在途捕获经 continuation gate 释放；owner/layer/WID 集合三种真身份变化 | 同上基线：T-bv43b/d/f/g FAIL（visibility=visible、cached=nil、无 wake——根因精确复现）；T-bv43a/c/h1-h3 基线即 PASS（保守/不变性用例） | `BubbleVisibilityProbe.probe` 消费每个候选快照；`BubbleVisibilityClassifier`、lock 内 generation/knownCandidates/knownWids/successfullyObservedWids 状态机 | T-bv43b/c：拖动期间 hidden 保持 hidden、visible 保持 visible（cached 保留）；T-bv43d：纯几何拖动保留成功观察资格→拖动后首次 `.targetMissing` 权威 hidden；T-bv43f：拖动结束后 hidden→visible 刷新并恰好唤醒一次；T-bv43g：拖动中在途旧结果拒绝写入且不启动第二捕获（single-flight 保持）；T-bv43h1-3：owner/layer/WID 变化仍清空回保守 visible 且观察资格同步清空 | 同上（红→绿） | 无 |
+| 既有回归不破坏 | behavior | 既有全部 test-ui 用例（T-bv33-42 回归A/保守避让/generation/identity、T-re5d/9/10 bounds 抖动 telemetry 与 in-flight 拒绝、T-bv39f 系列） | 修复树全部保持 PASS（identityChangeCount 语义不变：bounds 抖动仍计数） | 同 test-ui 全套生产/纯函数链 | 318/0 | 同上 | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | `swift build -c release` 0 warning；docs/test-docs/privacy/data/shell 全绿；test-ui 经 headless 驱动（见环境限制） | 完整 `make test`（含真实 test-ui）需 GUI 会话对冻结 SHA 复跑 |
+
+### 修复批次（review-comp 首轮 P1×1 + P2×2，2026-08-24）
+
+- 基线：`bbe5952e138b27b82c7d8ff13cb5afc266a42197`（首轮候选，worktree clean）。P1 症状（reviewer 正确指出）：Composition Surface 是常驻大窗（768x912），保守路径（contentBottom=nil：macOS 13 恒 unavailable、TCC 拒绝、捕获失败、冷启动首次观察前、代表 wid churn 清 cache 后）整窗避让 → dock 被推到大窗底部（headless 基线实测 y=911），降级模式下永久如此，正常模式冷启动闪跳。
+- 修复决策（主 Agent 已定）：`ObstacleKind` 新增第三种类 `.compositionSurface`（标题通道命中时优先返回）；`FollowLayoutPass` 布局消费分流——`.control` 窗口存在即障碍（不变）、`.bubble`（ACT 等小窗）保守 visible 无 contentBottom 时整窗避让（不变）、`.compositionSurface` 无观察数据（visibility != visible 或 visible 无 contentBottom）时不作为障碍（跳过），有 contentBottom 时按内容 bbox 避让（cap 不变）。runtime evidence 计数口径不变（CS 仍计入 bubbleObstacles，像素探测类合计）。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| P1 保守路径不整窗避让（macOS 13/降级/冷启动） | behavior（生产组合，T-cs7/T-cs10/10b/10c/11） | 恒 unavailable capturer、canCapture=false（TCC 拒绝）、冷启动首 tick 无 cache（两 tick 帧序列）；fixture 同上（CS 768x912×7 + ACT） | test-only 红测叠加在 `bbe5952` 产品源（headless 驱动）：5 FAIL——T-cs7 counts=[1,1]；T-cs10/10b frame y=911 counts=[1,1]；T-cs10c y=911 counts=[2,2]；T-cs11 frames=[911,470] counts=[1,1] | fake capturer/canCapture → 真实 `BubbleVisibilityProbe` → `FollowLayoutPass.placeDock`（obstacleKind 三分类 + compositionSurface 无数据跳过）→ `frameSink` → **真实 `DockPanel.placeBelow`** | T-cs10/10b：dock 基础位 388、障碍 [0,0]；T-cs10c：ACT(.bubble) 保守整窗不回归（仅推到 460，[1,1]）；T-cs11：帧序列 [388→470]、计数 [0,1]（短暂停在基础位后下移，无大窗底闪跳）；T-cs7 计数更新为 [0,1] | headless 同源驱动：基线 341 passed/5 failed（红）→ 修复树 346 passed/0 failed（绿） | 降级/冷启动重叠视觉时长（≤~0.3s）留真机 QA（dev-candidate 手工清单 13/14） |
+| obstacleKind 三分类 | behavior（T-cs3 + T-ctrl10b/c） | CS 代表（.compositionSurface 标题优先）、ACT（.bubble）、控制按钮（.control） | 基线无该 enum case（编译期差异）；行为红由 T-cs10 系承担 | `PetTracker.obstacleKind` 标题通道优先 | 三类各自正确分类；CS 仍进入像素探测（T-cs2 捕获集合不变为其直接证据） | 同上（绿） | 无 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与上一轮相同无 WindowServer（`NSScreen.screens.count==0`）：`make test-ui` 的既有 `tests/main.swift:180` guard 会 fatalError。test-ui 改用 headless 驱动副本运行：复制 `tests/main.swift` 到 /tmp，仅替换该 NSScreen guard 为固定负 origin 合成屏 frame（primary fixture 走既有合成负坐标分支），并把 3 处 `#filePath` 推导的仓库根固定为本 worktree 绝对路径（T-sch4f/T-re8/T-re12b source guard 需要），其余测试与源文件清单、`-warnings-as-errors -DPETDOCK_TESTING` flags 与 `make test-ui` 完全一致。
+- 该差异只影响 Geometry 屏幕 fixture 与 source guard 的路径解析；本候选新增测试（T-bv43/T-bv44）与被测生产链不依赖 NSScreen。完整 `make test` 需在 GUI 会话对冻结 SHA 复跑。
+- `swift build` 使用 `--disable-sandbox` 与 /tmp 缓存路径（外层 seatbelt 禁止 SwiftPM 内层 sandbox 与 `~/Library` 写入）；python 门禁使用任务指定 `/Users/<user>/workspace/codex-pet-dock/.venv/bin/python`。
+
+---
+
+## 气泡障碍按可见内容 bbox 避让（impl-bbox 轮，2026-08-23）
+
+- 任务：fix-bubble-collapse-smooth-follow（用户症状修复轮：控制按钮消失后 dock 应回升到紧贴可见小横条下方，现状偏低）。
+- 批准产品基线：`0d6285ee1119de74a55d531072150ed8d6de2905`（本 worktree 创建时 HEAD，实现前 Sources 未修改）。
+- 根因证据（主 Agent 现场实测，见派发记录）：宿主状态卡容器窗口 200x54@<现场坐标>，可见内容（白色小横条）只占窗口内 y[15,21]（25 个非透明像素、7px 高），底部 32px 全透明。旧 open/close 比例滞回把该形态判进 visible→整窗避让（多让 32px 透明尾巴，图2 症状）或 hidden→直接遮住仍可见的横条；原阈值假设"收起=无卡"已被宿主实际行为否定。
+- 最小修复（仅 `BubbleVisibility.swift` + `FollowTickPlan.swift`）：`computeAlphaStats` 输出非透明像素数与 `contentBottom`（窗口内像素 maxY）；分类改为内容噪声下限（非透明像素 ≥3 → visible，<3/全透明 → hidden，无滞回）；probe cache 升级为 `BubbleObservation`（可见性+内容底边，保守 visible 时 contentBottom=nil）；`FollowLayoutPass` 对可见气泡构造障碍高度 = contentBottom+1（水平仍整窗 bounds；无内容信息的保守 visible 退回整窗）；wake 仍只在可见性状态变化触发，内容底变化由既有 0.1s cadence 完整 tick 应用。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S-bbox 图2：收起后 dock 保持旧避让间距（整窗避让，多 32px 透明尾巴） | behavior（生产组合，T-bv45a/f） | 现场形态：气泡候选 200x54@<现场坐标>；capturer 返回 stats（25 个非透明像素、bbox y[15,21]）；生产 `FollowLayoutPass.placeDock` 消费 | 基线完整树 + 仅叠加 test-only 红测块（headless 驱动副本）：RED-bbox1 FAIL——障碍=[(376,446,200,54)] 整窗高度 54，精确复现症状；RED-bbox2（2px 噪声→无障碍）基线即 PASS（覆盖补强）；其余 316 既有用例基线全绿 | fake capturer → 真实 `BubbleVisibilityProbe.probe/classifier/cache` → `FollowLayoutPass.placeDock` 障碍构造 → `frameSink` → **真实 `DockPanel.placeBelow`** | T-bv45a：障碍矩形高度=22（contentBottom+1）、水平仍整窗；T-bv45f：实际 `DockPanel.frame`（setFrame 后 owner 状态，容差<1.0）位于内容底+2（y=470），非整窗避让位 502 | headless 驱动（同 test-ui 源清单+flags）：基线 317 passed/1 failed（红）→ 修复树 326 passed/0 failed（绿） | 真机视觉确认"图1 紧贴横条下方"的体感与时机留视觉 QA |
+| 展开大卡不回归 | behavior（T-bv45b） | 同窗口 stats（189px、内容底 53=窗口底） | 基线行为等价（整窗） | 同上 | 障碍高度 = contentBottom+1 = 54（内容达窗口底时与旧行为一致） | 同上（绿） | 无 |
+| 噪声/完全透明 → 无障碍、基础位 | behavior（T-bv45c/d/g） | 2px 噪声、0px 全透明 stats 经真实 probe→placeDock→placeBelow | 基线 RED-bbox2 即 PASS（hidden 语义重叠区），修复树保持 | 同上 | obstacles 为空；实际 panel 回 pet 底+2 基础位 | 同上（绿） | 无 |
+| unavailable/TCC 保守路径不回归 | behavior（T-bv45e；既有 T-bv34/38 保持） | capturer 返回 `.unavailable`；preflight=false | 基线与修复树均 PASS | 真实 probe conservative 分支 → FollowLayoutPass | 保守 visible 且 contentBottom=nil → 障碍=整窗 bounds（54），不因无内容信息漏避让 | 同上（绿） | TCC 真机行为另见任务级真机矩阵 |
+| 拖动粘性保持 | behavior（T-bv45h；既有 T-bv43/44 保持） | 横条观察入 cache 后，同 WID 候选 bounds 每 tick 平移 (7,5)×4，时间步 0.016s（生产 placeDock 内 probe 消费） | 修复树 | 真实 probe 粘性路径（纯几何不换 generation、cache 保留）→ FollowLayoutPass 障碍构造 | contentBottom 随 cache 保留（窗口内相对坐标不变）；障碍矩形随窗口平移且高度保持 22 | 同上（绿） | 真机拖动叠加收起/展开留视觉 QA |
+| wake/状态语义保持 | behavior（T-bv45i/j；既有 T-bv39/40/42 保持） | 初始 visible 观察、内容底 21→53（visible→visible）、随后无内容（→hidden）三段捕获 | 修复树 | 真实 probe didChange（仅比较可见性状态）→ onVisibilityChange → scheduler coalescer | 初始与内容底变化不 wake；hidden 状态变化恰一次 wake | 同上（绿） | 无 |
+| 既有阈值/滞回用例改写 | behavior | T-bv1–5c 按新语义逐一改写（残留横条→visible、噪声下限边界 2/3px、unavailable 保守、首次 targetMissing 保守），T-bv13/14/22/30/39/43/44 的 hidden 前置改用噪声 stats；无覆盖删除 | 修复树全部 PASS（总数 316→326） | classifier/probe 全部分支 | 各断言逐一对应新语义 | 同上（绿） | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | `swift build -c release` 0 warning；`make docs-check`/`test-docs`/`test-privacy`(28 passed)/`test-data`/`test-shell` 全部 exit 0；test-ui 编译 0 warning（同清单 headless 驱动 326/0） | 完整 `make test`（含 GUI 会话 test-ui 运行时）需对冻结 SHA 复跑 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与前两轮相同无 WindowServer（`NSScreen.screens.count==0`）：`make test-ui` 运行时在既有 `tests/main.swift` NSScreen guard 崩溃。test-ui 语义由 headless 驱动副本承担：复制 `tests/main.swift` 到 /tmp，仅替换该 guard 为固定负 origin 合成屏 frame（primary fixture 走既有合成负坐标分支）并把 3 处 `#filePath` 根固定为本 worktree，其余测试、源文件清单、`-warnings-as-errors -DPETDOCK_TESTING` flags 与 `make test-ui` 完全一致。基线红测在同一 headless 驱动上叠加 test-only 红测块执行，产品源零改动。
+- `swift build`/swiftc 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`（外层 seatbelt 禁止写 `~/.cache`）；`swift build` 另用 `--disable-sandbox` 与 /tmp 缓存路径；python 门禁使用任务指定 venv python。privacy 编译探针子进程同样需要该 env。
+
+---
+
+## Composition Surface 气泡渲染通道 + 噪声下限校准（impl-comp 轮，2026-08-24）
+
+- 任务：fix-bubble-collapse-smooth-follow（延续轮，两个用户症状均已被主 Agent 现场像素级证据锁定，fixture 直接取自现场实测）。
+- 批准产品基线：`4ddbc0e19163643cd2f54d816072f9fbd7d02417`（本 worktree 创建时 HEAD，实现前 Sources 未修改；红测仅叠加 tests/main.swift 的 test-only 改动）。
+- 现场根因（主 Agent 采集，派发记录为证）：S1 展开气泡卡渲染在 "Codex Pet Composition Surface" 768x912 大窗（layer 3、7 个同 bounds 重复实例、内容延伸到宠物下方 y467），但 obstaclesNear 纯几何通道（height<223 / maxSide≤600）把它排除 → dock 只避让 ACT（内容到 y422）→ 停 y424-425 压在气泡中段。S2 收起后宠物下方唯一内容是 ACT 内 39-57px 的 6-7px 宽不可见小点（截屏放大肉眼不可见），超过旧 minContentPixels=3 → dock 停 y415 不归位；控制按钮出现时 ACT 内容实测 189-194px。
+- 最小修复（3 个产品点）：① `PetTracker.obstaclesNear` 新增标题精确匹配 "Codex Pet Composition Surface" 的气泡通道（同 owner/浮层/水平重叠且 bounds.maxY>pet.maxY，不受高度/边长上限约束），`obstacleKind` 同步把该类候选判 `.bubble`（走像素探测），输出边界按 (owner,title,layer,bounds) 去重（wid 升序代表）使布局障碍集与 probe 候选集一致；② `minContentPixels` 3→80（噪声 57<80<按钮 189，双向 ≥40% 余量）；③ `captureStats` 对面积 >100,000px 候选等比降采样到最长边 ≤240（保持纵横比），contentBottom 按行高比换算回原始像素行、非透明计数按面积比放大，小窗路径不变。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S1 展开气泡时 dock 与气泡重叠（dock 停 ~424-425 压气泡中段） | behavior（生产组合，T-cs1/capture 计数 T-cs2） | 现场展开态 fixture：宠物 172x179@<现场坐标> petMaxY=386 + Composition Surface 768x912 ×7 重复实例（内容底窗口内 470）+ ACT 214x74（194px、内容底窗口内 38）；capturer 按 wid 返回现场 stats；两 tick 生产布局（tick1 启动捕获/保守，tick2 cadence 内消费 cache） | 基线 `4ddbc0e` + 仅 test-only 红测（headless 驱动副本）：T-cs1 FAIL——实际 `DockPanel.frame` y=425（只避让 ACT），精确复现现场 y424-425；T-cs2 captured=[ACT]（大窗完全未探测）；T-cs3/4 FAIL（无标题通道/无去重） | fake capturer（按 wid）→ 真实 `BubbleVisibilityProbe.probe/classifier/cache` → `FollowLayoutPass.placeDock`（obstaclesNear 标题通道 + 去重 + obstacleKind=.compositionSurface）→ `frameSink` → **真实 `DockPanel.placeBelow`** | T-cs1：实际 `DockPanel.frame`（setFrame 后 owner 回读，容差<1.0）= 气泡内容底+2（y=470）；T-cs2：捕获 wid 集合恰为 {代表 27814, ACT}（7 实例→1 次 probe 候选） | headless 驱动（同 test-ui 源清单+flags）：基线 329 passed/9 failed（红）→ 修复树 342 passed/0 failed（绿） | 真机展开/收起视觉与 SCK 真实捕获（含真实降采样图像）留视觉 QA |
+| S2 收起后 dock 不归位（停 y415，期望 ~388） | behavior（生产组合，T-cs6/T-cs6b） | 现场收起态 fixture：Composition Surface 内容全在 petMaxY 以上（contentBottom=362→矩形底 abs 360）+ ACT 噪声点 41px 窗口内 y[21,28]；同一两 tick 生产布局 | 基线同上：T-cs6 FAIL——实际 frame y=415（41px>3 判 visible 避让噪声点），精确复现现场；T-cs6b FAIL（噪声点判 visible） | 同上（classifier 阈值 80 消费 41px stats → hidden） | T-cs6：实际 `DockPanel.frame` 回基础位 petMaxY+2=388；T-cs6b：ACT 观察=hidden、Composition 代表=visible（宠物像素） | 同上（红→绿） | 真机收起视觉（阴影进宠物窗口内、y386 以上）留视觉 QA |
+| 收起态 Composition Surface 不过度避让 | behavior（T-cs7，护栏） | 仅 7 个 Composition 实例（内容=宠物像素、全在 petMaxY 以上），无 ACT | 帧断言基线通过、障碍计数断言基线红（[0,0]，属 9 红之一） | obstaclesNear 标题通道 → 像素 stats（30,000px@362）→ 避让矩形底 abs 360 与 dock(388..436) 无垂直相交 → safeDockFrame 不下推 | 实际 frame 仍基础位 388；障碍计数 [0,1]（首 tick 无观察数据跳过；次 tick visible 但无垂直重叠——P1 修复批次更新） | 同上（绿） | 无 |
+| 标题精确匹配边界 | behavior（T-cs5 + 既有 T-a5） | 同尺寸 768x912 但标题不同（"Codex Pet Other Surface"/默认空标题）的大窗 | 基线与修复树均 PASS（护栏） | obstaclesNear 精确标题通道 | 不纳入障碍集（不做几何猜测） | 同上（绿） | 无 |
+| obstacleKind 分类 | behavior（T-cs3 + 既有 T-ctrl10） | Composition Surface 代表候选（768x912，几何气泡通道不匹配） | 基线 FAIL（判 .control）；修复树 .compositionSurface（标题通道优先；首轮为 .bubble，P1 修复批次细分为第三种类） | `PetTracker.obstacleKind` 消费标题通道 | .compositionSurface → 仍进入像素探测（T-cs2 捕获集合不变） | 同上（红→绿） | 无 |
+| 大窗捕获降采样换算 | behavior（纯函数，T-cs8/8b/9/9b） | orig 768x912（700,416px>100k）→ cap 202x240；已知内容位置（原始行 470↔cap 行 124）；ACT 214x74（15,836px） | 新增覆盖（新纯函数） | `downsampleCaptureSize`/`rescaleDownsampledStats`（`captureStats` 消费：config 尺寸与换算回写） | 尺寸 (202,240) 纵横比保持且 ≤240；ACT 返回 nil（不降采样）；contentBottom 换算 471（误差 1px≤2）；计数按 origArea/capArea 放大（202→2918） | 同上（绿）；真实 SCScreenshotManager 图像路径属真机 QA | 真实 ScreenCaptureKit 大窗捕获与降采样实测留真机 QA |
+| 噪声阈值边界与既有用例改写 | behavior（T-bv1/3/4/4b、T-bv45 全系改写） | 41/57px 噪声点、80px 边界、189/194px 控制按钮级内容；T-bv45 横条形态内容量 25→194px（形态断言不变：障碍高度=contentBottom+1） | 基线：T-bv1/T-bv4b FAIL（41/57px 判 visible）；修复树全绿，无覆盖删除（T-bv2/3/5x、T-bv45a-k、T-ctrl/T-a/T-hj/T-bv39-44 全保持） | `BubbleVisibilityClassifier.classify` 阈值消费 | 57px→hidden、80px→visible（边界）、189px→visible+内容底 | 同上（红→绿） | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | `swift build -c release --disable-sandbox` Build complete、代码 0 warning（仅 4 条沙箱导致的 SwiftPM 用户缓存环境 warning；test-ui swiftc `-warnings-as-errors` 亦 0 warning）；`make docs-check` 14 files 0 findings；`make test-docs` 10 OK；`make test-privacy` 28 passed；`make test-data` 全部通过；`make test-shell` exit 0（headless 下 NSStatusBar 区段 10 项未执行，另由同源 headless 副本验证其余 89/0，见环境限制）；test-ui 同源 headless 驱动 342/0 | 完整 `make test`（GUI 会话 test-ui/test-shell 运行时）需对冻结 SHA 复跑 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与前几轮相同无 WindowServer（`NSScreen.screens.count==0`）：test-ui 语义由同源 headless 驱动副本承担（仅替换既有 NSScreen guard 为固定负 origin 合成屏 + 3 处 `#filePath` 根固定，其余源清单/flags 与 `make test-ui` 完全一致）；基线红测在同一驱动上仅叠加 test-only 红测块执行，产品源零改动。
+- `make test-shell` 在本沙箱 exit 0 但其 NSStatusBar 区段（SB1-SB4、SBV0-SBV5 共 10 项，需 WindowServer）静默提前终止（TTY 证据：前 89 项 PASS 后止于该区段标题）。另用同源 headless 副本（仅截除该区段、保留标准汇总）验证其余 89 passed/0 failed；这 10 项需 GUI 会话对冻结 SHA 复跑，不得宣称已验证。
+- swiftc/SwiftPM 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`（外层 seatbelt 禁止写 `~/.cache`）；`swift build` 另用 `--disable-sandbox`（外层 seatbelt 禁止 SwiftPM 内层 sandbox-exec，仅禁用内层，不放宽外层）；python 门禁使用任务指定 venv python。privacy 编译探针子进程同样需要该 env（不带则 3 个编译探针用例环境性失败，带上后 28/28）。
+
+---
+
+## dock 基础位锚定宠物可见内容底（impl-anchor 轮，2026-08-24）
+
+- 任务：fix-bubble-collapse-smooth-follow（延续轮；用户症状由主 Agent 现场截屏像素取证锁定：收起态宠物可见内容（绿色椭圆底座）底 abs y≈328，Mascot 窗口底 369 → 基线 dock 停 371，视觉空白 44px）。
+- 批准产品基线：`d53017eacac1d39449af042ff00837f806ada5a1`（worktree HEAD，实现前 Sources 未修改；前一会话仅叠加 tests/main.swift 的 test-only 期望改写后因 idle-timeout 回收，本轮先补齐同源 headless 红测记录再实现）。
+- 最小修复（1 个产品点，仅 `Sources/PetDock/FollowTickPlan.swift`）：`FollowLayoutPass.placeDock` 布局锚从固定 `mascot.bounds.maxY` 改为“有效宠物内容底”——分类去重后恰一个 `.compositionSurface` 代表的观察为 visible 且携带 contentBottom 时 `effectivePetMaxY = max(mascot.bounds.minY, 代表.bounds.minY + contentBottom + 1)`（与避让矩形高度 contentBottom+1 同口径），否则回退 `mascot.bounds.maxY`；以 adjustedPet（origin.x/width 不变）传入未改动的 frameSink（`DockPanel.placeBelow`/`Geometry.safeDockFrame` 零改动）。已知权衡（代码注释 + 架构文档）：宠物动画使 contentBottom 逐帧微变 → dock 基础位微跳，本轮不加平滑，真机若观察到 >4px 高频抖动后续轮加滞回。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S-anc 收起后 dock 与宠物可见内容间 44px 空白（基础位锚 Mascot 窗口底，窗口底有透明 padding） | behavior（生产组合，T-anc1/T-anc1b；T-cs6/T-cs7 期望改写为本语义） | 现场收起态 fixture：Mascot 172x179@<现场坐标>（petMaxY=369）+ CS 768x912×7 重复实例（contentBottom=331 窗口内 → 内容底边 abs 329）+ ACT 214x74（41px 噪声 → hidden）；两 tick 生产布局 | 基线 `d53017e` Sources 零改动 + test-only 期望（同源 headless 驱动）：T-anc1 FAIL——实际 `DockPanel.frame` y=371（窗口底锚），精确复现现场 44px 空白；T-anc1b FAIL（frameSink 实收 pet 未调整）；T-cs6/T-cs7 FAIL（388 vs 362）；合计红 347 passed / 6 failed | fake capturer（按 wid）→ 真实 `BubbleVisibilityProbe.probe/classifier/cache` → `FollowLayoutPass.placeDock`（anchor 计算）→ `frameSink` → **真实 `DockPanel.placeBelow` → `DockPanel.frame`** | T-anc1：实际 frame y=331（= 内容底边 329 + gap 2）；T-anc1b：tick1 无 cache 回退窗口底锚（pet maxY=369）、tick2 frameSink 实收调整后 pet（origin/width 不变、maxY=329）；T-cs6/T-cs7：收起态回内容底基础位 362（非窗口底 388） | 同源 headless 驱动（同 test-ui 源清单/flags）：基线红 347/6 → 修复树 353 passed / 0 failed | 真机收起态视觉体感（44px 空白消除）与宠物动画 contentBottom 微跳体感留视觉 QA |
+| 展开态无双重下移 | behavior（生产组合，T-anc2/T-anc2b；既有 T-cs1/T-cs11 保持） | 现场展开态：CS contentBottom=470（窗口内 → 内容底边 abs 468）+ ACT 194px；基础位本身 = 468+2=470 | 基线该 frame 断言即 PASS（基线靠避让下移到 470）；anchor 契约断言（T-anc2b pet maxY=468）基线 FAIL（属上述 6 红之一） | 同上（effectivePetMaxY 与 CS 内容障碍底边同源） | T-anc2：实际 frame 仍 470（基础位即内容底，无二次下移）；T-anc2b：tick2 pet maxY=468、障碍计数 [1,2]（CS 内容 + ACT 内容） | 同上（绿） | 无 |
+| 降级/冷启动回退窗口底 | behavior（生产组合，T-anc3；既有 T-cs10/cs10b/cs11 tick1 保持） | CS 恒 `.unavailable`（macOS 13 / TCC 拒绝 / 捕获失败同路径）；首 tick 无 cache | 基线与修复树均 PASS（回退语义护栏） | 同上（observation 无 contentBottom → effectivePetMaxY=mascot.bounds.maxY） | T-anc3：frame y=371（= Mascot maxY 369+2，现状不变）、petRects 两 tick 均=窗口 bounds、障碍 [0,0] | 同上（绿） | TCC 真机行为另见任务级真机矩阵 |
+| 拖动粘性：dock 随可见内容底平移 | behavior（生产组合，T-anc4） | 原位完成捕获后，Mascot+CS×7 整体平移 (+40,-25)，时间仅 +0.05s（0.1s cadence 内不重捕获） | 基线 FAIL——frame y=346（平移后窗口底锚 344+2，pet 未调整），属 6 红之一 | 同上（probe 纯几何变化保留 cache：contentBottom=331 粘性 → effectivePetMaxY 随 CS bounds 平移） | T-anc4：实际 frame y=306（=331-25）、x+40；frameSink 实收 pet=(+40,-25) 平移且高度 139；捕获计数不变（cache 粘性前提成立） | 同上（绿） | 真机拖动叠加收起/展开留视觉 QA |
+| ACT 控制按钮在内容底基础位之上正确避让 | behavior（生产组合，T-anc5；既有 T-cs10c 保持） | cs fixture 收起态（CS contentBottom=362 → 基础位 362）+ ACT 194px（contentBottom=38 → 内容障碍底 423） | 基线与修复树均 PASS（基线窗口底锚 388 同样避让到 425） | 同上（safeDockFrame 链式下移不受基础位下移影响） | T-anc5：实际 frame y=425（基础位 362 之上、紧贴 ACT 内容底 423+2）；障碍计数 [1,2] | 同上（绿） | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | `swift build -c release --disable-sandbox` Build complete、代码 0 warning（touch 全模块重编译复核；仅 4 条 SwiftPM 用户缓存环境 warning：外层 seatbelt 下 ~/Library org.swift.swiftpm 配置/缓存/manifest 只读）；`make test-ui` 编译 0 warning（-warnings-as-errors）但运行时 headless 无屏幕 fatal（既有 NSScreen guard），由同源 headless 驱动承担 353/0；`make docs-check` 14 files 0 findings；`make test-docs` 10 OK；`make test-privacy` 28 passed；`make test-data` 全部通过（含 RPC stdio 16）；`make test-shell` exit 0（TTY 89 passed/0 failed 后止于 StatusBar 区段，SB1-SB4/SBV0-SBV5 10 项需 WindowServer 未执行） | 完整 `make test`（GUI 会话 test-ui/test-shell 运行时）与真机 QA 需对冻结 SHA 复跑 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与前几轮相同无 WindowServer（`NSScreen.screens.count==0`）：`make test-ui` 运行时在既有 `tests/main.swift` NSScreen guard fatal（`Fatal error: 无屏幕`，exit 2）。test-ui 语义由同源 headless 驱动副本承担：复制 `tests/main.swift` 到 /tmp，仅替换该 guard 为固定负 origin 合成屏（`CGRect(x: -1728, y: 0, width: 1728, height: 1117)`，primary fixture 走既有合成负坐标分支、expected screen 传 nil）并把 3 处 `#filePath` 根固定为本 worktree，其余测试、源文件清单、`-warnings-as-errors -DPETDOCK_TESTING` flags 与 `make test-ui` 完全一致。基线红测在同一 headless 驱动上以未修改 Sources 执行，产品源零改动。
+- `make test-shell` 在本沙箱 exit 0 但无 stdout（无 TTY 时块缓冲输出随 NSStatusBar 区段静默终止一并丢失）；`script` 伪 TTY 复跑显示前 89 项 PASS/0 FAIL 后止于 “StatusBar TCC 提示” 区段标题，SB1-SB4、SBV0-SBV5 共 10 项需 WindowServer 未执行，不得宣称已验证；需 GUI 会话对冻结 SHA 复跑。
+- swiftc/SwiftPM 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`（外层 seatbelt 禁止写 ~/.cache）；`swift build` 另用 `--disable-sandbox`（仅禁用 SwiftPM 内层 sandbox-exec，不放宽外层 seatbelt）；曾尝试 `--manifest-cache local` 与临时 HOME 重定向，SwiftPM 在 macOS 仍解析到只读 ~/Library 缓存路径，故如实记录为环境 warning（代码 0 warning 另由 touch 全模块重编译复核）。python 门禁使用任务指定 venv python。
+---
+
+## dock 障碍出现/消失平滑过渡（impl-smooth 轮，2026-08-24）
+
+- 任务：fix-bubble-collapse-smooth-follow（延续轮；用户在 5fbe237 候选（基础位锚定内容底已生效）上功能验证通过后提出：控制按钮出现/消失时 dock 移动“比较卡顿”（瞬间跳变），希望像控制按钮自身的动画一样丝滑）。
+- 批准产品基线：`5fbe237e1bf471f168efe921e027fa9a147824a3`（worktree HEAD，实现前 Sources 未修改；红测仅叠加 tests/main.swift test-only 块，实现后由注入 fake 的完整覆盖替换）。
+- 根因（主 Agent 派发记录指定，代码复核一致）：`DockPanel.placeBelow` 中 `shouldAnimate = movementChanged && hasVisibleScreen && !screenChanged && !obstaclesChanged`——障碍集合任何变化（按钮/气泡出现、消失）都使 `obstaclesChanged=true` → `update(movementChanged:false)` → snap 瞬间跳变；且 stable follow tick 仅 0.1s cadence，即使加 200ms 插值段、仅靠 tick 渲染每段也只有 ~2 个采样点，仍是台阶感。
+- 最小修复（仅 `Sources/PetDock/DockPanel.swift`）：① `obstaclesChanged`（rect 精确不等）拆分为 avoidanceChange（障碍数量变化，或任一障碍相对宠物垂直范围 `obstacle.maxY - pet.maxY` 变化 >1px 容差）与纯移动（数量与相对范围不变、仅平移 → 沿用 movementChanged 32ms 线性路径）；相对范围用传入 pet rect（生产为内容锚 adjustedPet），宠物动画逐帧微变由容差吸收。② `DockFrameInterpolator` segment 增加 kind/duration/曲线：movement 32ms 线性（语义不变）；avoidance 200ms smoothstep（3p²−2p³）ease-in-out，从当前 renderedFrame 起步、latest-only retarget、同目标重放不重置进度；动画中 movement 到来立即切 32ms movement 段；snap/reset 语义不变。段边界按 `now` 与 `startedAt + duration` 直接比较（差值比较的浮点表示差会让精确终点拍不完成段——本轮测试发现并修复的真实边界缺陷）。③ avoidance 段激活期间由 DockPanel 自有渲染源以显示节拍渲染：macOS 14+ `panel.displayLink(target:selector:)` 加 main runloop `.common`；macOS 13 / link 不可用回退 60Hz repeating Timer（独立实例）。注入点 `makeAnimationDisplayLink`/`makeAnimationTimer`/`animationMonotonicNow`（生产默认 `systemUptime`，与 main.swift 的 followMonotonicNow 同域；placeBelow 时间参数为值传入，渲染 tick 需要独立“当前时间”来源故存 provider）。生命周期单一规则：placeBelow 末尾按「在途 avoidance 段 → 确保源；否则 invalidate」——段完成/movement/snap/hide/换屏/无屏全覆盖；movement 段由 follow scheduler 的 moving 渲染节拍接管，不双写。DockPanel 改继承 NSObject（@objc selector target）。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S1 按钮出现（障碍 0→1）dock 瞬间跳变 | behavior（基线红测 T-avo1；注入覆盖 T-avo1a/1b/1c） | 基线红测：默认 DockPanel + NSScreen 子类合成屏（headless 可跑），placeBelow(pet,[],screen,stable) → placeBelow(pet,[act 279..303],screen,stable)，断言放置拍=起点、stable 重放 100ms 中点、≥200ms 精确终值；注入版：fake link 手动 fire 50/100/150/200ms | 基线 `5fbe237` Sources 零改动 + test-only 红测块（同源 headless 驱动）：T-avo1 FAIL——placed=(86,305) 放置拍即到终值，精确复现瞬间跳变；前置 T-avo0 PASS（基础 281/避让 305） | placeBelow avoidance 分类 → DockFrameInterpolator.updateAvoidance → 自有渲染源 fire → panel.setFrame | 注入版：实际 `DockPanel.frame` 序列 [281→284→293→301→305] 与 smoothstep(0.15625/0.5/0.84375/1) 期望帧一致；200ms 精确 305 且链接 invalidate | 同源 headless 驱动（同 test-ui 源清单/flags）：基线 354 passed/3 failed → 修复树 369 passed/0 failed | 真机 60/120Hz 实际 display-link cadence 与体感留视觉 QA |
+| S2 按钮消失（1→0）瞬间回基础位 | behavior（基线红测 T-avo2；注入覆盖同） | 避让态下 placeBelow(avoiding:[])，同样三拍断言 | 基线：T-avo2 FAIL——placed=(86,281) 立即回基础位 | 同上（avoidance 段 305→281） | frame 序列 [305→301→293→284→281]，最终精确 281、链接 invalidate | 同上（红→绿） | 同上 |
+| S3 拖动中障碍纯平移不应 snap（T-ip8 语义回归） | behavior（基线红测 T-avo3；注入覆盖 T-avo3） | 障碍数量/相对范围不变，pet+obstacle 平移 +60x，movementChanged=true，16ms 后 stable 重放 | 基线：T-avo3 FAIL——obstaclesChanged → snap（x=146 立即到位） | placeBelow 纯移动分类 → update(movementChanged:true) 32ms 线性段 | mid=(116,305)（中点）、final=(146,305) 精确；不创建任何动画源（links/timers 计数不变） | 同上（红→绿） | 真机拖动叠加障碍平移体感 |
+| avoidance segment 数学 | behavior（纯函数 T-avo4a-e） | interpA→interpB 200ms 段：50/100/150ms 采样、恰好 200ms、200ms+、中段 retarget、movement 覆盖、snap | 修复树新增（基线无 API） | DockFrameInterpolator.frame(at:)/updateAvoidance/update/smoothstep | eased 帧=(15.625/50/84.375)（smoothstep(0.25/0.5/0.75)）单调；200ms 精确 target 且段清空、无过冲；smoothstep(0.5)=0.5、1/4 点介于 step 与线性之间；retarget 从当前渲染帧起新段；movement 覆盖后 16ms 线性中点、32ms 精确；snap 不留段 | 同上（绿）；边界同域比较由 T-avo1c 200ms 拍完成并 invalidate 证明 | 无 |
+| 渲染源生命周期 | behavior（T-avo5a/5b/1a；既有 T-ip10/T-ip11 保持） | avoidance 激活后 hideIfNeeded；换 NSScreen 实例 placeBelow；无屏/无障碍路径 | 修复树新增 | placeBelow 末段生命周期规则 + hideIfNeeded/screen observer → stopAvoidanceAnimation | hide 后链接 invalidated 且重现首放 snap 不再动画；换屏立即 snap 到目标且 invalidate；无 avoidance 不创建源 | 同上（绿） | 无 |
+| macOS 13 Timer fallback | behavior（T-avo6，注入 fake timer） | display link 工厂返回 nil → makeAnimationTimer 路径 | 修复树新增 | startAvoidanceAnimationIfNeeded fallback 分支 → renderAvoidanceAnimationFrame | 60Hz repeating timer（interval=1/60、repeats）fire 推进 293 中点、200ms+ 完成精确 305 且 invalidate | 同上（绿） | 真实 macOS 13 系统行为留真机 |
+| 生产组合渐进（≥3 中间帧递增） | behavior（T-avo7a/7b） | FollowLayoutPass.placeDock（真实 obstaclesNear/obstacleKind=.control）+ 真实 DockPanel.placeBelow + fake link 手动 fire；按钮出现（候选 0→1）与消失 | 修复树新增（基线症状已由 T-avo1/2 红测复现） | FollowLayoutPass → frameSink → placeBelow → 自有渲染源 | 出现：frame [281→284→291→298→303→305]，4 个中间帧严格递增且均在开区间内；障碍计数 [0,1]；消失：渐进回 281 精确、链接失效、计数 [0,1,0] | 同上（绿） | 真机按钮出现/消失体感 |
+| 既有语义保持 | behavior | T-ip1-8/10/11、T-anc、T-cs、T-bv45、T-re、T-bv39/42 等全量 | 修复树 | — | 全部保持绿；唯一改写：T-ip9「障碍变化立即 snap」→「障碍出现 200ms 平滑过渡（安全路径仍 snap）」——新语义为本任务核心要求，改写后注入 fake link 保持确定性 | 同上（绿） | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | `swift build -c release --disable-sandbox` Build complete、代码 0 warning（仅 4 条沙箱 SwiftPM 用户缓存环境 warning，与前轮一致）；test-ui swiftc 编译 0 warning（-warnings-as-errors）；headless 运行时 fatal（既有 NSScreen guard）由同源 headless 驱动承担 369/0；docs/privacy/data/shell 结果见交付报告 | 完整 `make test`（GUI 会话 test-ui/test-shell 运行时）需对冻结 SHA 复跑 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与前几轮相同无 WindowServer（`NSScreen.screens.count==0`）：test-ui 运行时 fatal（既有 `Fatal error: 无屏幕` guard）。语义由同源 headless 驱动承担（/tmp/pd-avo-driver/main.swift：仅替换该 guard 为固定负 origin 合成屏 struct、primary fixture expected screen 传 nil、3 处 #filePath 固定为带引号的本 worktree 路径；其余源清单与 `-warnings-as-errors -DPETDOCK_TESTING` flags 与 make test-ui 完全一致）。新 T-avo 段的 NSScreen 依赖经 NSScreen 子类注入合成屏（系统只读集合无法注入实例），headless 与 GUI 会话都可执行；既有 T-ip8/9/10 的 screens-first 分支在 headless 驱动走既有「无screen跳过」路径（其 GUI 会话行为由同段注入 fake link 保证确定性）。
+- 基线红测在同一 headless 驱动上以未修改 Sources 执行（产品源零改动）；红测块在实现后由注入 fake 的完整覆盖替换。红测原始输出已记录：354 passed / 3 failed（fail 项即用户症状）。修复树 369 passed / 0 failed。
+- swiftc/SwiftPM 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`；swift build 另用 `--disable-sandbox`；python 门禁使用任务指定 venv python（/Users/<user>/workspace/codex-pet-dock/.venv/bin/python）。
+
+---
+
+## CS 多尺寸实例幽灵内容回归修复（impl-front 轮，2026-08-24）
+
+- 任务：fix-bubble-collapse-smooth-follow（延续轮；用户在 e1d94c6 候选上报告：气泡在宠物上方时，宠物与 dock 之间出现大气泡尺寸空白，“就好像消息气泡在下面一样”；主 Agent qa_snapshot 现场取证数据链完整，见派发记录）。
+- 批准产品基线：`e1d94c6b9a41f1f1f168f265a72359e8ef907448`（worktree HEAD，实现前 clean；红测仅叠加 tests/main.swift test-only 块，产品源零改动）。
+- 根因（主 Agent 指定，基线红测复现一致；真实 wid/绝对坐标不入库，以下为相对几何描述）：气泡在上时宿主同时存在多种 bounds 的 Composition Surface 窗口（CGWindowList 前到后：前层新 768x978、后层旧 768x912，后层顶沿比前层低 66px）。旧去重按 (owner,title,layer,bounds) 签名——bounds 不同不去重 → 前后层都成为独立障碍/锚；desktopIndependentWindow 捕获窗口自身内容、感知不到前层遮挡，后层残留宿主布局切换前的幽灵气泡卡（内容延伸至宠物下方 86px）→ dock 停在幽灵内容底+gap（比正确位多让 31px）。前层真实可见内容只到宠物下方 55px（控制按钮）。
+- 最小修复（仅 `Sources/PetDock/PetTracker.swift` obstaclesNear）：CS 通道改为标题级去重（跨 bounds）——candidates 输入顺序（=CGWindowList 前到后）首个 isCompositionSurfaceObstacle 命中实例保留为唯一代表，其余 CS 实例不论 bounds 全部跳过；被遮挡的后层残影不再产生障碍/内容锚/像素捕获。几何 bubble/control 通道与 (owner,title,layer,bounds) 签名去重（wid 升序代表）语义不变；输出保持 wid 升序稳定排序。FollowLayoutPass 的 classified.first(.compositionSurface) 代表选取不变（CS 只剩一个实例后自然一致）；CS 通道 bounds.maxY > petMaxY 前置保留。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S-ghost 气泡在上时 dock 与宠物间大气泡尺寸空白（停靠在幽灵内容底+gap，多让 31px） | behavior（生产组合，T-csm5/T-csm6） | 现场形态合成 fixture（相对几何与现场一致）：宠物 172x179 + 前层 CS 768x978（contentBottom=510 → 可见内容底为宠物下方 55px）+ 后层 CS 768x912、顶沿低 66px（幽灵 contentBottom=475 → 内容延伸至宠物下方 86px）+ ACT 噪声点（41px → hidden）；两 tick 生产布局，capturer 按合成 wid 区分前后层 | 基线 `e1d94c6` Sources 零改动 + test-only 红测（同源 headless 驱动）：T-csm5 FAIL——实际 `DockPanel.frame` 停在幽灵内容底+gap，精确复现现场停靠位；T-csm6 捕获集合含后层幽灵实例（3 个 wid 全被捕获） | fake capturer（按 wid）→ 真实 `BubbleVisibilityProbe` → `FollowLayoutPass.placeDock`（obstaclesNear 标题级去重 + obstacleKind）→ frameSink → **真实 `DockPanel.placeBelow`** | T-csm5：实际 frame 锚前层可见内容底+gap（合成坐标 y=722），非幽灵底（y=753）；T-csm6：捕获 wid 集合恰 {前层 CS 代表, ACT}，后层幽灵不捕获 | 同源 headless 驱动（同 test-ui 源清单/flags）：基线 377 passed/5 failed（T-csm1/2/3/5/6 红）→ 修复树 382 passed/0 failed | 真机气泡在上/在下视觉体感与真实 SCK 遮挡行为留视觉 QA |
+| CS 去重语义单元 | behavior（T-csm1/2/3/4/4b） | 多 bounds CS 前到后输入 → 仅列表首位为代表；candidates 反转 → 代表随列表首位变化（前到后列表顺序语义，非 wid 排序）；同 bounds 4 实例乱序 wid 输入 → 仍 1 个障碍、代表=输入首位；非 CS 同 bounds 重复 ACT → 签名去重 1 个；不同 bounds → 保留 2 个（既有签名语义不回归） | 修复树新增（基线红，见上） | PetTracker.obstaclesNear（CS 标题级去重分支 + deduplicatedObstacles 签名去重） | 每条对应 check 断言代表 wid / 障碍计数 | 同上（绿） | 无 |
+| 既有场景回归 | behavior | T-cs1/T-cs2（7 同 bounds 实例去重为 1 代表、恰好 1 次 CS 捕获 + ACT）、T-cs3-11、T-anc、T-bv45、T-avo、T-p1 等全量 | 修复树 | — | 全部保持绿（同 bounds 场景在新去重路径下代表仍为列表首位——现场枚举顺序即 wid 升序，语义一致） | 同上 382/0 | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | swift build -c release（headless 驱动同源编译 0 warning）；make test PYTHON=任务 venv（test-ui 运行时由同源 headless 驱动承担）；docs-check/test-docs 结果见交付报告 | 完整 make test（GUI 会话 test-ui/test-shell 运行时）与真机视觉需对冻结 SHA 复跑 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与前几轮相同无 WindowServer（`NSScreen.screens.count==0`）：test-ui 运行时在既有 NSScreen guard fatal。语义由同源 headless 驱动副本承担（/tmp/pd-headless/main.swift：仅替换该 guard 为固定负 origin 合成屏 NSScreen 子类、primary fixture expected screen 传 nil、3 处 #filePath 根固定为本 worktree，其余源清单与 `-warnings-as-errors -DPETDOCK_TESTING` flags 与 make test-ui 完全一致）。基线红测在同一驱动上以未修改 Sources 执行，产品源零改动。
+
+---
+
+## review-front 首轮修复（impl-front 轮，2026-08-24，基线 c46d70ea）
+
+- P1-1（CS 最前层选取顺序合同）：实现核查确认 `obstaclesNear` 的 CS 标题级去重已发生在原始 candidates 循环中（wid 升序仅作用于输出），无代码缺陷；但测试 fixture 前层 wid 恰大于后层时未锁定该合同。新增 T-csm7（前层 wid=9020 > 后层 9015，按输入顺序 [前,后] 断言代表=9020 而非 wid 最小 9015），并把主 fixture 前层 wid 改为大于后层；`PetTracker.swift` 输出排序处与架构文档补充明确表述：wid 排序仅是输出稳定性，不参与 CS 代表选择（现场前层 wid 反而更大）。
+- P1-2（隐私脱敏）：T-csm 全系列 wid 改为合成值（9001-9007/9011-9013/9020/9015），fixture 平移到合成坐标（CS 左沿 x=100，宠物与前后层相对几何、contentBottom 差值、幽灵延伸 86px/多让 31px 全部保持）；本文件上一轮新增段的真实 wid/绝对坐标改为相对几何或合成描述（既有历史轮次行未动）。rg 全 diff 扫描确认无真实 WID/绝对坐标残留。
+- P2（T-bv43h3 竞态）：`dragTime += 0.11` 改为 `+= 0.016` 非到期路径并加注释——被测语义是“WID 集合变化的同步保守默认”，不需要新捕获（与 h1/h2 同模式）。
+- 验证：同源 headless 驱动连续 2 次 383 passed / 0 failed（新增 T-csm7）；`swift build -c release` Build complete 0 warning；`make docs-check` 0 findings、`make test-docs` OK、test-privacy/test-data/test-shell 与上轮相同（shell 89/0，StatusBar 10 项仍需 GUI）。

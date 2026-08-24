@@ -281,21 +281,62 @@ enum FollowLayoutPass {
         let petMaxY = mascot.bounds.maxY
         let classified = obstacles.map { ($0, PetTracker.obstacleKind($0, petMaxY: petMaxY)) }
         bubbleProbe.probe(candidates: classified.compactMap { pair in
-            pair.1 == .bubble ? pair.0 : nil
+            pair.1 == .bubble || pair.1 == .compositionSurface ? pair.0 : nil
         })
         let visibleBounds = classified.compactMap { pair -> CGRect? in
             if pair.1 == .control { return pair.0.bounds }
-            return bubbleProbe.visibility(for: pair.0.wid) == .visible ? pair.0.bounds : nil
+            let observation = bubbleProbe.observation(for: pair.0.wid)
+            guard observation.visibility == .visible else { return nil }
+            // 可见气泡按可见内容避让：宿主收起后的容器窗口底部仍残留大片透明区，
+            // 障碍高度 = 窗口内内容底边+1（像素≈点），dock 紧贴内容底而非整窗底；
+            // 水平仍用整窗 bounds（内容水平居中且窗口本身水平定位，保持水平避让语义）。
+            // 保守 visible（unavailable/TCC/首次观察前，无内容信息）按种类分流：
+            // - .bubble（ACT 等小窗）：整窗 bounds 避让（macOS13/降级语义与既有版本一致）。
+            // - .compositionSurface（常驻大窗，现场实测 768x912）：障碍性完全取决于宠物下方的
+            //   像素内容，无观察数据时没有任何依据整窗避让 → 跳过（不作为障碍）。降级模式
+            //   （macOS 13/TCC 拒绝/捕获失败）行为与本通道引入前一致；正常模式冷启动首次
+            //   探测完成前（≤~0.3s）若气泡恰好展开仅短暂重叠，由首次探测纠正——远优于
+            //   整窗避让把 dock 永久/闪跳推到大窗底部。
+            guard let contentBottom = observation.contentBottom else {
+                return pair.1 == .compositionSurface ? nil : pair.0.bounds
+            }
+            return CGRect(x: pair.0.bounds.minX, y: pair.0.bounds.minY,
+                          width: pair.0.bounds.width,
+                          height: min(CGFloat(contentBottom + 1), pair.0.bounds.height))
         }
         if let evidence {
-            let bubbleCount = classified.filter { $0.1 == .bubble }.count
+            // 证据计数沿用二元 bubble/control 通道：像素探测类（.bubble/.compositionSurface）
+            // 计入 bubbleObstacles，与标题通道引入前的计数口径保持连续。
+            let bubbleCount = classified.filter { $0.1 != .control }.count
             evidence.recordLayoutTick(
                 bubbleObstacles: bubbleCount,
                 controlObstacles: classified.count - bubbleCount,
                 visibleObstacles: visibleBounds.count
             )
         }
-        return frameSink(mascot.bounds, visibleBounds)
+        // 布局锚：基础位锚定“宠物+其下方可见内容”的实时底边，而非 Mascot 窗口底。
+        // Mascot 窗口底部有大量透明 padding（现场实测可见内容底 abs y328 vs 窗口底 369），
+        // 宠物/气泡卡像素实际渲染在 Composition Surface（obstaclesNear 去重后恰一个代表），
+        // 其 contentBottom 观察即可见内容底。visible 且有 contentBottom 时：
+        // effectivePetMaxY = 代表.bounds.minY + contentBottom + 1（Quartz 全局 y；
+        // contentBottom 为窗口内像素行，与上方避让矩形高度 contentBottom+1 同口径——
+        // 展开态障碍底边 == effectivePetMaxY，基础位即内容底+gap，不产生双重下移）。
+        // 否则（hidden / 降级 / 冷启动首 tick 无 cache）回退 Mascot 窗口底，降级行为不变。
+        // 已知权衡：宠物动画（叶子摆动等）会使 contentBottom 逐帧微变 → dock 基础位微跳；
+        // 本轮不加平滑，若真机观察到 >4px 高频抖动，后续轮再加滞回。
+        var effectivePetMaxY = mascot.bounds.maxY
+        if let rep = classified.first(where: { $0.1 == .compositionSurface })?.0 {
+            let observation = bubbleProbe.observation(for: rep.wid)
+            if observation.visibility == .visible, let contentBottom = observation.contentBottom {
+                effectivePetMaxY = max(mascot.bounds.minY,
+                                       rep.bounds.minY + CGFloat(contentBottom + 1))
+            }
+        }
+        // 水平居中仍按 Mascot 窗口（origin.x/width 不变）；仅高度随内容底收缩/延伸。
+        let adjustedPet = CGRect(x: mascot.bounds.minX, y: mascot.bounds.minY,
+                                 width: mascot.bounds.width,
+                                 height: effectivePetMaxY - mascot.bounds.minY)
+        return frameSink(adjustedPet, visibleBounds)
     }
 }
 

@@ -28,12 +28,14 @@
 
 在非主窗口集合中按以下顺序选择：
 
-1. **滞回**：上次选中的 windowID 仍存在就继续跟随，避免动画或多候选造成抖动。
+1. **滞回**：上次选中的 windowID 仍存在且仍具备宠物特征（`isReasonablePet` 或 title 含 `Mascot`）才继续跟随，避免动画或多候选造成抖动。宿主收起会话 UI 后隐藏的气泡/合成面/控件窗口可能仍存活（在屏、与宠物居中），不满足宠物特征的旧选中不再被沿用，立即回落到后续规则重新选择，防止瞬时误选或窗口世代切换被滞回永久锁定。
 2. **Mascot 标识**：title 含 `Mascot` 的合理候选优先于周边合成面或语音控件。
 3. **高 layer**：`layer > 0` 且 `isReasonablePet` 的候选按 layer 降序、面积升序选择。
 4. **尺寸回退**：其余 `isReasonablePet` 候选按面积升序选择。
 
 `isReasonablePet` 要求 `maxSide <= 300`、`area <= 70_000`、最小边至少 50，并排除 Voice Controls、Composition Surface、Backing、Glass 等辅助控件 title。无合理候选时宁可隐藏，也不误绑宽扁或过小辅助窗。底座宽度固定为 200，不由宠物窗口宽度撑大。
+
+辅助控件 title 只用于宠物选择排除（包含匹配）；底座避让另有一条对 `Codex Pet Composition Surface` 的**精确**标题障碍通道（该大窗承载展开气泡卡渲染），语义、去重与去重后的像素探测见 [`dock-obstacle-avoidance.md`](./dock-obstacle-avoidance.md)。两条通道互不改变对方的候选集。
 
 ### R5：歧义与无候选
 
@@ -53,7 +55,7 @@
 
 ## 可重复验证
 
-`selectPet(candidates:lastWID:)` 是纯函数，`tests/main.swift` 用构造的 `WinCandidate` 数组编译真实 `PetTracker` 与 `Geometry` 源码验证：主窗口与宠物并存时选宠物、仅主窗口时返回 nil、Mascot 优先于高 layer 辅助窗、合理尺寸回退、滞回与辅助控件排除。测试不需要屏幕录制权限；测试项总数随套件演进，以源码为准。
+`selectPet(candidates:lastWID:)` 是纯函数，`tests/main.swift` 用构造的 `WinCandidate` 数组编译真实 `PetTracker` 与 `Geometry` 源码验证：主窗口与宠物并存时选宠物、仅主窗口时返回 nil、Mascot 优先于高 layer 辅助窗、合理尺寸回退、滞回（含沿用前宠物特征再校验）与辅助控件排除。测试不需要屏幕录制权限；测试项总数随套件演进，以源码为准。
 
 真实多显示器、TCC 屏幕录制授权、宠物隐藏 / 重现和 Accessibility 交互属于候选验收中的真机项目，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
 
@@ -61,4 +63,4 @@
 
 曾观察到 Mascot 本体与 Composition Surface、Voice Controls 等周边窗口同时存在，且周边 layer 可能更高、尺寸跨度更大。仅按 layer 会选中辅助窗，因此当前规则把 title 含 `Mascot` 的合理候选置于高 layer 回退之前，并用最小边与标题黑名单排除辅助控件。该顺序由纯函数回归用例持续锁定。
 
-`Mascot` title 是当前可观测的稳定标识，但 Codex 未来可能改名或移除该 title。届时识别会降级到 layer + `isReasonablePet` 几何回退；需要同步更新规则、fixture 与本说明，不能把 title 命中视为永久协议。
+`Mascot` title 是当前可观测的稳定标识，但 Codex 未来可能改名或移除该 title。届时识别会降级到 layer + `isReasonablePet` 几何回退；需要同步更新规则、fixture 与本说明，不能把 title 命中视为永久协议。`Codex Pet Composition Surface` 精确标题障碍通道同理：宿主改名或移除该标题时，展开气泡卡避让会退化为仅几何/ACT 通道，需按新的现场证据重新校准。

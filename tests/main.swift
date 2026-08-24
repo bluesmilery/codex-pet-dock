@@ -462,8 +462,8 @@ func between(_ value: CGFloat, _ a: CGFloat, _ b: CGFloat) -> Bool {
 }
 
 var baseInterpolator = DockFrameInterpolator()
-_ = baseInterpolator.update(to: interpA, at: 0, movementChanged: false)
-let interpStart = baseInterpolator.update(to: interpB, at: 0, movementChanged: true)
+_ = baseInterpolator.snap(to: interpA)
+let interpStart = baseInterpolator.update(to: interpB, at: 0)
 let interp16 = baseInterpolator.frame(at: 0.016)
 let interp32 = baseInterpolator.frame(at: DockFrameInterpolator.maximumDuration)
 check("T-ip1 0ms从起点开始且16ms在线段中点", rectNear(interpStart, interpA) && rectNear(interp16, NSRect(x: 50, y: 40, width: 200, height: 48)),
@@ -473,8 +473,8 @@ check("T-ip2 32ms精确到终点且segment结束", rectNear(interp32, interpB) &
 
 func interpolationSamples(at times: [TimeInterval]) -> [NSRect] {
     var interpolator = DockFrameInterpolator()
-    _ = interpolator.update(to: interpA, at: 0, movementChanged: false)
-    _ = interpolator.update(to: interpB, at: 0, movementChanged: true)
+    _ = interpolator.snap(to: interpA)
+    _ = interpolator.update(to: interpB, at: 0)
     return times.compactMap { interpolator.frame(at: $0) }
 }
 let samples60 = interpolationSamples(at: [0, 1.0 / 60.0, 2.0 / 60.0])
@@ -491,10 +491,10 @@ check("T-ip3 60/120Hz与不规则节拍均单调且无过冲", allSamplesBounded
       "60=\(samples60) 120=\(samples120) irregular=\(samplesIrregular)")
 
 var retargetInterpolator = DockFrameInterpolator()
-_ = retargetInterpolator.update(to: interpA, at: 0, movementChanged: false)
-_ = retargetInterpolator.update(to: interpB, at: 0, movementChanged: true)
+_ = retargetInterpolator.snap(to: interpA)
+_ = retargetInterpolator.update(to: interpB, at: 0)
 let retargetSource = retargetInterpolator.frame(at: 0.016)
-let retargetStart = retargetInterpolator.update(to: interpC, at: 0.016, movementChanged: true)
+let retargetStart = retargetInterpolator.update(to: interpC, at: 0.016)
 let retargetMid = retargetInterpolator.frame(at: 0.032)
 let retargetEnd = retargetInterpolator.frame(at: 0.048)
 let expectedRetargetMid = NSRect(x: ((retargetSource?.origin.x ?? interpA.origin.x) + interpC.origin.x) / 2,
@@ -506,20 +506,26 @@ check("T-ip4 retarget从当前采样值开始且只追最新目标",
         && rectNear(retargetEnd, interpC),
       "source=\(String(describing: retargetSource)) mid=\(String(describing: retargetMid)) end=\(String(describing: retargetEnd))")
 
-var safetyInterpolator = DockFrameInterpolator()
-_ = safetyInterpolator.update(to: interpA, at: 0, movementChanged: false)
-_ = safetyInterpolator.update(to: interpB, at: 0, movementChanged: true)
-let safetySnap = safetyInterpolator.update(to: interpC, at: 0.008, movementChanged: false)
-check("T-ip5 障碍/安全目标变化立即snap且不留segment",
-      rectNear(safetySnap, interpC) && safetyInterpolator.segmentStartedAt == nil,
-      "snap=\(safetySnap) started=\(String(describing: safetyInterpolator.segmentStartedAt))")
-safetyInterpolator.reset()
-check("T-ip6 reset用于隐藏/无screen/首次显示路径", safetyInterpolator.renderedFrame == nil
-        && safetyInterpolator.targetFrame == nil && safetyInterpolator.segmentStartedAt == nil, "")
+var stationaryInterpolator = DockFrameInterpolator()
+_ = stationaryInterpolator.snap(to: interpA)
+let stationaryStart = stationaryInterpolator.updateAvoidance(to: interpC, at: 0)
+let stationaryKindActive = stationaryInterpolator.segmentKind == .avoidance   // 采样前快照
+let stationaryMid = stationaryInterpolator.frame(at: 0.1)
+let stationaryEnd = stationaryInterpolator.frame(at: DockFrameInterpolator.avoidanceDuration)
+check("T-ip5 静止目标变化(内容/障碍/锚)走avoidance平滑非snap(语义来源:movementChanged分类)",
+      rectNear(stationaryStart, interpA)
+        && stationaryKindActive
+        && !rectNear(stationaryMid, interpA) && !rectNear(stationaryMid, interpC)
+        && between(stationaryMid!.origin.x, interpA.origin.x, interpC.origin.x)
+        && rectNear(stationaryEnd, interpC),
+      "start=\(String(describing: stationaryStart)) mid=\(String(describing: stationaryMid)) end=\(String(describing: stationaryEnd))")
+stationaryInterpolator.reset()
+check("T-ip6 reset用于隐藏/无screen/首次显示路径", stationaryInterpolator.renderedFrame == nil
+        && stationaryInterpolator.targetFrame == nil && stationaryInterpolator.segmentStartedAt == nil, "")
 
 var stableInterpolator = DockFrameInterpolator()
-_ = stableInterpolator.update(to: interpA, at: 0, movementChanged: false)
-_ = stableInterpolator.update(to: interpB, at: 0, movementChanged: true)
+_ = stableInterpolator.snap(to: interpA)
+_ = stableInterpolator.update(to: interpB, at: 0)
 let stableFinal = stableInterpolator.frame(at: Follower.stationaryDuration)
 check("T-ip7 stable阈值前最终插值段已精确到位", rectNear(stableFinal, interpB),
       "stableDuration=\(Follower.stationaryDuration) final=\(String(describing: stableFinal))")
@@ -527,7 +533,18 @@ check("T-ip7 stable阈值前最终插值段已精确到位", rectNear(stableFina
 let panelPetA = CGRect(x: 100, y: 100, width: 172, height: 179)
 let panelPetB = panelPetA.offsetBy(dx: 100, dy: 0)
 if let interpolationScreen = NSScreen.screens.first {
-    let panelInterpolator = DockPanel()
+    var ipAvoLinks: [TestAnimationDisplayLink] = []
+    let panelInterpolator = DockPanel(
+        makeAnimationDisplayLink: { target, selector in
+            let link = TestAnimationDisplayLink(target: target, selector: selector)
+            ipAvoLinks.append(link)
+            return link
+        },
+        makeAnimationTimer: { interval, repeats, callback in
+            TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        },
+        animationMonotonicNow: { 0.016 }
+    )
     _ = panelInterpolator.placeBelow(
         petQuartzRect: panelPetA,
         visibleScreen: interpolationScreen,
@@ -570,6 +587,7 @@ if let interpolationScreen = NSScreen.screens.first {
         movementChanged: true,
         monotonicNow: 0.016
     )
+    let panelAvoidPlaced = panelInterpolator.frame
     let panelSafetyTarget = Geometry.appKitRectFromQuartz(
         Geometry.safeDockFrame(
             pet: panelPetB,
@@ -579,8 +597,29 @@ if let interpolationScreen = NSScreen.screens.first {
             screen: interpolationScreen
         ).frame!
     )
-    check("T-ip9 DockPanel障碍变化立即snap", abs(panelInterpolator.frame.origin.y - panelSafetyTarget.origin.y) < 1.0,
-          "actual=\(panelInterpolator.frame) target=\(panelSafetyTarget)")
+    _ = panelInterpolator.placeBelow(
+        petQuartzRect: panelPetB,
+        avoiding: [panelObstacle],
+        visibleScreen: interpolationScreen,
+        movementChanged: false,
+        monotonicNow: 0.032
+    )
+    let panelAvoidMid = panelInterpolator.frame
+    _ = panelInterpolator.placeBelow(
+        petQuartzRect: panelPetB,
+        avoiding: [panelObstacle],
+        visibleScreen: interpolationScreen,
+        movementChanged: false,
+        monotonicNow: 0.08
+    )
+    check("T-ip9 拖动中障碍出现走32ms movement插值(静止出现走avoidance见T-avo1;安全路径仍snap)",
+          abs(panelAvoidPlaced.origin.y - panelMovingMid.origin.y) < 1.0
+            && between(panelAvoidMid.origin.y,
+                       min(panelMovingMid.origin.y, panelSafetyTarget.origin.y) + 4,
+                       max(panelMovingMid.origin.y, panelSafetyTarget.origin.y) - 4)
+            && abs(panelInterpolator.frame.origin.y - panelSafetyTarget.origin.y) < 1.0
+            && ipAvoLinks.isEmpty,
+          "placed=\(panelAvoidPlaced) mid=\(panelAvoidMid) final=\(panelInterpolator.frame) target=\(panelSafetyTarget)")
     panelInterpolator.hideIfNeeded()
     _ = panelInterpolator.placeBelow(
         petQuartzRect: panelPetB,
@@ -614,8 +653,630 @@ check("T-ip11 RED 持续无screen移动每帧snap且不延续segment",
       "moved=\(noScreenMovedFrame) stable=\(noScreenStableFrame) target=\(noScreenTargetB)")
 print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) failed")
 
+// ---- T-avo: 障碍出现/消失平滑过渡（200ms ease-in-out + DockPanel 自有显示节拍渲染源） ----
+// 用户症状：控制按钮出现/消失时 dock 瞬间跳变（基线 obstaclesChanged → snap；基线红测
+// T-avo1/2/3 在 5fbe237 上 3 failed 已记录）。新语义（movementChanged 驱动分类）：宠物窗口
+// 实质移动 → 32ms movement 插值；静止时内容/障碍/锚目标变化 → 200ms ease-in-out
+// avoidance segment，动画期间由 DockPanel 自有 display link（macOS13/不可用 → 60Hz
+// repeating Timer fallback）以显示节拍渲染（stable follow tick 仅 0.1s cadence，只靠 tick
+// 采样每段仅 ~2 点呈台阶）；无屏/换屏/隐藏/越界等安全路径仍立即 snap。
+let avoBase = fail, avoPass = pass
+
+/// 可注入合成屏（NSScreen 是系统只读集合；headless 无 WindowServer 时 screens 为空）。
+final class AvoTestScreen: NSScreen {
+    private let f: NSRect
+    private let v: NSRect
+    init(frame: NSRect, visible: NSRect) {
+        self.f = frame
+        self.v = visible
+        super.init()
+    }
+    override var frame: NSRect { f }
+    override var visibleFrame: NSRect { v }
+}
+
+/// avoidance 动画渲染源 fake：记录 add/invalidate；fire() 经生产 selector 驱动真实渲染 tick。
+final class TestAnimationDisplayLink: NSObject, FollowDisplayLink {
+    private let target: NSObject
+    private let selector: Selector
+    private(set) var added = false
+    private(set) var invalidated = false
+
+    init(target: NSObject, selector: Selector) {
+        self.target = target
+        self.selector = selector
+    }
+
+    func add(to runLoop: RunLoop, forMode mode: RunLoop.Mode) { added = true }
+
+    func fire() {
+        guard !invalidated else { return }
+        _ = target.perform(selector, with: self)
+    }
+
+    func invalidate() { invalidated = true }
+}
+
+func avoFrameNear(_ lhs: NSRect, _ rhs: NSRect) -> Bool {
+    abs(lhs.origin.x - rhs.origin.x) < 1.0 && abs(lhs.origin.y - rhs.origin.y) < 1.0
+        && abs(lhs.width - rhs.width) < 1.0 && abs(lhs.height - rhs.height) < 1.0
+}
+/// 期望值 helper：base→target 按进度插值（与 DockFrameInterpolator.interpolate 同式）。
+func avoLerp(_ a: NSRect, _ b: NSRect, _ p: CGFloat) -> NSRect {
+    NSRect(x: a.origin.x + (b.origin.x - a.origin.x) * p,
+           y: a.origin.y + (b.origin.y - a.origin.y) * p,
+           width: a.width + (b.width - a.width) * p,
+           height: a.height + (b.height - a.height) * p)
+}
+
+let avoScreen = AvoTestScreen(
+    frame: NSRect(x: -10000, y: -10000, width: 20000, height: 20000),
+    visible: NSRect(x: -10000, y: -10000, width: 20000, height: 20000))
+let avoScreen2 = AvoTestScreen(
+    frame: NSRect(x: -10000, y: -10000, width: 20000, height: 20000),
+    visible: NSRect(x: -10000, y: -10000, width: 20000, height: 20000))
+let avoPet = CGRect(x: 100, y: 100, width: 172, height: 179)            // maxY=279
+let avoObstacle = CGRect(x: 120, y: 279, width: 60, height: 24)          // 控制按钮 279..303
+let avoBaseQuartz = Geometry.safeDockFrame(
+    pet: avoPet, avoiding: [], dockSize: CGSize(width: 200, height: 48), gap: 2, screen: avoScreen).frame!
+let avoAvoidQuartz = Geometry.safeDockFrame(
+    pet: avoPet, avoiding: [avoObstacle], dockSize: CGSize(width: 200, height: 48), gap: 2, screen: avoScreen).frame!
+check("T-avo0 前置：基础位281/避让位305（Quartz）",
+      avoBaseQuartz.origin.y == 281 && avoAvoidQuartz.origin.y == 305,
+      "base=\(avoBaseQuartz.origin.y) avoid=\(avoAvoidQuartz.origin.y)")
+let avoBaseAppKit = Geometry.appKitRectFromQuartz(avoBaseQuartz)
+let avoAvoidAppKit = Geometry.appKitRectFromQuartz(avoAvoidQuartz)
+
+var avoClock: TimeInterval = 0
+var avoLinks: [TestAnimationDisplayLink] = []
+var avoTimers: [TestFollowTickTimer] = []
+func avoMakeDock(linkFactory: @escaping (NSObject, Selector) -> FollowDisplayLink?) -> DockPanel {
+    DockPanel(
+        makeAnimationDisplayLink: linkFactory,
+        makeAnimationTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            avoTimers.append(timer)
+            return timer
+        },
+        animationMonotonicNow: { avoClock }
+    )
+}
+let avoDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+
+// T-avo1 按钮出现（障碍 0→1）：放置拍停在起点，fake link 显示节拍推进，200ms 精确到位。
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 0)
+let avoAppearStart = avoDock.frame
+check("T-avo1a 出现首拍：snap 基础位且无动画源",
+      avoFrameNear(avoAppearStart, avoBaseAppKit) && avoLinks.isEmpty && avoTimers.isEmpty,
+      "start=\(avoAppearStart)")
+avoClock = 10
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 10)
+var avoAppearFrames = [avoDock.frame]
+for avoOffset in [0.05, 0.1, 0.15, 0.2] {
+    avoClock = 10 + avoOffset
+    avoLinks.last?.fire()
+    avoAppearFrames.append(avoDock.frame)
+}
+let avoAppearExpected = [0.05, 0.1, 0.15, 0.2].map {
+    avoLerp(avoBaseAppKit, avoAvoidAppKit,
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+var avoAppearProgressiveOK = avoFrameNear(avoAppearFrames[0], avoBaseAppKit)
+for avoIdx in 0..<4 {
+    avoAppearProgressiveOK = avoAppearProgressiveOK
+        && avoFrameNear(avoAppearFrames[avoIdx + 1], avoAppearExpected[avoIdx])
+}
+check("T-avo1b 出现：ease-in-out 曲线帧(0.15625/0.5/0.84375/1)渐进且前半慢于线性",
+      avoAppearProgressiveOK
+        && DockFrameInterpolator.smoothstep(0.25) > 0
+        && DockFrameInterpolator.smoothstep(0.25) < 0.25,
+      "frames=\(avoAppearFrames)")
+check("T-avo1c 出现：200ms 精确落终点且段完成 invalidate 链接",
+      avoFrameNear(avoAppearFrames[4], avoAvoidAppKit)
+        && abs(avoAppearFrames[4].origin.y - avoAvoidAppKit.origin.y) < 0.51
+        && avoLinks.count == 1 && avoLinks[0].added && avoLinks[0].invalidated,
+      "final=\(avoAppearFrames[4]) links=\(avoLinks.count)")
+
+// T-avo2 按钮消失（障碍 1→0）：从避让位渐进回基础位，完成后 invalidate。
+avoClock = 11
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 11)
+var avoVanishFrames = [avoDock.frame]
+for avoOffset in [0.05, 0.1, 0.15, 0.2] {
+    avoClock = 11 + avoOffset
+    avoLinks.last?.fire()
+    avoVanishFrames.append(avoDock.frame)
+}
+let avoVanishExpected = [0.05, 0.1, 0.15, 0.2].map {
+    avoLerp(avoAvoidAppKit, avoBaseAppKit,
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+check("T-avo2 消失：渐进回基础位且完成后 invalidate",
+      avoFrameNear(avoVanishFrames[0], avoAvoidAppKit)
+        && (0..<4).allSatisfy { avoFrameNear(avoVanishFrames[$0 + 1], avoVanishExpected[$0]) }
+        && avoFrameNear(avoVanishFrames[4], avoBaseAppKit)
+        && avoLinks.count == 2 && avoLinks[1].invalidated,
+      "frames=\(avoVanishFrames)")
+
+// T-avo3 障碍纯平移：movementChanged=true（宠物实质移动、目标随动）→ 拖动走 32ms
+// movement 插值（语义来源：movementChanged 分类，不再比对障碍数量/相对范围），不启动动画源。
+let avoMovedPet = avoPet.offsetBy(dx: 60, dy: 0)
+let avoMovedObstacle = avoObstacle.offsetBy(dx: 60, dy: 0)
+let avoMovedAvoidAppKit = Geometry.appKitRectFromQuartz(avoAvoidQuartz.offsetBy(dx: 60, dy: 0))
+let avoMoveDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+_ = avoMoveDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                           movementChanged: false, monotonicNow: 12)
+let avoMoveStart = avoMoveDock.frame
+avoClock = 13
+_ = avoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle], visibleScreen: avoScreen,
+                           movementChanged: true, monotonicNow: 13)
+avoClock = 13.016
+_ = avoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle], visibleScreen: avoScreen,
+                           movementChanged: false, monotonicNow: 13.016)
+let avoMoveMid = avoMoveDock.frame
+avoClock = 13.04
+_ = avoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle], visibleScreen: avoScreen,
+                           movementChanged: false, monotonicNow: 13.04)
+let avoMoveFinal = avoMoveDock.frame
+check("T-avo3 障碍纯平移：32ms movement 插值且不启动动画源",
+      avoFrameNear(avoMoveStart, avoAvoidAppKit)
+        && between(avoMoveMid.origin.x,
+                   min(avoAvoidAppKit.origin.x, avoMovedAvoidAppKit.origin.x) + 8,
+                   max(avoAvoidAppKit.origin.x, avoMovedAvoidAppKit.origin.x) - 8)
+        && !avoFrameNear(avoMoveMid, avoAvoidAppKit) && !avoFrameNear(avoMoveMid, avoMovedAvoidAppKit)
+        && avoFrameNear(avoMoveFinal, avoMovedAvoidAppKit)
+        && avoLinks.count == 2 && avoTimers.isEmpty,
+      "start=\(avoMoveStart) mid=\(avoMoveMid) final=\(avoMoveFinal)")
+
+// T-avo4 插值器数学（纯值）：smoothstep 单调、200ms 精确、无过冲、retarget/movement 覆盖/snap。
+var avoMath = DockFrameInterpolator()
+_ = avoMath.snap(to: interpA)
+let avoMathStart = avoMath.updateAvoidance(to: interpB, at: 0)
+let avoMathKindActive = avoMath.segmentKind == .avoidance     // 采样前快照（采样会推进/完成段）
+let avoMathEase = [0.05, 0.1, 0.15].map { avoMath.frame(at: $0)! }
+let avoMathEnd = avoMath.frame(at: DockFrameInterpolator.avoidanceDuration)!
+let avoMathAfterEnd = avoMath.frame(at: DockFrameInterpolator.avoidanceDuration + 0.05)!
+let avoMathEaseExpected = [0.05, 0.1, 0.15].map {
+    avoLerp(interpA, interpB,
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+check("T-avo4a avoidance 数学：smoothstep 单调、200ms 精确到 target、无过冲",
+      rectNear(avoMathStart, interpA)
+        && avoMathKindActive
+        && (0..<3).allSatisfy { rectNear(avoMathEase[$0], avoMathEaseExpected[$0]) }
+        && (0..<2).allSatisfy {
+            abs(avoMathEase[$0 + 1].origin.x - avoMathEase[$0].origin.x) > 0.01
+        }
+        && rectNear(avoMathEnd, interpB) && avoMath.segmentStartedAt == nil && avoMath.segmentKind == nil
+        && rectNear(avoMathAfterEnd, interpB),
+      "ease=\(avoMathEase) end=\(avoMathEnd)")
+check("T-avo4b smoothstep：中点=线性中点、1/4点介于 step 与线性之间",
+      DockFrameInterpolator.smoothstep(0.5) == 0.5
+        && DockFrameInterpolator.smoothstep(0.25) > 0
+        && DockFrameInterpolator.smoothstep(0.25) < 0.25
+        && DockFrameInterpolator.smoothstep(0.75) > 0.75
+        && DockFrameInterpolator.smoothstep(0.75) < 1,
+      "s0.25=\(DockFrameInterpolator.smoothstep(0.25))")
+let avoRetargetStarted = avoMath.updateAvoidance(to: interpC, at: 0.3)
+let avoRetargetFrom = avoMath.frame(at: 0.35)!
+let avoRetargetRestart = avoMath.updateAvoidance(to: interpA, at: 0.35)
+let avoRetargetKindActive = avoMath.segmentKind == .avoidance
+let avoRetargetMid = avoMath.frame(at: 0.45)!   // 0.1s/0.2s = 50% ease 中点
+let avoRetargetExpectedMid = avoLerp(avoRetargetFrom, interpA, CGFloat(DockFrameInterpolator.smoothstep(0.5)))
+check("T-avo4c 动画中 avoidance retarget：从当前渲染帧起新段（latest-only）",
+      rectNear(avoRetargetStarted, interpB) && rectNear(avoRetargetRestart, avoRetargetFrom)
+        && rectNear(avoRetargetMid, avoRetargetExpectedMid)
+        && avoRetargetKindActive,
+      "started=\(avoRetargetStarted) from=\(avoRetargetFrom) mid=\(avoRetargetMid)")
+_ = avoMath.frame(at: 0.38)!
+let avoOverrideStart = avoMath.update(to: interpB, at: 0.38)
+let avoOverrideKindMovement = avoMath.segmentKind == .movement
+let avoOverrideMid = avoMath.frame(at: 0.396)!
+let avoOverrideEnd = avoMath.frame(at: 0.413)!
+let avoOverrideExpectedMid = avoLerp(avoOverrideStart, interpB, 0.5)
+check("T-avo4d 动画中 movement 到来：立即切 32ms 线性段并精确到位",
+      avoOverrideKindMovement
+        && rectNear(avoOverrideMid, avoOverrideExpectedMid)
+        && rectNear(avoOverrideEnd, interpB),
+      "mid=\(avoOverrideMid) end=\(avoOverrideEnd)")
+let avoStationaryStart = avoMath.updateAvoidance(to: interpA, at: 0.42)
+let avoStationaryKindActive = avoMath.segmentKind == .avoidance
+let avoStationaryMid = avoMath.frame(at: 0.52)!
+avoMath.reset()
+let avoResetSnap = avoMath.updateAvoidance(to: interpB, at: 0.6)
+check("T-avo4e 静止目标变化起avoidance段；reset后updateAvoidance立即snap不留段(安全路径)",
+      rectNear(avoStationaryStart, interpB) && avoStationaryKindActive
+        && !rectNear(avoStationaryMid, interpA) && !rectNear(avoStationaryMid, interpB)
+        && between(avoStationaryMid.origin.x, interpA.origin.x, interpB.origin.x)
+        && rectNear(avoResetSnap, interpB) && avoMath.segmentStartedAt == nil && avoMath.segmentKind == nil,
+      "start=\(avoStationaryStart) mid=\(avoStationaryMid) resetSnap=\(avoResetSnap)")
+
+// T-avo5 生命周期：hide/换屏路径 invalidate；hide 后重现首放 snap。
+avoClock = 20
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 20)
+let avoHideLinksBefore = avoLinks.count
+avoClock = 20.5
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 20.5)
+avoDock.hideIfNeeded()
+let avoHideLinksAfterHide = avoLinks.count
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 21)
+check("T-avo5a 隐藏路径：invalidate 动画源且重现首放 snap（不再动画）",
+      avoHideLinksAfterHide == avoHideLinksBefore + 1
+        && avoLinks.last?.invalidated == true
+        && avoLinks.count == avoHideLinksAfterHide
+        && avoFrameNear(avoDock.frame, avoBaseAppKit),
+      "links=\(avoLinks.count) frame=\(avoDock.frame)")
+avoClock = 21.5
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 21.5)
+avoClock = 21.6
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen2,
+                       movementChanged: false, monotonicNow: 21.6)
+check("T-avo5b 换屏路径：立即 snap 到目标且 invalidate 动画源",
+      avoFrameNear(avoDock.frame, avoAvoidAppKit) && avoLinks.last?.invalidated == true,
+      "frame=\(avoDock.frame)")
+
+// T-avo6 macOS13 fallback：display link 工厂返回 nil → 60Hz repeating Timer 渲染渐进并完成失效。
+let avoFallbackDock = avoMakeDock(linkFactory: { _, _ in nil })
+_ = avoFallbackDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                               movementChanged: false, monotonicNow: 22)
+let avoFallbackTimersBefore = avoTimers.count
+_ = avoFallbackDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                               movementChanged: false, monotonicNow: 22.5)
+let avoFallbackTimer = avoTimers.last!
+avoClock = 22.6
+avoFallbackTimer.fire()
+let avoFallbackMid = avoFallbackDock.frame
+avoClock = 22.75
+avoFallbackTimer.fire()
+let avoFallbackFinal = avoFallbackDock.frame
+check("T-avo6 macOS13 fallback：nil link→60Hz repeating Timer 渲染渐进并完成失效",
+      avoTimers.count == avoFallbackTimersBefore + 1
+        && avoFallbackTimer.repeats
+        && abs(avoFallbackTimer.interval - DockPanel.avoidanceFallbackInterval) < 0.0001
+        && between(avoFallbackMid.origin.y,
+                   min(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y) + 4,
+                   max(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y) - 4)
+        && !avoFrameNear(avoFallbackMid, avoBaseAppKit) && !avoFrameNear(avoFallbackMid, avoAvoidAppKit)
+        && avoFrameNear(avoFallbackFinal, avoAvoidAppKit)
+        && avoFallbackTimer.invalidated,
+      "mid=\(avoFallbackMid) final=\(avoFallbackFinal)")
+
+// T-avo7 生产组合：FollowLayoutPass → 真实 DockPanel.placeBelow + fake link 手动 fire。
+// 按钮出现 → dock 渐进下移（≥3 个中间帧递增）；消失 → 渐进上移；最终帧精确。
+let avoProdMascot = mkw(9701, layer: 2, avoPet, title: "Codex Pet Mascot Effect")
+let avoProdControl = mkw(9702, layer: 3, CGRect(x: 140, y: 279, width: 60, height: 24))
+let avoProdProbe = BubbleVisibilityProbe(
+    monotonicNow: { 50_000 }, canCapture: { true }, capturer: { _ in .unavailable })
+let avoProdDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+var avoProdObstacleCounts: [Int] = []
+func avoProdPlace(candidates: [WinCandidate]) -> Bool {
+    FollowLayoutPass.placeDock(
+        mascot: avoProdMascot,
+        candidates: candidates,
+        bubbleProbe: avoProdProbe,
+        frameSink: { pet, obstacles in
+            avoProdObstacleCounts.append(obstacles.count)
+            return avoProdDock.placeBelow(
+                petQuartzRect: pet,
+                avoiding: obstacles,
+                visibleScreen: avoScreen,
+                movementChanged: false,
+                monotonicNow: avoClock)
+        })
+}
+avoClock = 30
+_ = avoProdPlace(candidates: [avoProdMascot])
+let avoProdLinksBefore = avoLinks.count
+avoClock = 30.1
+let avoProdShown = avoProdPlace(candidates: [avoProdMascot, avoProdControl])
+var avoProdFrames = [avoProdDock.frame]
+for avoOffset in [0.05, 0.09, 0.13, 0.17, 0.21] {
+    avoClock = 30.1 + avoOffset
+    avoLinks.last?.fire()
+    avoProdFrames.append(avoProdDock.frame)
+}
+let avoProdLo = min(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y)
+let avoProdHi = max(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y)
+check("T-avo7a 生产组合按钮出现：渐进下移（≥3 中间帧严格递增）且最终精确",
+      avoProdShown && avoProdObstacleCounts == [0, 1]
+        && avoLinks.count == avoProdLinksBefore + 1
+        // 前三个中间帧必须严格处于两端内部（远离边界）；第四帧处于 95% 采样点，
+        // ease-in-out 尾段天然贴近目标（smoothstep(0.95)≈0.993），像素对齐后可能与
+        // lo+1 重合——只要求严格未达最终值（< hi 且 > lo），最终精确由 frames[5] 断言。
+        && (1..<4).allSatisfy { avoProdFrames[$0].origin.y > avoProdLo + 1 && avoProdFrames[$0].origin.y < avoProdHi - 1 }
+        && avoProdFrames[4].origin.y > avoProdLo && avoProdFrames[4].origin.y < avoProdHi
+        && (1..<4).allSatisfy {
+            abs(avoProdFrames[$0 + 1].origin.y - avoBaseAppKit.origin.y)
+                > abs(avoProdFrames[$0].origin.y - avoBaseAppKit.origin.y)
+        }
+        && avoFrameNear(avoProdFrames[5], avoAvoidAppKit),
+      "frames=\(avoProdFrames)")
+avoClock = 31
+_ = avoProdPlace(candidates: [avoProdMascot])
+var avoProdVanishFrames = [avoProdDock.frame]
+for avoOffset in [0.05, 0.12, 0.19, 0.24] {
+    avoClock = 31 + avoOffset
+    avoLinks.last?.fire()
+    avoProdVanishFrames.append(avoProdDock.frame)
+}
+check("T-avo7b 生产组合按钮消失：渐进回基础位、最终精确、链接失效",
+      avoProdObstacleCounts == [0, 1, 0]
+        && !avoFrameNear(avoProdVanishFrames[1], avoBaseAppKit)
+        && !avoFrameNear(avoProdVanishFrames[1], avoAvoidAppKit)
+        && avoFrameNear(avoProdVanishFrames[4], avoBaseAppKit)
+        && avoLinks.last?.invalidated == true,
+      "frames=\(avoProdVanishFrames)")
+print("\n[障碍平滑过渡] \(pass - avoPass) passed, \(fail - avoBase) failed")
+
+
+// ---- T-p1: P1 回归（review-smooth 首轮 P1-1/P1-2；movementChanged 驱动分类）----
+// 症状：分类只认障碍 count/range 时，CS 锚变化（气泡展开/收起：CS 障碍 rect 与
+// adjustedPet.maxY 协变，count 1→1、range 恒 0）落入 movement 路径，movementChanged=false
+// 的目标变化被 snap（P1-1：470↔362 跳变）；在途 avoidance 动画中锚 ±1px 微变同样走
+// movement 路径 snap，截断动画（P1-2：~12px 跳变）。新语义：movementChanged（宠物窗口
+// 是否实质移动，来自 Follower.shouldSetFrame）是区分“移动”与“内容/障碍/锚变化”的权威
+// 信号——静止时任何目标变化统一走 200ms avoidance 平滑（latest-only retarget 平滑续接）。
+let pavoBase = fail, pavoPass = pass
+
+// 生产组合 fixture（现场几何，与 T-cs 同构）：宠物 172x179 maxY=386；Composition Surface
+// 768x912@(-3)，3 个同 bounds 重复实例去重为代表；无 ACT（保持触发形态 count 1→1）。
+let pavoPet = CGRect(x: 1487, y: 207, width: 172, height: 179)
+let pavoMascot = mkw(9801, layer: 2, pavoPet, title: "Codex Pet Mascot Effect")
+let pavoSurfaceBounds = CGRect(x: 1189, y: -3, width: 768, height: 912)
+let pavoSurfaces = [28901, 28902, 28903].map {
+    mkw(UInt32($0), layer: 3, pavoSurfaceBounds, title: "Codex Pet Composition Surface")
+}
+func pavoAppKitDockFrame(y: CGFloat) -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(
+        x: pavoPet.minX + (pavoPet.width - 200) / 2, y: y, width: 200, height: 48))
+}
+var pavoStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(28901): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470),
+]
+let pavoProbe = BubbleVisibilityProbe(
+    monotonicNow: { avoClock }, canCapture: { true },
+    capturer: { c in .stats(pavoStats[c.wid] ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1)) })
+var pavoShapeLog: [(count: Int, range: CGFloat)] = []
+func pavoPlace(dock: DockPanel) -> Bool {
+    FollowLayoutPass.placeDock(
+        mascot: pavoMascot,
+        candidates: [pavoMascot] + pavoSurfaces,
+        bubbleProbe: pavoProbe,
+        frameSink: { pet, obstacles in
+            pavoShapeLog.append((obstacles.count, obstacles.first.map { $0.maxY - pet.maxY } ?? 0))
+            return dock.placeBelow(
+                petQuartzRect: pet, avoiding: obstacles, visibleScreen: avoScreen,
+                movementChanged: false, monotonicNow: avoClock)
+        })
+}
+
+// T-p1a 前置（冷启动→展开 470）：首 tick 无 cache → CS 跳过、基础位回退窗口底 388；
+// 观察（contentBottom=470）到达后目标 470 经 avoidance 平滑到位。
+let pavoDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+avoClock = 40
+_ = pavoPlace(dock: pavoDock)
+check("T-p1a 冷启动首tick无cache→基础位回退窗口底388",
+      avoFrameNear(pavoDock.frame, pavoAppKitDockFrame(y: 388)) && pavoShapeLog.last?.count == 0,
+      "frame=\(pavoDock.frame) shapes=\(pavoShapeLog)")
+_ = waitPumpingMain { !pavoProbe.lock.withLock { $0.inFlight } }
+avoClock = 40.2
+_ = pavoPlace(dock: pavoDock)
+for pavoOffset in [0.05, 0.1, 0.15, 0.21] {
+    avoClock = 40.2 + pavoOffset
+    avoLinks.last?.fire()
+}
+check("T-p1a2 展开470观察到达→avoidance渐进到位(前置)",
+      avoFrameNear(pavoDock.frame, pavoAppKitDockFrame(y: 470))
+        && avoLinks.last?.invalidated == true,
+      "frame=\(pavoDock.frame)")
+
+// T-p1b 收起（P1-1 正片）：contentBottom 470→362（count 1→1、range 恒 0、
+// movementChanged=false）→ dock 渐进回基础位 362（≥3 中间帧严格趋近、非 snap），
+// 动画源期间活跃、最终精确到位并失效。
+pavoStats[CGWindowID(28901)] = BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362)
+pavoShapeLog.removeAll()
+let pavoCollapseLinksBefore = avoLinks.count
+avoClock = 41
+_ = pavoPlace(dock: pavoDock)                    // 重捕获在途（旧 cache 470 仍生效）→ hold
+_ = waitPumpingMain { !pavoProbe.lock.withLock { $0.inFlight } }
+avoClock = 41.2
+_ = pavoPlace(dock: pavoDock)                    // cache 362 → 静止目标变化 → avoidance 段
+let pavoCollapsePlaced = pavoDock.frame
+var pavoCollapseFrames = [pavoCollapsePlaced]
+var pavoCollapseMidLinkActive = false
+for pavoOffset in [0.05, 0.1, 0.15] {
+    avoClock = 41.2 + pavoOffset
+    avoLinks.last?.fire()
+    pavoCollapseFrames.append(pavoDock.frame)
+    pavoCollapseMidLinkActive = avoLinks.last?.invalidated == false
+}
+avoClock = 41.41   // 越过 41.2+0.2 的浮点表示边界，确保段完成判定（帧值仍精确到终点）
+avoLinks.last?.fire()
+pavoCollapseFrames.append(pavoDock.frame)
+let pavoCollapseExpected = [0.05, 0.1, 0.15, 0.2].map {
+    avoLerp(pavoAppKitDockFrame(y: 470), pavoAppKitDockFrame(y: 362),
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+check("T-p1b 收起(P1-1):count1→1/range0→0/静止→渐进回基础位362(非snap)",
+      pavoShapeLog.count == 2
+        && pavoShapeLog.allSatisfy { $0.count == 1 && abs($0.range) < 0.000_001 }
+        && avoFrameNear(pavoCollapsePlaced, pavoAppKitDockFrame(y: 470))
+        && avoLinks.count == pavoCollapseLinksBefore + 1
+        && pavoCollapseMidLinkActive
+        && (0..<4).allSatisfy { avoFrameNear(pavoCollapseFrames[$0 + 1], pavoCollapseExpected[$0]) }
+        && (1..<4).allSatisfy {
+            abs(pavoCollapseFrames[$0].origin.y - pavoAppKitDockFrame(y: 362).origin.y)
+                > abs(pavoCollapseFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 362).origin.y) + 4
+        }
+        && avoFrameNear(pavoCollapseFrames[4], pavoAppKitDockFrame(y: 362))
+        && avoLinks.last?.invalidated == true,
+      "shapes=\(pavoShapeLog) frames=\(pavoCollapseFrames)")
+
+// T-p1c 展开（P1-1 反向）：362→470 同触发形态（count 1→1、range 0→0）→ 同样渐进。
+pavoStats[CGWindowID(28901)] = BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470)
+pavoShapeLog.removeAll()
+let pavoExpandLinksBefore = avoLinks.count
+avoClock = 42
+_ = pavoPlace(dock: pavoDock)
+_ = waitPumpingMain { !pavoProbe.lock.withLock { $0.inFlight } }
+avoClock = 42.2
+_ = pavoPlace(dock: pavoDock)
+var pavoExpandFrames = [pavoDock.frame]
+for pavoOffset in [0.05, 0.1, 0.15, 0.21] {
+    avoClock = 42.2 + pavoOffset
+    avoLinks.last?.fire()
+    pavoExpandFrames.append(pavoDock.frame)
+}
+let pavoExpandExpected = [0.05, 0.1, 0.15, 0.2].map {
+    avoLerp(pavoAppKitDockFrame(y: 362), pavoAppKitDockFrame(y: 470),
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+check("T-p1c 展开(P1-1反向):362→470渐进到位(非snap)",
+      pavoShapeLog.count == 2
+        && pavoShapeLog.allSatisfy { $0.count == 1 && abs($0.range) < 0.000_001 }
+        && avoLinks.count == pavoExpandLinksBefore + 1
+        && (0..<4).allSatisfy { avoFrameNear(pavoExpandFrames[$0 + 1], pavoExpandExpected[$0]) }
+        && (1..<4).allSatisfy {
+            abs(pavoExpandFrames[$0].origin.y - pavoAppKitDockFrame(y: 470).origin.y)
+                > abs(pavoExpandFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 470).origin.y) + 4
+        }
+        && avoFrameNear(pavoExpandFrames[4], pavoAppKitDockFrame(y: 470)),
+      "shapes=\(pavoShapeLog) frames=\(pavoExpandFrames)")
+
+// T-p1d（P1-2）：按钮消失回落动画进行中（0.08s 处），下一 tick 锚 contentBottom +1px →
+// latest-only retarget 平滑续接：retarget 拍帧 = 旧段该时刻采样值（而非新终点 snap 截断），
+// 后续帧按新段曲线单调趋近 ±1px 新基础位，最终精确；同目标 stable tick（hold）不重置进度。
+let pav2Dock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+avoClock = 45
+_ = pav2Dock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                      movementChanged: false, monotonicNow: 45)
+avoClock = 45.2
+_ = pav2Dock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                      movementChanged: false, monotonicNow: 45.2)   // 消失回落段起点
+avoClock = 45.28
+avoLinks.last?.fire()                                                // 0.08s 中点采样
+let pav2MidFrame = pav2Dock.frame
+let pav2Base281AppKit = Geometry.appKitRectFromQuartz(
+    CGRect(x: avoBaseQuartz.origin.x, y: 281, width: 200, height: 48))
+let pav2Base282AppKit = Geometry.appKitRectFromQuartz(
+    CGRect(x: avoBaseQuartz.origin.x, y: 282, width: 200, height: 48))
+let pav2RetargetLinksBefore = avoLinks.count
+avoClock = 45.3
+_ = pav2Dock.placeBelow(petQuartzRect: avoPet.offsetBy(dx: 0, dy: 1), avoiding: [],
+                      visibleScreen: avoScreen, movementChanged: false, monotonicNow: 45.3)
+let pav2RetargetFrame = pav2Dock.frame
+let pav2ExpectedRetarget = avoLerp(avoAvoidAppKit, pav2Base281AppKit,
+                                 CGFloat(DockFrameInterpolator.smoothstep(0.5)))
+var pav2Frames = [pav2RetargetFrame]
+var pav2Expected = [pav2ExpectedRetarget]
+for pav2Offset in [0.02, 0.06] {
+    avoClock = 45.3 + pav2Offset
+    avoLinks.last?.fire()
+    pav2Frames.append(pav2Dock.frame)
+    pav2Expected.append(avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
+                              CGFloat(DockFrameInterpolator.smoothstep(pav2Offset / DockFrameInterpolator.avoidanceDuration))))
+}
+avoClock = 45.38
+_ = pav2Dock.placeBelow(petQuartzRect: avoPet.offsetBy(dx: 0, dy: 1), avoiding: [],
+                      visibleScreen: avoScreen, movementChanged: false, monotonicNow: 45.38)
+let pav2HoldFrame = pav2Dock.frame
+for pav2Offset in [0.1] {
+    avoClock = 45.3 + pav2Offset
+    avoLinks.last?.fire()
+    pav2Frames.append(pav2Dock.frame)
+    pav2Expected.append(avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
+                              CGFloat(DockFrameInterpolator.smoothstep(pav2Offset / DockFrameInterpolator.avoidanceDuration))))
+}
+avoClock = 45.51   // 越过 45.3+0.2 的浮点表示边界；段完成精确落终点
+avoLinks.last?.fire()
+pav2Frames.append(pav2Dock.frame)
+pav2Expected.append(pav2Base282AppKit)
+check("T-p1d (P1-2)回落动画中锚+1px→latest-only续接(无snap截断),hold不重置,最终精确",
+      avoFrameNear(pav2MidFrame, avoLerp(avoAvoidAppKit, pav2Base281AppKit,
+                                       CGFloat(DockFrameInterpolator.smoothstep(0.4))))
+        && avoFrameNear(pav2RetargetFrame, pav2ExpectedRetarget)
+        && abs(pav2RetargetFrame.origin.y - pav2Base282AppKit.origin.y) > 2
+        && avoLinks.count == pav2RetargetLinksBefore
+        && avoFrameNear(pav2HoldFrame, avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
+                                             CGFloat(DockFrameInterpolator.smoothstep(0.4))))
+        && (0..<5).allSatisfy { avoFrameNear(pav2Frames[$0], pav2Expected[$0]) }
+        && avoFrameNear(pav2Frames[4], pav2Base282AppKit)
+        && avoLinks.last?.invalidated == true,
+      "mid=\(pav2MidFrame) retarget=\(pav2RetargetFrame) hold=\(pav2HoldFrame) frames=\(pav2Frames)")
+
+// T-p1m：avoidance 动画中 movementChanged=true（拖动）→ 立即切 32ms movement 段并
+// invalidate 动画源（movement 覆盖语义；拖动中障碍平移走 movement 插值而非 avoidance，
+// 与 T-avo3 同源；纯值层见 T-avo4d）。
+let pavoMoveDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+avoClock = 46
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                          movementChanged: false, monotonicNow: 46)
+avoClock = 46.2
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                          movementChanged: false, monotonicNow: 46.2)   // avoidance 段 + link
+avoClock = 46.25
+avoLinks.last?.fire()
+let pavoMoveMid = pavoMoveDock.frame
+let pavoMoveLinksBefore = avoLinks.count
+avoClock = 46.25
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle],
+                          visibleScreen: avoScreen, movementChanged: true, monotonicNow: 46.25)
+let pavoMovePlaced = pavoMoveDock.frame
+avoClock = 46.266
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle],
+                          visibleScreen: avoScreen, movementChanged: false, monotonicNow: 46.266)
+let pavoMoveFollow = pavoMoveDock.frame
+avoClock = 46.3
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle],
+                          visibleScreen: avoScreen, movementChanged: false, monotonicNow: 46.3)
+check("T-p1m 动画中movementChanged=true→切32ms段+invalidate动画源(障碍平移走movement)",
+      !avoFrameNear(pavoMoveMid, avoAvoidAppKit) && !avoFrameNear(pavoMoveMid, avoBaseAppKit)
+        && avoLinks.count == pavoMoveLinksBefore && avoLinks.last?.invalidated == true
+        && avoFrameNear(pavoMovePlaced, pavoMoveMid)
+        && between(pavoMoveFollow.origin.x,
+                   min(pavoMoveMid.origin.x, avoMovedAvoidAppKit.origin.x) + 8,
+                   max(pavoMoveMid.origin.x, avoMovedAvoidAppKit.origin.x) - 8)
+        && !avoFrameNear(pavoMoveFollow, pavoMoveMid)
+        && avoFrameNear(pavoMoveDock.frame, avoMovedAvoidAppKit),
+      "mid=\(pavoMoveMid) placed=\(pavoMovePlaced) follow=\(pavoMoveFollow) final=\(pavoMoveDock.frame)")
+print("\n[P1回归 movementChanged分类] \(pass - pavoPass) passed, \(fail - pavoBase) failed")
+
+
 // ---- T-avoid: 会话气泡避让（obstaclesNear + safeDockFrame + placeBelow）----
 let avBase = fail, avPass = pass
+
+
+
 let petRect = CGRect(x: 100, y: 100, width: 172, height: 179)   // Mascot 几何（示例）
 let mascotW = mkw(1, layer: 2, petRect, title: "Codex Pet Mascot Effect")
 let dockSize = CGSize(width: 200, height: 48)
@@ -797,7 +1458,7 @@ check("T-ctrl10c 控制按钮分类.control(btn2)",
 print("\n[控制按钮避让] \(pass - ctPass) passed, \(fail - ctBase) failed")
 print("\n[会话气泡避让] \(pass - avPass) passed, \(fail - avBase) failed")
 
-// ---- T-bv: BubbleVisibility 分类（纯函数滞回）+ 调度（0.1s/single-flight/reset）+ 异步集成（generation/strict single-flight）----
+// ---- T-bv: BubbleVisibility 分类（纯函数·内容噪声下限）+ 调度（0.1s/single-flight/reset）+ 异步集成（generation/strict single-flight）----
 let bvBase = fail, bvPass = pass
 // 进程内权限请求 gate：preflight=false 只请求一次；preflight=true 不请求。
 var requestGate = ScreenCapturePermissionRequestGate()
@@ -806,23 +1467,42 @@ check("T-bv0b preflight=false重复检查不再请求", !requestGate.shouldReque
 var grantedGate = ScreenCapturePermissionRequestGate()
 check("T-bv0c preflight=true不请求", !grantedGate.shouldRequest(preflightGranted: true), "")
 check("T-bv0d preflight后续false仍可首次请求", grantedGate.shouldRequest(preflightGranted: false), "")
-// 实测基线（同窗口 345×64 真实对照）
-let collapsedS = BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080)
-let expandedS = BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
-let midS = BubbleAlphaStats(nonTransparentRatio: 0.004, bboxRatio: 0.007)
-check("T-bv1 collapsed→hidden", BubbleVisibilityClassifier.classify(stats: collapsedS, previous: .visible) == .hidden, "")
-check("T-bv2 expanded→visible", BubbleVisibilityClassifier.classify(stats: expandedS, previous: .hidden) == .visible, "")
-check("T-bv3 中间滞回→保持visible", BubbleVisibilityClassifier.classify(stats: midS, previous: .visible) == .visible, "")
-check("T-bv4 中间滞回→保持hidden", BubbleVisibilityClassifier.classify(stats: midS, previous: .hidden) == .hidden, "")
-check("T-bv5 nil stats→visible(capture失败/SC缺失保守避让)",
-      BubbleVisibilityClassifier.classify(stats: nil, previous: .visible) == .visible, "")
-// P1 nil 保守语义（README: capture failure conservatively avoids）：
+// 噪声下限现场校准（2026-08-24 像素级重测）：宿主收起后 ACT 容器仅剩 39-57 个非透明
+// 像素的不可见小点（6-7px 宽、窗口内 y[21,28]，截屏放大肉眼不可见）；控制按钮出现时
+// 实测 189-194px。minContentPixels=80（上 margin 57<80、下 margin 80<189，双向 ≥40% 余量）。
+// 旧阈值 3 基于“25/34px 可见横条”旧测量，已被该现场证据取代：低于 80 → hidden。
+let collapsedS = BubbleAlphaStats(nonTransparentPixelCount: 41, contentBottom: 28)
+let expandedS = BubbleAlphaStats(nonTransparentPixelCount: 189, contentBottom: 53)
+let noiseS = BubbleAlphaStats(nonTransparentPixelCount: 2, contentBottom: 21)
+let floorS = BubbleAlphaStats(nonTransparentPixelCount: 80, contentBottom: 21)
+let bv1Obs = BubbleVisibilityClassifier.classify(stats: collapsedS)
+check("T-bv1 收起噪声点(41px<80)→hidden(2026-08-24现场校准)",
+      bv1Obs.visibility == .hidden && bv1Obs.contentBottom == nil, "")
+let bv2Obs = BubbleVisibilityClassifier.classify(stats: expandedS)
+check("T-bv2 expanded(189px)→visible+内容底53",
+      bv2Obs.visibility == .visible && bv2Obs.contentBottom == 53, "")
+check("T-bv3 低于噪声下限(2px)→hidden(无滞回,不沿用previous)",
+      BubbleVisibilityClassifier.classify(stats: noiseS).visibility == .hidden, "")
+check("T-bv4 恰达噪声下限(80px)→visible(边界)",
+      BubbleVisibilityClassifier.classify(stats: floorS).visibility == .visible, "")
+check("T-bv4b 校准边界:噪声上margin 57px→hidden,控制按钮189px→visible",
+      BubbleVisibilityClassifier.classify(
+        stats: BubbleAlphaStats(nonTransparentPixelCount: 57, contentBottom: 28)).visibility == .hidden
+        && BubbleVisibilityClassifier.classify(
+          stats: BubbleAlphaStats(nonTransparentPixelCount: 189, contentBottom: 38)).visibility == .visible,
+      "")
+// P1 unavailable 保守语义（README: capture failure conservatively avoids）：
 // 当前仍存在的气泡，SC 捕获失败（macOS13/TCC 抖动/窗口刚注册未进 SC content）
-// 必须保守判 visible（当障碍避让），不能因 capture nil 当成收起导致底座重叠气泡。
-check("T-bv5b nil stats(previous hidden)→visible(保守避让,不沿用previous)",
-      BubbleVisibilityClassifier.classify(stats: nil, previous: .hidden) == .visible, "")
-check("T-bv5c nil stats(previous visible)→visible(保守避让)",
-      BubbleVisibilityClassifier.classify(stats: nil, previous: .visible) == .visible, "")
+// 必须保守判 visible 且无内容底边（整窗避让），不能因捕获失败当成收起导致底座重叠气泡。
+let bv5Obs = BubbleVisibilityClassifier.classify(outcome: .unavailable, hasSuccessfulObservation: true)
+check("T-bv5 unavailable(已成功观察过)→保守visible无内容底(整窗避让)",
+      bv5Obs.visibility == .visible && bv5Obs.contentBottom == nil, "")
+let bv5bObs = BubbleVisibilityClassifier.classify(outcome: .unavailable, hasSuccessfulObservation: false)
+check("T-bv5b unavailable(从未观察)→保守visible",
+      bv5bObs.visibility == .visible && bv5bObs.contentBottom == nil, "")
+let bv5cObs = BubbleVisibilityClassifier.classify(outcome: .targetMissing, hasSuccessfulObservation: false)
+check("T-bv5c 首次观察即targetMissing→保守visible",
+      bv5cObs.visibility == .visible, "")
 
 // 调度（isDue + single-flight + reset）—— 经 lock 访问
 let probe = BubbleVisibilityProbe(monotonicNow: { 1000 })
@@ -841,7 +1521,10 @@ probe.lock.withLock { $0.inFlight = true }
 check("T-bv9 single-flight→false", !probe.isDue(1001), "")
 probe.reset()
 check("T-bv10 reset不清inFlight(旧Task负责)", probe.lock.withLock { $0.inFlight }, "")
-probe.lock.withLock { $0.inFlight = false; $0.cached = [CGWindowID(1): .visible] }
+probe.lock.withLock {
+    $0.inFlight = false
+    $0.cached = [CGWindowID(1): BubbleObservation(visibility: .visible, contentBottom: nil)]
+}
 probe.reset()
 check("T-bv11 reset→cached空(inFlight不变)", probe.lock.withLock { $0.cached.isEmpty && !$0.inFlight }, "")
 probe.lock.withLock { $0.inFlight = false }
@@ -849,10 +1532,8 @@ check("T-bv12 wid不在当前候选集→hidden(当前帧失效)", probe.visibil
 
 // 异步集成（fake capturer + RunLoop pump）：pending capture 完成 → cached 更新
 var fakeTime: TimeInterval = 2000
-let fakeCollapsed: BubbleCapturer = { _ in
-    .stats(BubbleAlphaStats(nonTransparentRatio: 34.0/22080, bboxRatio: 48.0/22080))
-}
-let asyncProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: fakeCollapsed)
+let fakeHidden: BubbleCapturer = { _ in .stats(noiseS) }
+let asyncProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: fakeHidden)
 let c1 = mkw(100, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
 asyncProbe.probe(candidates: [c1])
 check("T-bv13 probe后inFlight=true", asyncProbe.lock.withLock { $0.inFlight }, "")
@@ -866,7 +1547,7 @@ check("T-bv14 pending完成→cached(hidden)+inFlight=false",
 // strict single-flight：reset 期间新 probe 不启动（inFlight 由旧 Task 清）
 let slowCap: BubbleCapturer = { _ in
     try? await Task.sleep(nanoseconds: 300_000_000)  // 300ms（async-safe，无 semaphore）
-    return .stats(BubbleAlphaStats(nonTransparentRatio: 0.001, bboxRatio: 0.001))
+    return .stats(noiseS)
 }
 fakeTime = 3000
 let concProbe = BubbleVisibilityProbe(monotonicNow: { fakeTime }, canCapture: { true }, capturer: slowCap)
@@ -937,7 +1618,10 @@ check("T-bv31 空闲态空probe不递增generation", genAfter == genBefore, "bef
 
 // T-bv32: cached 有值时 probe([]) → 仍清 cached + 递增 generation（旧结果失效）
 let cacheProbe = BubbleVisibilityProbe(monotonicNow: { 6000 })
-cacheProbe.lock.withLock { $0.cached = [CGWindowID(7): .visible]; $0.inFlight = false }
+cacheProbe.lock.withLock {
+    $0.cached = [CGWindowID(7): BubbleObservation(visibility: .visible, contentBottom: nil)]
+    $0.inFlight = false
+}
 let genCB = cacheProbe.lock.withLock { $0.generation }
 cacheProbe.probe(candidates: [])
 let genCA = cacheProbe.lock.withLock { $0.generation }
@@ -949,7 +1633,7 @@ check("T-bv32 cached非空时probe([])→递增generation+清cached",
 // 真机语义：消息框收起后窗口可能从 obstaclesNear 消失，底座必须复位到宠物下方，
 // 而非沿用上一帧偏移。当前帧候选消失 = 状态立即失效，禁止残留 visible 缓存。
 let vanishCap: BubbleCapturer = { _ in
-    .stats(BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080))   // expanded → visible
+    .stats(expandedS)   // expanded → visible
 }
 let vanishProbe = BubbleVisibilityProbe(
     monotonicNow: { 7000 }, canCapture: { true }, capturer: vanishCap
@@ -972,9 +1656,7 @@ check("T-bv33b 候选消失→旧wid状态立即失效(非visible)",
 // capture 失败时底座必须继续避让，不能重叠气泡。
 // 收起态的正确复位由 wid 从候选集消失驱动（见 T-bv33），不由 capture nil 驱动。
 var vanishTime: TimeInterval = 8000
-let vanishStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(
-    BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080)
-))
+let vanishStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(expandedS))
 let nilCap: BubbleCapturer = { _ in vanishStats.withLock { $0 } }
 let nilProbe = BubbleVisibilityProbe(monotonicNow: { vanishTime }, canCapture: { true }, capturer: nilCap)
 let nilCand = mkw(310, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
@@ -1038,7 +1720,7 @@ check("T-bv35b 收起→visibleObstacles空→dock复位到281(禁用上帧偏�
 // 即使 cached[A] 仍残留 visible，也不能继续作为障碍（回归A复位由候选消失驱动）。
 let p1capTime: TimeInterval = 9000
 let p1Expanded: BubbleCapturer = { _ in
-    .stats(BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080))   // expanded → visible
+    .stats(expandedS)   // expanded → visible
 }
 let p1Probe = BubbleVisibilityProbe(monotonicNow: { p1capTime }, canCapture: { true }, capturer: p1Expanded)
 let p1Cand = mkw(400, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
@@ -1052,7 +1734,7 @@ check("T-bv36a 前置: 候选A expanded→cached visible",
 // 确认 cached 残留 visible（这是要被 knownWids 失效机制屏蔽的旧结果）
 let p1CachedResidue = p1Probe.lock.withLock { $0.cached[CGWindowID(400)] }
 check("T-bv36b cached[A]残留visible(旧结果存在,待失效屏蔽)",
-      p1CachedResidue == .visible, "cached[A]=\(String(describing: p1CachedResidue))")
+      p1CachedResidue?.visibility == .visible, "cached[A]=\(String(describing: p1CachedResidue))")
 // 帧2 候选 A 从集合消失 → knownWids 更新 → visibility(A) 必须 hidden（不被残留 cache 继续当障碍）
 p1Probe.probe(candidates: [])
 check("T-bv36c 候选A消失→visibility立即hidden(旧cache不继续成为障碍)",
@@ -1065,7 +1747,7 @@ check("T-bv36c 候选A消失→visibility立即hidden(旧cache不继续成为障
 let p1Time2: TimeInterval = 9100
 let p1SlowCap: BubbleCapturer = { _ in
     try? await Task.sleep(nanoseconds: 200_000_000)
-    return .stats(BubbleAlphaStats(nonTransparentRatio: 189.0/22080, bboxRatio: 390.0/22080))   // visible
+    return .stats(expandedS)   // visible
 }
 let p1Probe2 = BubbleVisibilityProbe(monotonicNow: { p1Time2 }, canCapture: { true }, capturer: p1SlowCap)
 let p1Cand2 = mkw(401, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64))
@@ -1733,7 +2415,7 @@ check("T-bv39b 生产布局链初始visible→实际panel避让frame",
         && stableTimerBeforeWake?.repeats == false,
       "frame=\(transitionDock.frame) expected=\(transitionAvoidAppKitFrame) obstacles=\(transitionObstacleCounts.withLock { $0 })")
 
-transitionStats.withLock { $0 = .stats(collapsedS) }
+transitionStats.withLock { $0 = .stats(noiseS) }
 transitionTime = 11_001
 transitionProbe.probe(candidates: [transitionCandidate])
 let transitionPump1 = Date().addingTimeInterval(5)
@@ -2323,10 +3005,12 @@ final class AsyncCaptureEntryGate: @unchecked Sendable {
     }
 }
 
-// T-re10 (review r1 P1 修复 / v7 P2-2): in-flight identity replacement ——
+// T-re10 (review r1 P1 修复 / v7 P2-2): in-flight bounds-only move ——
 // capturer 进入后经 continuation gate 挂起（不阻塞 executor）；主线程 pump RunLoop
-// 直到 entered/calls/inFlight 状态确定，再注入 identity replacement 并断言
-// single-flight；手工 release 恰好 resume 一次后收尾。不使用固定 sleep 或时序巧合。
+// 直到 entered/calls/inFlight 状态确定，再注入同 WID 纯几何平移（bounds 345→345.5，
+// 粘性语义：cache 保留、generation 不变）并断言 single-flight；手工 release 恰好
+// resume 一次后收尾。stale 完成的拒绝由写入校验的 knownCandidates 精确不等保证
+//（generation 在纯几何路径不递增）。不使用固定 sleep 或时序巧合。
 var reITime: TimeInterval = 27_000
 let reIRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
     "pd-runtime-evidence-inflight-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
@@ -2355,7 +3039,7 @@ check("T-re10 前置 gate: capturer已进入且calls==1",
       },
       "calls=\(reICaptureCalls.withLock { $0 })")
 reITime = 27_000.01
-reIProbe.probe(candidates: [reIJittered]) // in-flight 期间 identity 替换（single-flight 合并）
+reIProbe.probe(candidates: [reIJittered]) // in-flight 期间 bounds-only 平移（粘性保留 cache；single-flight 合并）
 let reIAfterReplacement = reICollector.snapshot()
 check("T-re10a in-flight jitter→identity计1且不启动第二捕获",
       (reIAfterReplacement["identityChangeCount"] as? Int) == 2
@@ -2373,7 +3057,7 @@ check("T-re10b stale完成被拒绝→outcome/visibility/wake均不计入",
       "stats=\(reIAfterStale["captureStatsCount"] ?? -1) "
         + "visible=\(reIAfterStale["visibilityVisibleCount"] ?? -1) "
         + "wake=\(reIAfterStale["wakeCallbackCount"] ?? -1)")
-reITime = 27_001   // 新 generation 下 due → 接受的捕获必须计数
+reITime = 27_001   // 同一 generation 下 due（knownCandidates 已更新为 jittered）→ 接受的捕获必须计数
 reIProbe.probe(candidates: [reIJittered])
 _ = waitPumpingMain { reIEntryGate.enteredCount == 2 && reICaptureCalls.withLock { $0 } == 2 }
 reIEntryGate.release()   // 释放第二段捕获
@@ -2654,16 +3338,1062 @@ let identitySeenOld = identityObserved.withLock { seen in
 }
 check("T-bv41c RED 同WID身份变化使旧in-flight结果失效",
       identityChanged
-        && identitySeenOld
-        && identityCaptureCalls.withLock { $0 } == 2
-        && identityProbe.visibility(for: identityReplacement.wid) == .visible
-        && identityCached == nil
-        && identityNotifications.withLock { $0 } == 0,
+      && identitySeenOld
+      && identityCaptureCalls.withLock { $0 } == 2
+      && identityProbe.visibility(for: identityReplacement.wid) == .visible
+      && identityCached == nil
+      && identityNotifications.withLock { $0 } == 0,
       "changed=\(identityChanged) seenOld=\(identitySeenOld) calls=\(identityCaptureCalls.withLock { $0 }) "
         + "visibility=\(identityProbe.visibility(for: identityReplacement.wid)) cached=\(String(describing: identityCached)) "
         + "notifications=\(identityNotifications.withLock { $0 })")
 
+// T-bv43 (拖动期间空白症状回归): 拖动时气泡窗口 bounds 逐 tick 平移/缩放，但 WID、owner、
+// title、layer、alpha、isOnscreen、sharingState 均不变。基线把每次 bounds 变化当作候选
+// identity 变化 → generation 递增 + cached/successfullyObservedWids 清空 → visibility(for:)
+// 对仍在 knownWids 中的 WID 回落默认 .visible（保守避让）→ dock 在整个拖动期间持续避让
+// 隐藏气泡 → 宠物与 dock 之间出现空白；拖动停止后 identity 稳定，下一次捕获（≤0.1s cadence
+// + 捕获耗时）才恢复，与用户观察的 ~0.3s 延迟吻合。
+// 修复合同：纯几何（仅 bounds）变化保留既有 cache 与成功观察集合（粘性），不递增 generation；
+// 真正身份变化（WID 集合或任一非 bounds 身份字段）维持现行 generation 递增 + 清空 + 保守
+// visible。写入校验保持现行严格语义：完成回调仍要求 generation 与 knownCandidates 完全
+// 一致，bounds 平移期间启动的旧捕获结果一律丢弃，绝不写入新几何；粘性只影响 cache 保留。
+// 权衡：拖动期间展开/收起的真实状态变化最迟在拖动结束后的下一次捕获收敛（≤0.2s），见
+// docs/architecture/dock-obstacle-avoidance.md「拖动期间的粘性可见性」。
+var dragTime: TimeInterval = 16_500
+let dragOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(noiseS))
+let dragWakes = OSAllocatedUnfairLock(initialState: 0)
+let dragCap: BubbleCapturer = { _ in dragOutcome.withLock { $0 } }
+let dragWid = CGWindowID(531)
+let dragStart = CGRect(x: 80, y: 280, width: 200, height: 54)
+let dragProbe = BubbleVisibilityProbe(
+    monotonicNow: { dragTime },
+    canCapture: { true },
+    capturer: dragCap,
+    onVisibilityChange: { dragWakes.withLock { $0 += 1 } }
+)
+dragProbe.probe(candidates: [mkw(531, layer: 3, dragStart)])
+_ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
+check("T-bv43a 前置: 拖动前噪声(无内容)捕获→hidden",
+      dragProbe.visibility(for: dragWid) == .hidden, "")
+
+/// 拖动序列：宠物每 tick 位移 (7,5) 带动气泡平移，中途叠加尺寸变化（复现 Activity Stack
+/// Backing 200x54→216x64 形态）；每步时间推进 < 0.1s cadence，避免与在途捕获交织。
+func bv43DragTicks(_ probe: BubbleVisibilityProbe, wid: UInt32, start: CGRect,
+                   ticks: Int, expected: BubbleVisibility) -> (stayed: Bool, finalBounds: CGRect) {
+    var stayed = true
+    var bounds = start
+    for index in 0..<ticks {
+        bounds.origin.x += 7
+        bounds.origin.y += 5
+        if index == 2 { bounds.size = CGSize(width: 216, height: 64) }
+        dragTime += 0.016
+        probe.probe(candidates: [mkw(wid, layer: 3, bounds)])
+        if probe.visibility(for: CGWindowID(wid)) != expected { stayed = false }
+    }
+    return (stayed, bounds)
+}
+
+let dragHiddenRun = bv43DragTicks(dragProbe, wid: 531, start: dragStart, ticks: 10, expected: .hidden)
+check("T-bv43b RED 拖动期间bounds逐tick平移→visibility保持拖动前hidden",
+      dragHiddenRun.stayed
+        && dragProbe.lock.withLock { $0.cached[dragWid]?.visibility } == .hidden,
+      "visibility=\(dragProbe.visibility(for: dragWid)) "
+        + "cached=\(String(describing: dragProbe.lock.withLock { $0.cached[dragWid] }))")
+
+let dragVisProbe = BubbleVisibilityProbe(
+    monotonicNow: { dragTime },
+    canCapture: { true },
+    capturer: { _ in .stats(expandedS) }
+)
+dragVisProbe.probe(candidates: [mkw(531, layer: 3, dragStart)])
+_ = waitPumpingMain { !dragVisProbe.lock.withLock { $0.inFlight } }
+let dragVisibleRun = bv43DragTicks(dragVisProbe, wid: 531, start: dragStart, ticks: 10, expected: .visible)
+check("T-bv43c 拖动期间visible同样保持（粘性对称）",
+      dragVisProbe.visibility(for: dragWid) == .visible && dragVisibleRun.stayed, "")
+
+// 纯几何拖动保留成功观察资格（successfullyObservedWids 粘性）：拖动结束后（identity 稳定）
+// 一次权威 targetMissing 仍判 hidden，与 T-bv39f 语义一致。
+_ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
+dragOutcome.withLock { $0 = .targetMissing }
+dragTime += 0.11
+dragProbe.probe(candidates: [mkw(531, layer: 3, dragHiddenRun.finalBounds)])
+_ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
+check("T-bv43d 纯几何拖动保留成功观察资格→targetMissing权威hidden",
+      dragProbe.visibility(for: dragWid) == .hidden, "")
+
+// 拖动结束后正常捕获刷新：hidden→visible 状态变化必须写回并唤醒一次布局。
+dragOutcome.withLock { $0 = .stats(expandedS) }
+let wakesBeforeRefresh = dragWakes.withLock { $0 }
+dragTime += 0.11
+dragProbe.probe(candidates: [mkw(531, layer: 3, dragHiddenRun.finalBounds)])
+_ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
+check("T-bv43f 拖动结束后捕获刷新hidden→visible并唤醒一次",
+      dragProbe.visibility(for: dragWid) == .visible
+        && dragWakes.withLock { $0 } == wakesBeforeRefresh + 1,
+      "visibility=\(dragProbe.visibility(for: dragWid)) wakes=\(dragWakes.withLock { $0 })")
+
+// 拖动中在途捕获（bounds 平移后释放）：写入校验按现行严格语义拒绝（knownCandidates 精确
+// 相等），粘性 cache 不被旧结果覆盖，也不因 single-flight 合并启动第二捕获。
+let inflightCalls = OSAllocatedUnfairLock(initialState: 0)
+let inflightGate = AsyncCaptureEntryGate()
+let inflightCap: BubbleCapturer = { _ in
+    inflightCalls.withLock { $0 += 1 }
+    await inflightGate.waitAfterEntry()
+    return .stats(noiseS)
+}
+let inflightProbe = BubbleVisibilityProbe(
+    monotonicNow: { dragTime }, canCapture: { true }, capturer: inflightCap)
+let inflightStable = mkw(537, layer: 3, dragStart)
+inflightProbe.probe(candidates: [inflightStable])
+let inflightEntered1 = waitPumpingMain {
+    inflightGate.enteredCount == 1 && inflightProbe.lock.withLock { $0.inFlight }
+}
+inflightGate.release()
+_ = waitPumpingMain { !inflightProbe.lock.withLock { $0.inFlight } }
+let inflightPreHidden = inflightProbe.visibility(for: inflightStable.wid) == .hidden
+dragTime += 0.11
+let inflightMoved = CGRect(x: dragStart.origin.x + 7, y: dragStart.origin.y + 5,
+                           width: dragStart.width, height: dragStart.height)
+inflightProbe.probe(candidates: [mkw(537, layer: 3, inflightMoved)])
+let inflightEntered2 = waitPumpingMain {
+    inflightGate.enteredCount == 2 && inflightProbe.lock.withLock { $0.inFlight }
+}
+dragTime += 0.016
+inflightProbe.probe(candidates: [mkw(537, layer: 3, inflightMoved.offsetBy(dx: 7, dy: 5))])
+inflightGate.release()
+_ = waitPumpingMain { !inflightProbe.lock.withLock { $0.inFlight } }
+check("T-bv43g 拖动中in-flight旧结果拒绝写入且cache保持粘性hidden",
+      inflightEntered1 && inflightPreHidden && inflightEntered2
+        && inflightCalls.withLock { $0 } == 2
+        && inflightProbe.lock.withLock { $0.cached[inflightStable.wid]?.visibility } == .hidden
+        && inflightProbe.visibility(for: inflightStable.wid) == .hidden,
+      "entered1=\(inflightEntered1) preHidden=\(inflightPreHidden) entered2=\(inflightEntered2) "
+        + "calls=\(inflightCalls.withLock { $0 }) "
+        + "cached=\(String(describing: inflightProbe.lock.withLock { $0.cached[inflightStable.wid] }))")
+
+// 真正身份变化（WID 集合变化 / owner 变化 / layer 变化）→ 维持现行清空 + 保守 visible，
+// 且成功观察资格同步清空（变化后首次 targetMissing 仍保守 visible，T-bv39f3 语义）。
+let idChangeOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(noiseS))
+let idChangeCap: BubbleCapturer = { _ in idChangeOutcome.withLock { $0 } }
+func bv43MakeIdentityProbe() -> BubbleVisibilityProbe {
+    BubbleVisibilityProbe(monotonicNow: { dragTime }, canCapture: { true }, capturer: idChangeCap)
+}
+
+let ownerProbe = bv43MakeIdentityProbe()
+let ownerStable = mkw(534, layer: 3, dragStart)
+ownerProbe.probe(candidates: [ownerStable])
+_ = waitPumpingMain { !ownerProbe.lock.withLock { $0.inFlight } }
+let ownerHiddenEstablished = ownerProbe.visibility(for: ownerStable.wid) == .hidden
+let ownerChanged = WinCandidate(
+    wid: ownerStable.wid, ownerPID: ownerStable.ownerPID, ownerName: "Other", title: "",
+    layer: 3, alpha: 1.0, isOnscreen: true, sharingState: 1, bounds: ownerStable.bounds)
+dragTime += 0.016   // 未到 cadence：本 probe 只做身份切换+清 cache，不启动捕获
+ownerProbe.probe(candidates: [ownerChanged])
+let ownerClearedToVisible = ownerProbe.visibility(for: ownerChanged.wid) == .visible
+idChangeOutcome.withLock { $0 = .targetMissing }
+dragTime += 0.11
+ownerProbe.probe(candidates: [ownerChanged])
+_ = waitPumpingMain { !ownerProbe.lock.withLock { $0.inFlight } }
+check("T-bv43h1 owner变化→清cache回保守visible且观察资格清空",
+      ownerHiddenEstablished && ownerClearedToVisible
+        && ownerProbe.visibility(for: ownerChanged.wid) == .visible,
+      "established=\(ownerHiddenEstablished) cleared=\(ownerClearedToVisible) "
+        + "afterMissing=\(ownerProbe.visibility(for: ownerChanged.wid))")
+idChangeOutcome.withLock { $0 = .stats(noiseS) }
+
+let layerProbe = bv43MakeIdentityProbe()
+let layerStable = mkw(535, layer: 3, dragStart)
+layerProbe.probe(candidates: [layerStable])
+_ = waitPumpingMain { !layerProbe.lock.withLock { $0.inFlight } }
+let layerHiddenEstablished = layerProbe.visibility(for: layerStable.wid) == .hidden
+dragTime += 0.016   // 未到 cadence：与 h1 相同的确定性路径——身份切换+清 cache，不启动
+                    // 新捕获（0.11 会触发捕获，其后台完成与下方断言存在竞态，历史上偶发红）
+layerProbe.probe(candidates: [mkw(535, layer: 4, dragStart)])
+check("T-bv43h2 layer变化→清cache回保守visible",
+      layerHiddenEstablished && layerProbe.visibility(for: layerStable.wid) == .visible,
+      "established=\(layerHiddenEstablished) "
+        + "visibility=\(layerProbe.visibility(for: layerStable.wid))")
+
+let widProbe = bv43MakeIdentityProbe()
+let widStable = mkw(536, layer: 3, dragStart)
+widProbe.probe(candidates: [widStable])
+_ = waitPumpingMain { !widProbe.lock.withLock { $0.inFlight } }
+let widHiddenEstablished = widProbe.visibility(for: widStable.wid) == .hidden
+dragTime += 0.016   // 未到 cadence：与 h1/h2 相同的确定性路径——WID 集合变化的同步保守
+                    // 默认不需要新捕获（0.11 会触发捕获，其后台完成与下方断言存在竞态）
+widProbe.probe(candidates: [mkw(538, layer: 3, dragStart)])
+check("T-bv43h3 WID集合变化→新wid保守visible",
+      widHiddenEstablished && widProbe.visibility(for: CGWindowID(538)) == .visible,
+      "established=\(widHiddenEstablished) newWid=\(widProbe.visibility(for: CGWindowID(538)))")
+
+// T-bv44 (拖动期间空白·生产组合回归): 拖动序列穿过真实生产链
+// FollowLayoutPass.placeDock → bubbleProbe.probe/visibility → frameSink → 真实 DockPanel.placeBelow。
+// 气泡已捕获为 hidden 时，拖动期间（宠物与气泡 bounds 逐 tick 平移）dock 必须保持无障碍
+// 基础位，不被默认保守 visible 的隐藏气泡窗口推开；拖动结束后第一次真实捕获刷新
+// （hidden→visible）仍经 onVisibilityChange → scheduler coalescer → 完整 tick 写回避让 frame。
+var bv44Time: TimeInterval = 18_000
+var bv44Clock: TimeInterval = 0
+let bv44Dock = DockPanel()
+let bv44Outcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(noiseS))
+let bv44Cap: BubbleCapturer = { _ in bv44Outcome.withLock { $0 } }
+let bv44Ticks = OSAllocatedUnfairLock(initialState: 0)
+let bv44ObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+var bv44Timers: [TestFollowTickTimer] = []
+var bv44PetBounds = petForCollapse
+var bv44BubbleBounds = bubbleForCollapse
+func bv44BaseFrame() -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(
+        x: bv44PetBounds.origin.x + (bv44PetBounds.width - 200) / 2,
+        y: bv44PetBounds.maxY + 2, width: 200, height: 48))
+}
+func bv44AvoidFrame() -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(
+        x: bv44PetBounds.origin.x + (bv44PetBounds.width - 200) / 2,
+        y: bv44BubbleBounds.maxY + 2, width: 200, height: 48))
+}
+var bv44Probe: BubbleVisibilityProbe!
+let bv44Scheduler = FollowTickScheduler(
+    runTick: {
+        bv44Ticks.withLock { $0 += 1 }
+        let mascot = mkw(543, layer: 2, bv44PetBounds, title: "Codex Pet Mascot Effect")
+        let bubble = mkw(541, layer: 3, bv44BubbleBounds)
+        let placed = FollowLayoutPass.placeDock(
+            mascot: mascot,
+            candidates: [mascot, bubble],
+            bubbleProbe: bv44Probe,
+            frameSink: { pet, obstacles in
+                bv44ObstacleCounts.withLock { $0.append(obstacles.count) }
+                return bv44Dock.placeBelow(
+                    petQuartzRect: pet,
+                    avoiding: obstacles,
+                    visibleScreen: nil,
+                    movementChanged: true,
+                    monotonicNow: bv44Time
+                )
+            }
+        )
+        return placed ? .stable : .hidden
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { bv44Clock },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        bv44Timers.append(timer)
+        return timer
+    }
+)
+bv44Probe = BubbleVisibilityProbe(
+    monotonicNow: { bv44Time },
+    canCapture: { true },
+    capturer: bv44Cap,
+    onVisibilityChange: bv44Scheduler.visibilityChangeCallback
+)
+bv44Probe.probe(candidates: [mkw(541, layer: 3, bv44BubbleBounds)])
+_ = waitPumpingMain { !bv44Probe.lock.withLock { $0.inFlight } }
+bv44Scheduler.start()
+bv44Scheduler.requestWake()
+_ = waitPumpingMain { bv44Ticks.withLock { $0 } == 1 }
+let bv44StableTimerBeforeWake = bv44Timers.last
+check("T-bv44a 前置: 拖动前hidden→实际panel基础位+未到期stable one-shot",
+      dockFrameNear(bv44Dock.frame, bv44BaseFrame())
+        && bv44ObstacleCounts.withLock { $0 } == [0]
+        && bv44StableTimerBeforeWake?.repeats == false,
+      "frame=\(bv44Dock.frame) expected=\(bv44BaseFrame()) "
+        + "obstacles=\(bv44ObstacleCounts.withLock { $0 })")
+
+var bv44DragFramesOK = true
+for _ in 0..<8 {
+    bv44PetBounds.origin.x += 7
+    bv44PetBounds.origin.y += 5
+    bv44BubbleBounds.origin.x += 7
+    bv44BubbleBounds.origin.y += 5
+    bv44Time += 0.016
+    bv44Scheduler.requestWake()
+    let expectedTicks = bv44Ticks.withLock { $0 } + 1
+    _ = waitPumpingMain { bv44Ticks.withLock { $0 } == expectedTicks }
+    if !dockFrameNear(bv44Dock.frame, bv44BaseFrame()) { bv44DragFramesOK = false }
+}
+check("T-bv44b RED 拖动期间dock保持无障碍基础位(隐藏气泡不推开)",
+      bv44DragFramesOK && bv44ObstacleCounts.withLock { $0 } == Array(repeating: 0, count: 9),
+      "framesOK=\(bv44DragFramesOK) obstacles=\(bv44ObstacleCounts.withLock { $0 }) "
+        + "frame=\(bv44Dock.frame) expected=\(bv44BaseFrame())")
+
+bv44Outcome.withLock { $0 = .stats(expandedS) }
+bv44Time += 0.11
+bv44Scheduler.requestWake()
+let bv44RefreshTick = bv44Ticks.withLock { $0 } + 1
+_ = waitPumpingMain { bv44Ticks.withLock { $0 } == bv44RefreshTick }
+_ = waitPumpingMain { bv44Ticks.withLock { $0 } == bv44RefreshTick + 1 }
+check("T-bv44c 拖动结束后真实捕获刷新→wake→完整tick→实际panel避让frame",
+      bv44ObstacleCounts.withLock { $0 }.last == 1
+        && dockFrameNear(bv44Dock.frame, bv44AvoidFrame()),
+      "obstacles=\(bv44ObstacleCounts.withLock { $0 }) frame=\(bv44Dock.frame) "
+        + "expected=\(bv44AvoidFrame())")
+bv44Scheduler.stop()
+
+// T-bv45 (气泡障碍按可见内容 bbox 避让·现场形态回归): 宿主状态卡容器窗口 200x54，
+// 可见内容只占窗口内 y[15,21]，底部 32px 全透明。内容量按 2026-08-24 校准取
+// 控制按钮级（194px ≥ minContentPixels 80）；25px 旧测量已被判为不可见噪声。
+// 旧 open/close 比例阈值把该形态滞回成 visible→整窗避让（多让 32px 透明尾巴，图2 症状）
+// 或 hidden→遮住横条；新语义：有内容（非透明像素 ≥80）→ 障碍高度=contentBottom+1，
+// dock 紧贴内容底+gap；无内容→不避让；保守 visible（unavailable）→ 整窗 bounds。
+let bv45Base = fail
+let bv45Pet = CGRect(x: 362, y: 382, width: 172, height: 62)      // maxY=444
+let bv45Bubble = CGRect(x: 376, y: 446, width: 200, height: 54)    // 现场形态窗口
+let bv45BarStats = BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 21)
+var bv45Time: TimeInterval = 19_000
+func bv45MakeProbe(
+    outcome: BubbleCaptureOutcome,
+    onVisibilityChange: @escaping @Sendable () -> Void = {}
+) -> BubbleVisibilityProbe {
+    let locked = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: outcome)
+    return BubbleVisibilityProbe(
+        monotonicNow: { bv45Time }, canCapture: { true },
+        capturer: { _ in locked.withLock { $0 } },
+        onVisibilityChange: onVisibilityChange)
+}
+func bv45LayoutObstacles(_ probe: BubbleVisibilityProbe, bubble: CGRect) -> [CGRect] {
+    var obstacles: [CGRect] = []
+    _ = FollowLayoutPass.placeDock(
+        mascot: mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+        candidates: [
+            mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+            mkw(544, layer: 3, bubble)
+        ],
+        bubbleProbe: probe,
+        frameSink: { _, obs in obstacles = obs; return true })
+    return obstacles
+}
+
+// (a) 小横条：障碍高度 = contentBottom+1 = 22，水平仍整窗 bounds
+let bv45BarProbe = bv45MakeProbe(outcome: .stats(bv45BarStats))
+bv45BarProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45BarProbe.lock.withLock { $0.inFlight } }
+let bv45BarObstacles = bv45LayoutObstacles(bv45BarProbe, bubble: bv45Bubble)
+check("T-bv45a 内容条(194px,y15-21)→障碍高度22(contentBottom+1),水平仍整窗",
+      bv45BarObstacles == [CGRect(x: 376, y: 446, width: 200, height: 22)],
+      "obstacles=\(bv45BarObstacles)")
+
+// (b) 展开大卡：内容底达窗口底（53）→ 障碍高度 = 54（整窗，语义与旧行为一致）
+let bv45ExpandedProbe = bv45MakeProbe(outcome: .stats(expandedS))
+bv45ExpandedProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45ExpandedProbe.lock.withLock { $0.inFlight } }
+let bv45ExpandedObstacles = bv45LayoutObstacles(bv45ExpandedProbe, bubble: bv45Bubble)
+check("T-bv45b 展开大卡(内容底53)→障碍高度54(contentBottom+1=整窗)",
+      bv45ExpandedObstacles == [CGRect(x: 376, y: 446, width: 200, height: 54)],
+      "obstacles=\(bv45ExpandedObstacles)")
+
+// (c) 噪声（2px）与完全透明 → 无障碍
+let bv45NoiseProbe = bv45MakeProbe(outcome: .stats(noiseS))
+bv45NoiseProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45NoiseProbe.lock.withLock { $0.inFlight } }
+check("T-bv45c 2px噪声(低于下限)→无障碍",
+      bv45LayoutObstacles(bv45NoiseProbe, bubble: bv45Bubble).isEmpty, "")
+let bv45TransparentProbe = bv45MakeProbe(
+    outcome: .stats(BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1)))
+bv45TransparentProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45TransparentProbe.lock.withLock { $0.inFlight } }
+check("T-bv45d 完全透明→无障碍",
+      bv45LayoutObstacles(bv45TransparentProbe, bubble: bv45Bubble).isEmpty, "")
+
+// (d) unavailable → 保守 visible 且无内容底边 → 整窗 bounds 避让（不回归）
+let bv45UnavailableProbe = bv45MakeProbe(outcome: .unavailable)
+bv45UnavailableProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45UnavailableProbe.lock.withLock { $0.inFlight } }
+let bv45UnavailableObstacles = bv45LayoutObstacles(bv45UnavailableProbe, bubble: bv45Bubble)
+check("T-bv45e unavailable→保守visible整窗障碍54(无内容信息)",
+      bv45UnavailableObstacles == [CGRect(x: 376, y: 446, width: 200, height: 54)]
+        && bv45UnavailableProbe.observation(for: CGWindowID(544)).contentBottom == nil,
+      "obstacles=\(bv45UnavailableObstacles)")
+
+// (e) 生产组合：FollowLayoutPass → 真实 DockPanel.placeBelow → 实际 frame 紧贴内容底+2。
+// dock x=348（pet 中心），基础 y=446 与横条障碍(446..468)重叠 → 避让到 470；
+// 整窗避让则会到 502（用户看到的图2 多余 32px 空白）。
+let bv45Dock = DockPanel()
+let bv45ProdProbe = bv45MakeProbe(outcome: .stats(bv45BarStats))
+bv45ProdProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45ProdProbe.lock.withLock { $0.inFlight } }
+let bv45ProdPlaced = FollowLayoutPass.placeDock(
+    mascot: mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+    candidates: [
+        mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+        mkw(544, layer: 3, bv45Bubble)
+    ],
+    bubbleProbe: bv45ProdProbe,
+    frameSink: { pet, obstacles in
+        bv45Dock.placeBelow(
+            petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+            movementChanged: false, monotonicNow: bv45Time)
+    })
+let bv45ContentAvoidFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: 348, y: 470, width: 200, height: 48))
+check("T-bv45f 横条→实际panel frame紧贴内容底+2(y=470,非整窗502)",
+      bv45ProdPlaced && dockFrameNear(bv45Dock.frame, bv45ContentAvoidFrame),
+      "frame=\(bv45Dock.frame) expected=\(bv45ContentAvoidFrame)")
+
+// (f) 无内容（噪声）→ 实际 panel 回基础位（pet 底+2 = 446）
+let bv45BaseDock = DockPanel()
+let bv45BaseProbe = bv45MakeProbe(outcome: .stats(noiseS))
+bv45BaseProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45BaseProbe.lock.withLock { $0.inFlight } }
+let bv45BasePlaced = FollowLayoutPass.placeDock(
+    mascot: mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+    candidates: [
+        mkw(545, layer: 2, bv45Pet, title: "Codex Pet Mascot Effect"),
+        mkw(544, layer: 3, bv45Bubble)
+    ],
+    bubbleProbe: bv45BaseProbe,
+    frameSink: { pet, obstacles in
+        bv45BaseDock.placeBelow(
+            petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+            movementChanged: false, monotonicNow: bv45Time)
+    })
+let bv45BaseFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: 348, y: 446, width: 200, height: 48))
+check("T-bv45g 无内容→实际panel回基础位(pet底+2)",
+      bv45BasePlaced && dockFrameNear(bv45BaseDock.frame, bv45BaseFrame),
+      "frame=\(bv45BaseDock.frame) expected=\(bv45BaseFrame)")
+
+// (g) 拖动粘性：bounds 纯平移期间 cache 的 contentBottom（窗口内相对坐标）继续有效，
+// 障碍矩形随窗口平移且高度保持 22。
+var bv45DragBubble = bv45Bubble
+var bv45DragObstaclesOK = true
+let bv45DragProbe = bv45MakeProbe(outcome: .stats(bv45BarStats))
+bv45DragProbe.probe(candidates: [mkw(544, layer: 3, bv45DragBubble)])
+_ = waitPumpingMain { !bv45DragProbe.lock.withLock { $0.inFlight } }
+for _ in 0..<4 {
+    bv45DragBubble.origin.x += 7
+    bv45DragBubble.origin.y += 5
+    bv45Time += 0.016
+    let expected = CGRect(x: bv45DragBubble.minX, y: bv45DragBubble.minY,
+                          width: bv45DragBubble.width, height: 22)
+    if bv45LayoutObstacles(bv45DragProbe, bubble: bv45DragBubble) != [expected] {
+        bv45DragObstaclesOK = false
+    }
+}
+check("T-bv45h 拖动平移期间contentBottom粘性保留→障碍矩形随窗口平移(高度22)",
+      bv45DragObstaclesOK
+        && bv45DragProbe.observation(for: CGWindowID(544)).contentBottom == 21,
+      "obstaclesOK=\(bv45DragObstaclesOK)")
+
+// (h) wake 语义保持：只有可见性状态变化唤醒；同一 probe 的内容底变化（visible→visible）
+// 不额外唤醒，由既有 0.1s cadence 的下一次完整 tick 应用。
+let bv45Wakes = OSAllocatedUnfairLock(initialState: 0)
+let bv45WakeStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(bv45BarStats))
+let bv45WakeProbe = BubbleVisibilityProbe(
+    monotonicNow: { bv45Time }, canCapture: { true },
+    capturer: { _ in bv45WakeStats.withLock { $0 } },
+    onVisibilityChange: { bv45Wakes.withLock { $0 += 1 } })
+bv45WakeProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45WakeProbe.lock.withLock { $0.inFlight } }
+let bv45WakesAfterBar = bv45Wakes.withLock { $0 }
+let bv45BottomAfterBar = bv45WakeProbe.observation(for: CGWindowID(544)).contentBottom
+// 同一 probe：cache 已写入 visible/21，0.1s cadence 后二次捕获内容底 53（visible→visible）
+bv45WakeStats.withLock { $0 = .stats(expandedS) }
+bv45Time += 0.11
+bv45WakeProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45WakeProbe.lock.withLock { $0.inFlight } }
+check("T-bv45i 同probe内容底21→53(visible→visible)不wake且观察更新",
+      bv45WakesAfterBar == 0 && bv45BottomAfterBar == 21
+        && bv45Wakes.withLock { $0 } == 0
+        && bv45WakeProbe.observation(for: CGWindowID(544)).visibility == .visible
+        && bv45WakeProbe.observation(for: CGWindowID(544)).contentBottom == 53,
+      "afterBar=\(bv45WakesAfterBar) bottomAfterBar=\(String(describing: bv45BottomAfterBar)) "
+        + "wakes=\(bv45Wakes.withLock { $0 })")
+// 随后无内容（hidden 状态变化）→ 恰一次唤醒
+bv45Time += 0.11
+let bv45WakeHide = bv45MakeProbe(
+    outcome: .stats(noiseS),
+    onVisibilityChange: { bv45Wakes.withLock { $0 += 1 } })
+bv45WakeHide.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
+_ = waitPumpingMain { !bv45WakeHide.lock.withLock { $0.inFlight } }
+check("T-bv45j hidden状态变化→恰一次wake(状态唤醒语义保持)",
+      bv45Wakes.withLock { $0 } == 1
+        && bv45WakeHide.observation(for: CGWindowID(544)).visibility == .hidden,
+      "wakes=\(bv45Wakes.withLock { $0 })")
+
+// (i) 粘性缩窗 cap：障碍高度 = min(contentBottom+1, bounds.height)。粘性期间窗口纯几何
+// 收高（216x64 → 200x54），stale contentBottom+1(64) 超过当前高度 → cap 到 54，
+// 不产生越界/超高矩形；等值边界（contentBottom+1 == height）已由 T-bv45b 覆盖。
+let bv45ShrinkProbe = bv45MakeProbe(
+    outcome: .stats(BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 63)))
+let bv45ShrinkWindow216 = CGRect(x: 376, y: 446, width: 216, height: 64)
+bv45ShrinkProbe.probe(candidates: [mkw(544, layer: 3, bv45ShrinkWindow216)])
+_ = waitPumpingMain { !bv45ShrinkProbe.lock.withLock { $0.inFlight } }
+bv45Time += 0.016   // 0.1s cadence 内不重捕获：布局消费 stale 粘性 cache
+let bv45ShrinkWindow54 = CGRect(x: 376, y: 446, width: 200, height: 54)
+let bv45ShrinkObstacles = bv45LayoutObstacles(bv45ShrinkProbe, bubble: bv45ShrinkWindow54)
+check("T-bv45k 粘性缩窗stale contentBottom+1(64)>高度54→cap到54不越界",
+      bv45ShrinkObstacles == [CGRect(x: 376, y: 446, width: 200, height: 54)]
+        && bv45ShrinkProbe.observation(for: CGWindowID(544)).contentBottom == 63,
+      "obstacles=\(bv45ShrinkObstacles)")
+
 print("\n[BubbleVisibility] \(pass - bvPass) passed, \(fail - bvBase) failed")
+
+// ---- T-cs: Composition Surface 气泡渲染通道 + 噪声下限校准（2026-08-24 现场像素级 fixture）----
+// 现场几何：宠物 172x179@(1487,207)（petMaxY=386、centerX=1573）；
+// Composition Surface 768x912@(1189,-3) ×7 个同 bounds 重复实例（气泡卡只渲染在该大窗，
+// 展开内容延伸到 abs y467）；ACT "Codex Pet Activity Stack Backing" 214x74@(1466,384)
+// 只承载控制按钮（189-194px）与收起噪声点（39-57px）。
+let csBase = fail, csPass = pass
+let csPet = CGRect(x: 1487, y: 207, width: 172, height: 179)   // petMaxY=386
+let csMascot = mkw(900, layer: 2, csPet, title: "Codex Pet Mascot Effect")
+let csSurfaceBounds = CGRect(x: 1189, y: -3, width: 768, height: 912)
+let csSurfaces = [27814, 27815, 27816, 27817, 28787, 28788, 28789].map {
+    mkw(UInt32($0), layer: 3, csSurfaceBounds, title: "Codex Pet Composition Surface")
+}
+let csAct = mkw(27900, layer: 3, CGRect(x: 1466, y: 384, width: 214, height: 74),
+                title: "Codex Pet Activity Stack Backing")
+let csDockX = csPet.minX + (csPet.width - 200) / 2   // pet 中心对齐（1473）
+func csAppKitFrame(y: CGFloat) -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(x: csDockX, y: y, width: 200, height: 48))
+}
+
+// 单元：标题通道纳入 + 7 重复实例去重（wid 升序代表 27814）+ obstacleKind 像素探测。
+let csObstacles = PetTracker.obstaclesNear(mascot: csMascot, candidates: [csMascot] + csSurfaces + [csAct])
+check("T-cs4 标题通道纳入Composition Surface且7实例去重为1代表(wid升序27814)+ACT",
+      csObstacles.count == 2
+        && csObstacles.filter { $0.title == "Codex Pet Composition Surface" }.count == 1
+        && csObstacles.first { $0.title == "Codex Pet Composition Surface" }?.wid == CGWindowID(27814),
+      "obstacles=\(csObstacles.map { (Int($0.wid), $0.title) })")
+// 三类分类契约：CS 标题通道优先 → .compositionSurface（仍走像素探测）；ACT 等几何小窗 →
+// .bubble；控制按钮 → .control（由 T-ctrl10b/c 覆盖）。
+check("T-cs3 obstacleKind三类:CS=.compositionSurface(标题优先),ACT=.bubble",
+      PetTracker.obstacleKind(csSurfaces[0], petMaxY: csPet.maxY) == .compositionSurface
+        && PetTracker.obstacleKind(csAct, petMaxY: csPet.maxY) == .bubble, "")
+// 标题不匹配的同尺寸大窗不纳入（标题精确匹配，不做几何猜测）。
+let csMismatch = [28100, 28101, 28102].map {
+    mkw(UInt32($0), layer: 3, csSurfaceBounds, title: "Codex Pet Other Surface")
+}
+check("T-cs5 标题不匹配的同尺寸大窗不纳入(精确标题通道)",
+      PetTracker.obstaclesNear(mascot: csMascot, candidates: [csMascot] + csMismatch).isEmpty, "")
+
+// 生产组合：FollowLayoutPass → 真实 DockPanel.placeBelow → DockPanel.frame。
+// tick1 启动捕获（首次观察前保守 visible），捕获完成后 tick2（0.1s cadence 内不重捕获）
+// 应用缓存结果——与生产 0.1s 节拍消费路径一致。
+var csTime: TimeInterval = 22_000
+func csRunTwoTickLayout(
+    probe: BubbleVisibilityProbe,
+    dock: DockPanel,
+    obstacleCounts: OSAllocatedUnfairLock<[Int]>,
+    candidates: [WinCandidate]
+) -> Bool {
+    func place() -> Bool {
+        FollowLayoutPass.placeDock(
+            mascot: csMascot,
+            candidates: candidates,
+            bubbleProbe: probe,
+            frameSink: { pet, obstacles in
+                obstacleCounts.withLock { $0.append(obstacles.count) }
+                return dock.placeBelow(
+                    petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                    movementChanged: false, monotonicNow: csTime)
+            })
+    }
+    _ = place()
+    let completed = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    _ = place()
+    return completed
+}
+
+// RED-S1 展开态：气泡卡渲染进 Composition Surface（内容底 abs y467 → 窗口内 contentBottom=470）；
+// ACT 承载控制按钮（194px、内容底 abs y422 → 窗口内 38）。期望 dock 避让到气泡内容底+2
+//（abs y470）；基线（标题通道缺失）只避让 ACT → y425，压在气泡中段。
+let csExpandedCaptured = OSAllocatedUnfairLock(initialState: [CGWindowID]())
+let csExpandedStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 38),
+]
+let csExpandedCap: BubbleCapturer = { c in
+    csExpandedCaptured.withLock { $0.append(c.wid) }
+    return .stats(csExpandedStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let csExpandedProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: csExpandedCap)
+let csExpandedDock = DockPanel()
+let csExpandedObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csExpandedOK = csRunTwoTickLayout(
+    probe: csExpandedProbe, dock: csExpandedDock,
+    obstacleCounts: csExpandedObstacleCounts, candidates: [csMascot] + csSurfaces + [csAct])
+check("T-cs1 RED-S1 展开态→实际panel避让到气泡内容底+2(y=470,非仅ACT的~425)",
+      csExpandedOK && dockFrameNear(csExpandedDock.frame, csAppKitFrame(y: 470)),
+      "frame=\(csExpandedDock.frame) expected=\(csAppKitFrame(y: 470))")
+check("T-cs2 7重复实例去重→恰好1个Composition probe候选(捕获={27814,27900})",
+      csExpandedCaptured.withLock { $0 } == [CGWindowID(27814), CGWindowID(27900)],
+      "captured=\(csExpandedCaptured.withLock { $0.map { Int($0) } })")
+
+// RED-S2 收起态：Composition Surface 内容全在 petMaxY 以上（contentBottom=362 → 可见内容底
+// abs y360），Mascot 窗口底 386 以下有 26px 透明 padding；ACT 仅剩 41px 不可见噪声点
+// （窗口内 y[21,28]）。期望 dock 基础位锚定可见内容底 360+2=362（T-anc 语义），而非窗口底
+// petMaxY+2=388；更早基线（下限 3）把 41px 判 visible → 停 y415。
+csTime = 23_000
+let csCollapsedStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 41, contentBottom: 28),
+]
+let csCollapsedCap: BubbleCapturer = { c in
+    .stats(csCollapsedStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let csCollapsedProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: csCollapsedCap)
+let csCollapsedDock = DockPanel()
+let csCollapsedObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csCollapsedOK = csRunTwoTickLayout(
+    probe: csCollapsedProbe, dock: csCollapsedDock,
+    obstacleCounts: csCollapsedObstacleCounts, candidates: [csMascot] + csSurfaces + [csAct])
+check("T-cs6 RED-S2 收起态噪声点(41px)→hidden→实际panel回内容底基础位362(非窗口底388)",
+      csCollapsedOK && dockFrameNear(csCollapsedDock.frame, csAppKitFrame(y: 362)),
+      "frame=\(csCollapsedDock.frame) expected=\(csAppKitFrame(y: 362))")
+check("T-cs6b ACT噪声点观察=hidden;Composition代表=visible(宠物像素)",
+      csCollapsedProbe.observation(for: CGWindowID(27900)).visibility == .hidden
+        && csCollapsedProbe.observation(for: CGWindowID(27814)).visibility == .visible, "")
+
+// 收起态仅有 Composition Surface（内容=宠物像素，可见底 abs y360 在窗口底 386 以上）→
+// 避让矩形与 dock 无垂直重叠 → 不避让；基础位锚定可见内容底 362（T-anc 语义），防止标题
+// 通道引入过度避让。首 tick 无观察数据 → 回退窗口底锚 388 且跳过（计数 0）；次 tick
+// stats visible 内容 bbox 进入障碍集（计数 1）但锚定内容底、无垂直重叠。
+csTime = 24_000
+let csSurfOnlyCap: BubbleCapturer = { _ in
+    .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362))
+}
+let csSurfOnlyProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: csSurfOnlyCap)
+let csSurfOnlyDock = DockPanel()
+let csSurfOnlyCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csSurfOnlyOK = csRunTwoTickLayout(
+    probe: csSurfOnlyProbe, dock: csSurfOnlyDock,
+    obstacleCounts: csSurfOnlyCounts, candidates: [csMascot] + csSurfaces)
+check("T-cs7 收起态仅Composition(内容底abs360)→无垂直重叠→dock内容底基础位362",
+      csSurfOnlyOK && dockFrameNear(csSurfOnlyDock.frame, csAppKitFrame(y: 362))
+        && csSurfOnlyCounts.withLock { $0 } == [0, 1],
+      "frame=\(csSurfOnlyDock.frame) counts=\(csSurfOnlyCounts.withLock { $0 })")
+
+// Reviewer P1 回归（保守路径不整窗避让）：Composition Surface 是常驻大窗（768x912），障碍性
+// 完全取决于宠物下方的像素内容；保守 visible 无 contentBottom（macOS 13 / TCC 拒绝 / 捕获失败 /
+// 冷启动首次观察前）时没有任何依据整窗避让——旧行为把 dock 推到大窗底部且降级模式下永久如此。
+// 跳过后降级模式与本功能引入前一致。
+csTime = 24_500
+let csDegradeProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: { _ in .unavailable })
+let csDegradeDock = DockPanel()
+let csDegradeCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csDegradeOK = csRunTwoTickLayout(
+    probe: csDegradeProbe, dock: csDegradeDock,
+    obstacleCounts: csDegradeCounts, candidates: [csMascot] + csSurfaces)
+check("T-cs10 恒unavailable(macOS13/捕获失败)→CS无观察数据不作障碍→dock基础位388(非大窗底)",
+      csDegradeOK && dockFrameNear(csDegradeDock.frame, csAppKitFrame(y: 388))
+        && csDegradeCounts.withLock { $0 } == [0, 0]
+        && csDegradeProbe.observation(for: CGWindowID(27814)).visibility == .visible
+        && csDegradeProbe.observation(for: CGWindowID(27814)).contentBottom == nil,
+      "frame=\(csDegradeDock.frame) counts=\(csDegradeCounts.withLock { $0 })")
+
+csTime = 24_600
+let csTccProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { false }, capturer: { _ in .unavailable })
+let csTccDock = DockPanel()
+let csTccCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csTccOK = csRunTwoTickLayout(
+    probe: csTccProbe, dock: csTccDock,
+    obstacleCounts: csTccCounts, candidates: [csMascot] + csSurfaces)
+check("T-cs10b TCC拒绝(canCapture=false)→CS保守visible无数据同样跳过→基础位388",
+      csTccOK && dockFrameNear(csTccDock.frame, csAppKitFrame(y: 388))
+        && csTccCounts.withLock { $0 } == [0, 0],
+      "frame=\(csTccDock.frame) counts=\(csTccCounts.withLock { $0 })")
+
+// 降级下 ACT（.bubble 几何小窗）保守整窗避让语义不回归：只被 ACT 整窗（maxY 458）推到 460，
+// 不再被 CS 大窗叠加推到大窗底部。
+csTime = 24_700
+let csDegradeActProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: { _ in .unavailable })
+let csDegradeActDock = DockPanel()
+let csDegradeActCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let csDegradeActOK = csRunTwoTickLayout(
+    probe: csDegradeActProbe, dock: csDegradeActDock,
+    obstacleCounts: csDegradeActCounts, candidates: [csMascot] + csSurfaces + [csAct])
+check("T-cs10c 降级下ACT(.bubble)保守整窗避让不回归→仅ACT整窗推到460(CS跳过)",
+      csDegradeActOK && dockFrameNear(csDegradeActDock.frame, csAppKitFrame(y: 460))
+        && csDegradeActCounts.withLock { $0 } == [1, 1],
+      "frame=\(csDegradeActDock.frame) counts=\(csDegradeActCounts.withLock { $0 })")
+
+// Reviewer P1 回归（冷启动闪跳消除）：首 tick 无 cache → CS 跳过，dock 停基础位；第二 tick
+// stats 到达 → 按内容 bbox 避让。序列 = [基础位 388 → 内容位 470]，不再出现首 tick 整窗
+// 避让闪跳到大窗底部再回来。
+csTime = 24_800
+let csColdProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true },
+    capturer: { _ in .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470)) })
+let csColdDock = DockPanel()
+let csColdFrames = OSAllocatedUnfairLock(initialState: [NSRect]())
+let csColdCounts = OSAllocatedUnfairLock(initialState: [Int]())
+func csColdPlace() -> Bool {
+    let placed = FollowLayoutPass.placeDock(
+        mascot: csMascot,
+        candidates: [csMascot] + csSurfaces,
+        bubbleProbe: csColdProbe,
+        frameSink: { pet, obstacles in
+            csColdCounts.withLock { $0.append(obstacles.count) }
+            return csColdDock.placeBelow(
+                petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                movementChanged: false, monotonicNow: csTime)
+        })
+    csColdFrames.withLock { $0.append(csColdDock.frame) }
+    return placed
+}
+_ = csColdPlace()   // tick1：捕获在途、无 cache → 跳过（基础位）
+let csColdCompleted = waitPumpingMain { !csColdProbe.lock.withLock { $0.inFlight } }
+_ = csColdPlace()   // tick2：stats 已入 cache → 内容 bbox 避让
+check("T-cs11 冷启动首tick无cache→基础位388;次tick stats→内容避让470(序列无大窗底闪跳)",
+      csColdCompleted
+        && csColdFrames.withLock { $0.count } == 2
+        && dockFrameNear(csColdFrames.withLock { $0 }[0], csAppKitFrame(y: 388))
+        && dockFrameNear(csColdFrames.withLock { $0 }[1], csAppKitFrame(y: 470))
+        && csColdCounts.withLock { $0 } == [0, 1],
+      "frames=\(csColdFrames.withLock { $0 }) counts=\(csColdCounts.withLock { $0 })")
+
+// 大窗捕获降采样（性能保护）：>100k 面积候选等比缩到 maxSide<=240（保持纵横比）；
+// 小窗（ACT）不降采样、路径不变。
+let csSize = BubbleVisibilityProbe.downsampleCaptureSize(width: 768, height: 912)
+check("T-cs8 大窗(768x912,699k px)→降采样(202,240)纵横比保持",
+      csSize?.width == 202 && csSize?.height == 240,
+      "size=\(String(describing: csSize))")
+check("T-cs8b 小窗(ACT 214x74)不降采样(路径不变)",
+      BubbleVisibilityProbe.downsampleCaptureSize(width: 214, height: 74) == nil, "")
+
+// 换算正确性（纯函数，>100k 候选 768x912 → cap 202x240）：已知内容位置——原始行 470
+//（展开气泡内容底）对应 cap 行 470*240/912≈123.7；捕获统计报 124 → rescale 回原始行
+// 误差 ≤2px；像素计数按面积比 origArea/capArea 放大（202px → 2918px 等价）。
+if let size = csSize {
+    let captured = BubbleAlphaStats(nonTransparentPixelCount: 202, contentBottom: 124)
+    let rescaled = BubbleVisibilityProbe.rescaleDownsampledStats(
+        captured, captureWidth: size.width, captureHeight: size.height,
+        originalWidth: 768, originalHeight: 912)
+    let expectedCount = Int((202.0 * 768.0 * 912.0 / (202.0 * 240.0)).rounded())
+    check("T-cs9 降采样contentBottom换算误差<=2px(原行470)",
+          abs(rescaled.contentBottom - 470) <= 2,
+          "rescaled=\(rescaled.contentBottom)")
+    check("T-cs9b 像素计数按面积比换算(origArea/capArea)",
+          rescaled.nonTransparentPixelCount == expectedCount,
+          "rescaled=\(rescaled.nonTransparentPixelCount) expected=\(expectedCount)")
+} else {
+    check("T-cs9/T-cs9b 降采样尺寸", false, "size=\(String(describing: csSize))")
+}
+
+print("\n[Composition Surface 气泡通道] \(pass - csPass) passed, \(fail - csBase) failed")
+
+// ---- T-csm: 多尺寸 Composition Surface 幽灵内容回归（2026-08-24 现场 e1d94c6 症状）----
+// 现场症状（用户截图 + 主 Agent qa_snapshot 取证，坐标/wid 已脱敏为合成值，保持现场相对几何）：
+// 气泡在宠物**上方**时，宿主同时存在多种 bounds 的 Composition Surface 窗口（CGWindowList
+// 顺序前到后：前层新 768x978 / 后层旧 768x912，后层顶沿比前层低 66px，全部 onscreen layer3）。
+// desktopIndependentWindow
+// 捕获窗口自身内容、感知不到前层遮挡：后层残留宿主布局切换前的旧气泡卡（内容延伸到
+// 宠物下方 86px 的幽灵）；旧去重按 (owner,title,layer,bounds) 签名——bounds
+// 不同不去重 → 后层幽灵与真实内容都成为障碍/锚 → dock 被推到幽灵内容底+gap（比正确位
+// 多让 31px），宠物与 dock 之间出现大气泡尺寸空白。前层真实可见内容只到宠物下方 55px
+//（控制按钮）。修复语义：CS 通道按标题去重——candidates 输入顺序（=CGWindowList
+// 前到后）首个 CS 实例保留为唯一代表，其余 CS 实例不论 bounds 全部跳过；被遮挡的后层
+// 残影不再产生障碍/锚/像素捕获。
+let csmBase = fail, csmPass = pass
+let csmPet = CGRect(x: 398, y: 485, width: 172, height: 179)   // 合成坐标（petMaxY=664）
+let csmMascot = mkw(910, layer: 2, csmPet, title: "Codex Pet Mascot Effect")
+let csmFront = mkw(9002, layer: 3, CGRect(x: 100, y: 209, width: 768, height: 978),
+                   title: "Codex Pet Composition Surface")   // 前层（新，wid 故意大于后层）
+let csmBack = mkw(9001, layer: 3, CGRect(x: 100, y: 275, width: 768, height: 912),
+                  title: "Codex Pet Composition Surface")   // 后层（旧，幽灵内容，wid 最小）
+let csmAct = mkw(9003, layer: 3, CGRect(x: 377, y: 663, width: 214, height: 74),
+                 title: "Codex Pet Activity Stack Backing")
+let csmDockX = csmPet.minX + (csmPet.width - 200) / 2
+func csmAppKitFrame(y: CGFloat) -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(x: csmDockX, y: y, width: 200, height: 48))
+}
+
+// 单元：CS 标题级去重（跨 bounds）→ 仅输入顺序首位（前层）成为唯一 CS 障碍。
+check("T-csm1 多尺寸CS标题级去重→仅输入顺序首位(前层9002)为唯一CS障碍",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot, csmFront, csmBack, csmAct])
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(9002)], "")
+// 顺序合同锁定：前层 wid 更大时仍按输入顺序首位（而非 wid 最小）保留——wid 升序只是
+// 输出稳定性排序，绝不参与 CS 代表选择（若按 wid 排序后取首位，会选中后层残影）。
+check("T-csm7 前层wid(9020)大于后层(9015)→代表仍为输入顺序首位9020(非wid最小9015)",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot,
+        mkw(9020, layer: 3, CGRect(x: 100, y: 209, width: 768, height: 978),
+            title: "Codex Pet Composition Surface"),
+        mkw(9015, layer: 3, CGRect(x: 100, y: 275, width: 768, height: 912),
+            title: "Codex Pet Composition Surface"), csmAct])
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(9020)], "")
+// 顺序敏感性：candidates 反转（后层在前）→ 代表随列表首位变化，证明是前到后列表顺序
+// 语义而非 wid 排序（旧去重代表由 wid 升序决定）。
+check("T-csm2 candidates顺序反转→代表随列表首位变为后层(前到后语义,非wid排序)",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot, csmBack, csmFront, csmAct])
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(9001)], "")
+// 既有同 bounds 多实例语义：仍恰好 1 个 CS 障碍，代表=输入顺序首位（wid 乱序输入）。
+let csmSameBounds = CGRect(x: 100, y: 275, width: 768, height: 912)
+let csmDupes = [9005, 9004, 9007, 9006].map {
+    mkw(UInt32($0), layer: 3, csmSameBounds, title: "Codex Pet Composition Surface")
+}
+check("T-csm3 同bounds多实例CS仍去重为1(输入顺序首位9005)",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot] + csmDupes)
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(9005)], "")
+// 非 CS 通道既有签名去重不回归：同 bounds 重复 ACT → 1 个障碍；不同 bounds → 保留两个。
+let csmActDupes = [
+    mkw(9011, layer: 3, CGRect(x: 377, y: 663, width: 214, height: 74),
+        title: "Codex Pet Activity Stack Backing"),
+    mkw(9012, layer: 3, CGRect(x: 377, y: 663, width: 214, height: 74),
+        title: "Codex Pet Activity Stack Backing"),
+]
+check("T-csm4 非CS同bounds重复窗口仍按签名去重为1",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot] + csmActDupes).count == 1, "")
+check("T-csm4b 非CS不同bounds双实例不去重(签名含bounds语义保持)",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot, csmActDupes[0],
+        mkw(9013, layer: 3, CGRect(x: 377, y: 666, width: 214, height: 74),
+            title: "Codex Pet Activity Stack Backing")]).count == 2, "")
+
+// 生产组合：FollowLayoutPass → 真实 DockPanel.placeBelow → DockPanel.frame（两 tick，
+// 与 csRunTwoTickLayout 同构）。capturer 按 wid 区分前后层：前层真实可见内容
+// contentBottom=510（窗口底 720，宠物下方 55px 按钮）；后层幽灵 contentBottom=475
+//（窗口底 751，宠物下方 86px）；ACT 仅 41px 噪声 → hidden。期望实际 frame 锚前层
+// 可见内容底 209+510+1+2=722，而非幽灵底 275+475+1+2=753（比正确位多让 31px）。
+csTime = 24_000
+let csmCaptured = OSAllocatedUnfairLock(initialState: [CGWindowID]())
+let csmStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(9002): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 510),
+    CGWindowID(9001): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 475),
+    CGWindowID(9003): BubbleAlphaStats(nonTransparentPixelCount: 41, contentBottom: 28),
+]
+let csmCap: BubbleCapturer = { c in
+    csmCaptured.withLock { $0.append(c.wid) }
+    return .stats(csmStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let csmProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: csmCap)
+let csmDock = DockPanel()
+let csmObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+func csmPlace(_ candidates: [WinCandidate]) -> Bool {
+    func place() -> Bool {
+        FollowLayoutPass.placeDock(
+            mascot: csmMascot, candidates: candidates, bubbleProbe: csmProbe,
+            frameSink: { pet, obstacles in
+                csmObstacleCounts.withLock { $0.append(obstacles.count) }
+                return csmDock.placeBelow(
+                    petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                    movementChanged: false, monotonicNow: csTime)
+            })
+    }
+    _ = place()
+    let completed = waitPumpingMain { !csmProbe.lock.withLock { $0.inFlight } }
+    _ = place()
+    return completed
+}
+let csmOK = csmPlace([csmMascot, csmFront, csmBack, csmAct])
+check("T-csm5 现场多尺寸CS→实际panel锚前层可见内容底(y=722)而非幽灵底(y=753)",
+      csmOK && dockFrameNear(csmDock.frame, csmAppKitFrame(y: 722)),
+      "frame=\(csmDock.frame) expected=\(csmAppKitFrame(y: 722))")
+check("T-csm6 仅前层CS+ACT成为probe候选(后层幽灵不被捕获)",
+      csmCaptured.withLock { $0 } == [CGWindowID(9002), CGWindowID(9003)],
+      "captured=\(csmCaptured.withLock { $0.map { Int($0) } })")
+
+print("\n[Composition Surface 多尺寸幽灵] \(pass - csmPass) passed, \(fail - csmBase) failed")
+
+// ---- T-anc: dock 基础位锚定宠物可见内容底（2026-08-24 现场像素级症状）----
+// 现场症状（主 Agent 截屏取证）：收起态宠物可见内容（绿色椭圆底座）底在 abs y≈328，
+// Mascot 窗口底在 369 → 基线 dock 停 371，视觉空白 ≈44px。根因：基础位锚 Mascot 窗口底
+// （bounds.maxY+gap），而 Mascot 窗口底部有大量透明 padding；宠物像素实际渲染在
+// Composition Surface，其 contentBottom 观察就是宠物可见内容的实时底边。
+// 语义（与避让矩形同一 contentBottom 口径）：可见内容底边 abs y = 代表.bounds.minY +
+// contentBottom + 1（contentBottom 为窗口内像素行），基础位 = 内容底边 + gap。
+let ancBase = fail, ancPass = pass
+let ancPet = CGRect(x: 1487, y: 190, width: 172, height: 179)   // petMaxY=369（现场）
+let ancMascot = mkw(900, layer: 2, ancPet, title: "Codex Pet Mascot Effect")
+let ancDockX = ancPet.minX + (ancPet.width - 200) / 2   // 水平仍按 Mascot 窗口居中
+func ancAppKitFrame(y: CGFloat) -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(x: ancDockX, y: y, width: 200, height: 48))
+}
+// 生产组合（与 csRunTwoTickLayout 同构，mascot/candidates 参数化；petRects 记录
+// frameSink 实收的布局锚，用于断言 anchor 契约本身）。
+func ancRunTwoTickLayout(
+    probe: BubbleVisibilityProbe,
+    dock: DockPanel,
+    mascot: WinCandidate,
+    candidates: [WinCandidate],
+    petRects: OSAllocatedUnfairLock<[CGRect]>,
+    obstacleCounts: OSAllocatedUnfairLock<[Int]>
+) -> Bool {
+    func place() -> Bool {
+        FollowLayoutPass.placeDock(
+            mascot: mascot,
+            candidates: candidates,
+            bubbleProbe: probe,
+            frameSink: { pet, obstacles in
+                petRects.withLock { $0.append(pet) }
+                obstacleCounts.withLock { $0.append(obstacles.count) }
+                return dock.placeBelow(
+                    petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                    movementChanged: false, monotonicNow: csTime)
+            })
+    }
+    _ = place()
+    let completed = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    _ = place()
+    return completed
+}
+
+// RED：现场收起态。CS 代表（去重后 wid 27814）contentBottom=331（窗口内）→ 可见内容底边
+// abs y329（= -3 + 331 + 1，与避让矩形高度 contentBottom+1 同口径）；ACT 仅 41px 噪声点 →
+// hidden。期望基础位 = 329+2 = 331，而非基线窗口底 369+2 = 371（44px 视觉空白来源）。
+csTime = 25_000
+let ancCollapsedStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 331),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 41, contentBottom: 28),
+]
+let ancCollapsedCap: BubbleCapturer = { c in
+    .stats(ancCollapsedStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let ancCollapsedProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: ancCollapsedCap)
+let ancCollapsedDock = DockPanel()
+let ancCollapsedPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancCollapsedCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let ancCollapsedOK = ancRunTwoTickLayout(
+    probe: ancCollapsedProbe, dock: ancCollapsedDock,
+    mascot: ancMascot, candidates: [ancMascot] + csSurfaces + [csAct],
+    petRects: ancCollapsedPetRects, obstacleCounts: ancCollapsedCounts)
+check("T-anc1 RED 现场收起态→实际panel锚内容底331(非窗口底371,消44px空白)",
+      ancCollapsedOK && dockFrameNear(ancCollapsedDock.frame, ancAppKitFrame(y: 331)),
+      "frame=\(ancCollapsedDock.frame) expected=\(ancAppKitFrame(y: 331))")
+// anchor 契约：首 tick 无 cache → 回退窗口底锚（petRects[0].maxY=369）；次 tick stats 到达
+// → frameSink 收到调整后 pet（origin/width 不变、maxY=329，高度 139）。
+check("T-anc1b anchor契约:tick1回退369;tick2调整pet(maxY329,origin/width不变)",
+      ancCollapsedPetRects.withLock { $0.count } == 2
+        && ancCollapsedPetRects.withLock { $0 }[0] == ancPet
+        && ancCollapsedPetRects.withLock { $0 }[1]
+             == CGRect(x: ancPet.minX, y: ancPet.minY, width: ancPet.width, height: 139),
+      "pets=\(ancCollapsedPetRects.withLock { $0 })")
+
+// 展开态回归（无双重下移）：气泡卡渲染进 CS（contentBottom=470 窗口内 → 内容底边 abs 468）
+// → 基础位本身 = 468+2 = 470；CS 内容障碍底边同为 468，与基础位 dock 无垂直相交 → 不再
+// 下移，最终 470 与基线避让结果一致。
+csTime = 25_100
+let ancExpandedStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 38),
+]
+let ancExpandedCap: BubbleCapturer = { c in
+    .stats(ancExpandedStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let ancExpandedProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: ancExpandedCap)
+let ancExpandedDock = DockPanel()
+let ancExpandedPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancExpandedCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let ancExpandedOK = ancRunTwoTickLayout(
+    probe: ancExpandedProbe, dock: ancExpandedDock,
+    mascot: ancMascot, candidates: [ancMascot] + csSurfaces + [csAct],
+    petRects: ancExpandedPetRects, obstacleCounts: ancExpandedCounts)
+check("T-anc2 展开态内容底470→dock仍470(基础位即内容底,无双重下移)",
+      ancExpandedOK && dockFrameNear(ancExpandedDock.frame, ancAppKitFrame(y: 470)),
+      "frame=\(ancExpandedDock.frame) expected=\(ancAppKitFrame(y: 470))")
+check("T-anc2b 展开态anchor=内容底468(避让起点与障碍底同源,一步到位)",
+      ancExpandedPetRects.withLock { $0 }.count == 2
+        && ancExpandedPetRects.withLock { $0 }[1].maxY == 468
+        && ancExpandedCounts.withLock { $0 } == [1, 2],
+      "pets=\(ancExpandedPetRects.withLock { $0 }) counts=\(ancExpandedCounts.withLock { $0 })")
+
+// 降级回退：CS 恒 unavailable（macOS 13 / TCC 拒绝 / 捕获失败同路径）→ 无 contentBottom →
+// 基础位回退 Mascot 窗口底 369+2=371（现状不变；与 T-cs10 系列同语义、现场几何）。
+csTime = 25_200
+let ancDegradeProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: { _ in .unavailable })
+let ancDegradeDock = DockPanel()
+let ancDegradePetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancDegradeCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let ancDegradeOK = ancRunTwoTickLayout(
+    probe: ancDegradeProbe, dock: ancDegradeDock,
+    mascot: ancMascot, candidates: [ancMascot] + csSurfaces,
+    petRects: ancDegradePetRects, obstacleCounts: ancDegradeCounts)
+check("T-anc3 降级CS无观察→基础位回退窗口底371(petRects两tick均=窗口)",
+      ancDegradeOK && dockFrameNear(ancDegradeDock.frame, ancAppKitFrame(y: 371))
+        && ancDegradePetRects.withLock { $0 } == [ancPet, ancPet]
+        && ancDegradeCounts.withLock { $0 } == [0, 0],
+      "frame=\(ancDegradeDock.frame) pets=\(ancDegradePetRects.withLock { $0 }) counts=\(ancDegradeCounts.withLock { $0 })")
+
+// 拖动粘性：CS/宠物整体平移 (+40,-25)、0.1s cadence 内不重捕获（捕获计数不增）→
+// contentBottom cache 粘性保留 → adjustedPet 随宠物移动，dock 相对可见内容底偏移不变。
+csTime = 25_300
+let ancDragCaptured = OSAllocatedUnfairLock(initialState: 0)
+let ancDragProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true },
+    capturer: { _ in
+        ancDragCaptured.withLock { $0 += 1 }
+        return .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 331))
+    })
+let ancDragDock = DockPanel()
+let ancDragPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancDragCounts = OSAllocatedUnfairLock(initialState: [Int]())
+_ = ancRunTwoTickLayout(
+    probe: ancDragProbe, dock: ancDragDock,
+    mascot: ancMascot, candidates: [ancMascot] + csSurfaces,
+    petRects: ancDragPetRects, obstacleCounts: ancDragCounts)
+let ancDragCapturesBefore = ancDragCaptured.withLock { $0 }
+csTime += 0.05   // cadence 内：不重捕获，cache 粘性
+let ancPetMoved = ancPet.offsetBy(dx: 40, dy: -25)
+let ancMascotMoved = mkw(900, layer: 2, ancPetMoved, title: "Codex Pet Mascot Effect")
+let ancSurfacesMoved = [27814, 27815, 27816, 27817, 28787, 28788, 28789].map {
+    mkw(UInt32($0), layer: 3, csSurfaceBounds.offsetBy(dx: 40, dy: -25),
+        title: "Codex Pet Composition Surface")
+}
+let ancDragMovedPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancDragMovedPlaced = FollowLayoutPass.placeDock(
+    mascot: ancMascotMoved, candidates: [ancMascotMoved] + ancSurfacesMoved,
+    bubbleProbe: ancDragProbe,
+    frameSink: { pet, obstacles in
+        ancDragMovedPetRects.withLock { $0.append(pet) }
+        return ancDragDock.placeBelow(
+            petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+            movementChanged: false, monotonicNow: csTime)
+    })
+check("T-anc4 拖动(+40,-25)cache粘性→dock随动(y306=331-25,x+40;不重捕获)",
+      ancDragMovedPlaced
+        && ancDragCaptured.withLock { $0 } == ancDragCapturesBefore
+        && dockFrameNear(
+            ancDragDock.frame,
+            Geometry.appKitRectFromQuartz(
+                CGRect(x: ancDockX + 40, y: 331 - 25, width: 200, height: 48)))
+        && ancDragMovedPetRects.withLock { $0 } == [
+            CGRect(x: ancPet.minX + 40, y: ancPet.minY - 25, width: ancPet.width, height: 139)],
+      "frame=\(ancDragDock.frame) pets=\(ancDragMovedPetRects.withLock { $0 }) captures=\(ancDragCaptured.withLock { $0 })")
+
+// ACT 控制按钮出现（现场 194px、contentBottom=38 → 内容底边 abs 423）：内容底基础位 362 的
+// dock(362..410) 与 ACT 内容矩形(384..423) 相交 → 在基础位之上正确避让到 425（避让链路
+// 不因基础位下移而丢失；基线窗口底锚 388 同样避让到 425）。
+csTime = 25_400
+let ancActStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 38),
+]
+let ancActCap: BubbleCapturer = { c in
+    .stats(ancActStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let ancActProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: ancActCap)
+let ancActDock = DockPanel()
+let ancActPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancActCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let ancActOK = ancRunTwoTickLayout(
+    probe: ancActProbe, dock: ancActDock,
+    mascot: csMascot, candidates: [csMascot] + csSurfaces + [csAct],
+    petRects: ancActPetRects, obstacleCounts: ancActCounts)
+check("T-anc5 收起+ACT按钮(障碍底423)→dock避让425(内容底基础位362之上)",
+      ancActOK && dockFrameNear(ancActDock.frame, csAppKitFrame(y: 425))
+        && ancActCounts.withLock { $0 } == [1, 2],
+      "frame=\(ancActDock.frame) counts=\(ancActCounts.withLock { $0 })")
+
+print("\n[dock 基础位内容底锚定] \(pass - ancPass) passed, \(fail - ancBase) failed")
 
 // ---- T-clamp: clampDockX 纯函数 + safeDockFrame 水平 clamp ----
 let clBase = fail, clPass = pass
@@ -3243,6 +4973,81 @@ check("P9c pv=F dv=T → hideUI", FollowTickPlanner.decide(input: FollowTickInpu
 check("P9d pv=F dv=F → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: false, wasPetVisible: true, dockVisible: false)).hideUI)
 
 print("\n[FollowTickPlan] \(pass - plPass) passed, \(fail - plBase) failed")
+
+// ---- T-hj: 宠物识别被隐藏气泡窗口劫持（2026-08-23 现场证据回归） ----
+// 现场：宿主收起会话 UI 后保留隐藏气泡窗口（title 仅应用名、384x95、layer=3、与宠物水平精确居中、
+// 垂直覆盖宠物下半部且底部低于宠物）。旧滞回只校验 wid 存在，瞬时误选/窗口世代切换后底座被永久
+// 锚定到该隐藏窗口（底座 frame = 气泡底部+gap 而非 Mascot 底部+gap）。
+let hjBase = fail, hjPass = pass
+let hjPetRect = CGRect(x: 100, y: 100, width: 172, height: 179)                  // Mascot 本体 172x179
+// 隐藏气泡窗口：384x95、与宠物水平居中（中心差 0）、minY 在 pet 中部（几何上不是障碍），底部低于宠物 45px
+let hjBubbleRect = CGRect(x: hjPetRect.midX - 192, y: hjPetRect.maxY - 50, width: 384, height: 95)
+let hjMain = mk(804, layer: 0, w: 1728, h: 1050, title: "ChatGPT")
+let hjMascot = mkw(802, layer: 2, hjPetRect, title: "Codex Pet Mascot Effect")
+let hjHiddenBubble = mkw(801, layer: 3, hjBubbleRect, title: "Codex")            // title 仅应用名
+
+// T-hj1: 滞回锁定隐藏气泡窗口 → 必须不再沿用，回落 title 规则找回真 Mascot
+let hj1 = PetTracker.selectPet(candidates: [hjMain, hjMascot, hjHiddenBubble], lastWID: hjHiddenBubble.wid)
+check("T-hj1 滞回锁定隐藏气泡(384x95,title=应用名)→找回Mascot",
+      hj1.selected?.wid == hjMascot.wid, hj1.selected?.detailed() ?? hj1.reason)
+
+// T-hj2: 滞回锁定 768x912 组合面 → 不再沿用，回落 Mascot
+let hj2 = PetTracker.selectPet(candidates: [
+    hjMain, hjMascot,
+    mkw(803, layer: 3, CGRect(x: 0, y: 0, width: 768, height: 912), title: "Codex Pet Composition Surface")
+], lastWID: 803)
+check("T-hj2 滞回锁定组合面(768x912)→找回Mascot", hj2.selected?.wid == hjMascot.wid, hj2.reason)
+
+// T-hj3: 滞回锁定 24x6 控件 → 不再沿用，回落 Mascot
+let hj3 = PetTracker.selectPet(candidates: [
+    hjMain, hjMascot,
+    mkw(805, layer: 3, CGRect(x: 150, y: 300, width: 24, height: 6), title: "Codex Pet Voice Controls Backing")
+], lastWID: 805)
+check("T-hj3 滞回锁定控件(24x6)→找回Mascot", hj3.selected?.wid == hjMascot.wid, hj3.reason)
+
+// T-hj4: 真 Mascot 窗口滞回行为不变（title 含 Mascot 且 isReasonablePet）
+let hj4 = PetTracker.selectPet(candidates: [hjMain, hjMascot, hjHiddenBubble], lastWID: hjMascot.wid)
+check("T-hj4 滞回沿用真Mascot不变", hj4.selected?.wid == hjMascot.wid
+      && hj4.hitFlags.contains { $0.hasPrefix("hysteresis:lastWID=") }, hj4.reason)
+
+// T-hj5: 仅满足 isReasonablePet 的回退选中窗口（title 无 Mascot）滞回行为不变
+let hjFallback = mkw(806, layer: 3, CGRect(x: 100, y: 100, width: 120, height: 120), title: "Codex Pet Something")
+let hj5 = PetTracker.selectPet(candidates: [hjMain, hjMascot, hjFallback], lastWID: hjFallback.wid)
+check("T-hj5 滞回沿用合理回退窗口(isReasonablePet)不变", hj5.selected?.wid == hjFallback.wid, hj5.reason)
+
+// T-hj6: 生产组合 —— selectPet(lastWID=气泡wid) → FollowLayoutPass.placeDock → 实际 DockPanel.placeBelow。
+// 劫持态下底座最终 frame 必须回到真 Mascot 正下方基础位，而不是隐藏气泡窗口下方。
+let hjDock = DockPanel()
+let hjObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let hjProbe = BubbleVisibilityProbe(
+    monotonicNow: { 21_000 }, canCapture: { true }, capturer: { _ in .unavailable }
+)
+let hjSelection = PetTracker.selectPet(candidates: [hjMain, hjMascot, hjHiddenBubble], lastWID: hjHiddenBubble.wid)
+check("T-hj6a 生产组合:劫持态selectPet找回Mascot", hjSelection.selected?.wid == hjMascot.wid, hjSelection.reason)
+let hjPlaced = FollowLayoutPass.placeDock(
+    mascot: hjSelection.selected!,
+    candidates: [hjMain, hjMascot, hjHiddenBubble],
+    bubbleProbe: hjProbe,
+    frameSink: { pet, obstacles in
+        hjObstacleCounts.withLock { $0.append(obstacles.count) }
+        return hjDock.placeBelow(
+            petQuartzRect: pet,
+            avoiding: obstacles,
+            visibleScreen: nil,
+            movementChanged: false,
+            monotonicNow: 21_000
+        )
+    }
+)
+let hjDockBaseX = hjPetRect.origin.x + (hjPetRect.width - 200) / 2
+let hjExpectedFrame = Geometry.appKitRectFromQuartz(
+    CGRect(x: hjDockBaseX, y: hjPetRect.maxY + 2, width: 200, height: 48))
+check("T-hj6b 劫持态底座实际frame回到真Mascot下方(非气泡下方)",
+      hjPlaced && dockFrameNear(hjDock.frame, hjExpectedFrame)
+        && hjObstacleCounts.withLock { $0 } == [0],
+      "frame=\(hjDock.frame) expected=\(hjExpectedFrame) obstacles=\(hjObstacleCounts.withLock { $0 })")
+
+print("\n[pet-selection hijack] \(pass - hjPass) passed, \(fail - hjBase) failed")
 
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)
