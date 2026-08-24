@@ -3506,7 +3506,8 @@ let layerStable = mkw(535, layer: 3, dragStart)
 layerProbe.probe(candidates: [layerStable])
 _ = waitPumpingMain { !layerProbe.lock.withLock { $0.inFlight } }
 let layerHiddenEstablished = layerProbe.visibility(for: layerStable.wid) == .hidden
-dragTime += 0.11
+dragTime += 0.016   // 未到 cadence：与 h1 相同的确定性路径——身份切换+清 cache，不启动
+                    // 新捕获（0.11 会触发捕获，其后台完成与下方断言存在竞态，历史上偶发红）
 layerProbe.probe(candidates: [mkw(535, layer: 4, dragStart)])
 check("T-bv43h2 layer变化→清cache回保守visible",
       layerHiddenEstablished && layerProbe.visibility(for: layerStable.wid) == .visible,
