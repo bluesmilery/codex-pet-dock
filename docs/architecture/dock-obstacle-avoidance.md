@@ -27,7 +27,12 @@
 4. 水平越界使用 `clampDockX` 贴合屏幕左右边缘；可见宽小于 dock 宽时返回 nil。
 5. Quartz 与 AppKit 之间只做边界检查和最终 frame 设置所需的转换，统一支持负坐标副屏。
 
-`DockPanel.placeBelow(petQuartzRect:avoiding:visibleScreen:movementChanged:monotonicNow:)` 在 frame 为 nil 时隐藏底座并返回 false；成功则设置 frame 并返回 true。移动状态只对最新目标做最长 32ms 的显式线性插值，不排队历史 frame；首次显示、障碍 / 屏幕变化、无有效 screen、隐藏和其他安全复位路径立即 snap。默认 `avoiding=[] / visibleScreen=nil` 仍是宠物正下方的兼容行为。
+`DockPanel.placeBelow(petQuartzRect:avoiding:visibleScreen:movementChanged:monotonicNow:)` 在 frame 为 nil 时隐藏底座并返回 false；成功则设置 frame 并返回 true。位置过渡分两类 segment，均为 latest-only（从当前渲染帧重定向、不排队历史 frame、不允许过冲）：
+
+- movement（拖动跟随）：最长 32ms 的显式线性插值；
+- avoidance（避让形态变化）：障碍数量变化（按钮/气泡出现或消失），或任一障碍相对宠物的垂直范围（`obstacle.maxY - pet.maxY`）变化超过 1px 容差（气泡展开/收起、内容锚变化；宠物动画的逐帧微变由容差吸收），以 200ms ease-in-out（smoothstep，3p²−2p³）过渡。障碍 rect 只随宠物平移（数量与相对范围不变）归入 movement 路径，拖动语义不变。
+
+avoidance 段激活期间，底座用自有 `NSWindow.displayLink`（macOS 14+，加 main runloop `.common`；macOS 13 或 link 不可用时 60Hz repeating Timer fallback）按显示节拍渲染——stable follow tick 只有 0.1s cadence，仅靠 tick 采样每段只有约两个采样点，会呈台阶感。渲染 tick 与 `placeBelow` 共用同一单调时钟域（生产默认 `systemUptime`；测试经 `makeAnimationDisplayLink` / `makeAnimationTimer` / `animationMonotonicNow` 注入 fake）。段完成（求值精确落目标并清段）、movement 到来、snap、隐藏、换屏或无屏路径立即 invalidate 动画源；movement 段继续由 follow scheduler 的 moving 渲染节拍接管，不会与 `placeBelow` 的每拍 setFrame 双写打架。首次显示、屏幕变化、无有效 screen、隐藏和其他安全复位路径仍立即 snap，不被动画延迟。默认 `avoiding=[] / visibleScreen=nil` 仍是宠物正下方的兼容行为。
 
 主循环的语义是：宠物可见时展示底座并对齐详情，避让失败只隐藏底座；宠物可见性仍由跟随逻辑决定，数据 `pause()` / `resume()` 不与避让隐藏耦合。
 
@@ -95,4 +100,4 @@ Composition Surface 是常驻大窗（现场实测 768×912）：像素内容全
 make test-ui
 ```
 
-`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、基础位内容底锚定、固定宽度、水平 clamp、屏幕边界、权限门控、三态捕获结果、可见性变化通知、候选消失复位、elapsed-time stable 语义、调度合并和 32ms bounded interpolation。具体用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、macOS 13 Timer、实际 display-link cadence、多屏硬件、宠物动画下的基础位微跳体感与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
+`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、基础位内容底锚定、固定宽度、水平 clamp、屏幕边界、权限门控、三态捕获结果、可见性变化通知、候选消失复位、elapsed-time stable 语义、调度合并、32ms bounded interpolation 与障碍出现/消失 200ms ease-in-out 过渡（含 DockPanel 自有动画渲染源生命周期与 macOS 13 Timer fallback）。具体用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、macOS 13 Timer、实际 display-link cadence、多屏硬件、宠物动画下的基础位微跳体感与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
