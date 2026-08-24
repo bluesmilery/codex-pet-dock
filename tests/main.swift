@@ -527,7 +527,18 @@ check("T-ip7 stable阈值前最终插值段已精确到位", rectNear(stableFina
 let panelPetA = CGRect(x: 100, y: 100, width: 172, height: 179)
 let panelPetB = panelPetA.offsetBy(dx: 100, dy: 0)
 if let interpolationScreen = NSScreen.screens.first {
-    let panelInterpolator = DockPanel()
+    var ipAvoLinks: [TestAnimationDisplayLink] = []
+    let panelInterpolator = DockPanel(
+        makeAnimationDisplayLink: { target, selector in
+            let link = TestAnimationDisplayLink(target: target, selector: selector)
+            ipAvoLinks.append(link)
+            return link
+        },
+        makeAnimationTimer: { interval, repeats, callback in
+            TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        },
+        animationMonotonicNow: { 0.016 }
+    )
     _ = panelInterpolator.placeBelow(
         petQuartzRect: panelPetA,
         visibleScreen: interpolationScreen,
@@ -570,6 +581,7 @@ if let interpolationScreen = NSScreen.screens.first {
         movementChanged: true,
         monotonicNow: 0.016
     )
+    let panelAvoidPlaced = panelInterpolator.frame
     let panelSafetyTarget = Geometry.appKitRectFromQuartz(
         Geometry.safeDockFrame(
             pet: panelPetB,
@@ -579,8 +591,29 @@ if let interpolationScreen = NSScreen.screens.first {
             screen: interpolationScreen
         ).frame!
     )
-    check("T-ip9 DockPanel障碍变化立即snap", abs(panelInterpolator.frame.origin.y - panelSafetyTarget.origin.y) < 1.0,
-          "actual=\(panelInterpolator.frame) target=\(panelSafetyTarget)")
+    _ = panelInterpolator.placeBelow(
+        petQuartzRect: panelPetB,
+        avoiding: [panelObstacle],
+        visibleScreen: interpolationScreen,
+        movementChanged: false,
+        monotonicNow: 0.116
+    )
+    let panelAvoidMid = panelInterpolator.frame
+    _ = panelInterpolator.placeBelow(
+        petQuartzRect: panelPetB,
+        avoiding: [panelObstacle],
+        visibleScreen: interpolationScreen,
+        movementChanged: false,
+        monotonicNow: 0.25
+    )
+    check("T-ip9 DockPanel障碍出现平滑过渡(200ms ease-in-out;安全路径仍snap)",
+          abs(panelAvoidPlaced.origin.y - panelMovingMid.origin.y) < 1.0
+            && between(panelAvoidMid.origin.y,
+                       min(panelMovingMid.origin.y, panelSafetyTarget.origin.y) + 4,
+                       max(panelMovingMid.origin.y, panelSafetyTarget.origin.y) - 4)
+            && abs(panelInterpolator.frame.origin.y - panelSafetyTarget.origin.y) < 1.0
+            && ipAvoLinks.count == 1 && ipAvoLinks[0].invalidated,
+          "placed=\(panelAvoidPlaced) mid=\(panelAvoidMid) final=\(panelInterpolator.frame) target=\(panelSafetyTarget)")
     panelInterpolator.hideIfNeeded()
     _ = panelInterpolator.placeBelow(
         petQuartzRect: panelPetB,
@@ -614,8 +647,373 @@ check("T-ip11 RED 持续无screen移动每帧snap且不延续segment",
       "moved=\(noScreenMovedFrame) stable=\(noScreenStableFrame) target=\(noScreenTargetB)")
 print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) failed")
 
+// ---- T-avo: 障碍出现/消失平滑过渡（200ms ease-in-out + DockPanel 自有显示节拍渲染源） ----
+// 用户症状：控制按钮出现/消失时 dock 瞬间跳变（基线 obstaclesChanged → snap；基线红测
+// T-avo1/2/3 在 5fbe237 上 3 failed 已记录）。新语义：障碍数量或相对宠物垂直范围变化 →
+// 200ms ease-in-out avoidance segment，动画期间由 DockPanel 自有 display link（macOS13/
+// 不可用 → 60Hz repeating Timer fallback）以显示节拍渲染（stable follow tick 仅 0.1s
+// cadence，只靠 tick 采样每段仅 ~2 点呈台阶）；障碍纯平移沿用 32ms movement 插值；
+// 无屏/换屏/隐藏/越界等安全路径仍立即 snap。
+let avoBase = fail, avoPass = pass
+
+/// 可注入合成屏（NSScreen 是系统只读集合；headless 无 WindowServer 时 screens 为空）。
+final class AvoTestScreen: NSScreen {
+    private let f: NSRect
+    private let v: NSRect
+    init(frame: NSRect, visible: NSRect) {
+        self.f = frame
+        self.v = visible
+        super.init()
+    }
+    override var frame: NSRect { f }
+    override var visibleFrame: NSRect { v }
+}
+
+/// avoidance 动画渲染源 fake：记录 add/invalidate；fire() 经生产 selector 驱动真实渲染 tick。
+final class TestAnimationDisplayLink: NSObject, FollowDisplayLink {
+    private let target: NSObject
+    private let selector: Selector
+    private(set) var added = false
+    private(set) var invalidated = false
+
+    init(target: NSObject, selector: Selector) {
+        self.target = target
+        self.selector = selector
+    }
+
+    func add(to runLoop: RunLoop, forMode mode: RunLoop.Mode) { added = true }
+
+    func fire() {
+        guard !invalidated else { return }
+        _ = target.perform(selector, with: self)
+    }
+
+    func invalidate() { invalidated = true }
+}
+
+func avoFrameNear(_ lhs: NSRect, _ rhs: NSRect) -> Bool {
+    abs(lhs.origin.x - rhs.origin.x) < 1.0 && abs(lhs.origin.y - rhs.origin.y) < 1.0
+        && abs(lhs.width - rhs.width) < 1.0 && abs(lhs.height - rhs.height) < 1.0
+}
+/// 期望值 helper：base→target 按进度插值（与 DockFrameInterpolator.interpolate 同式）。
+func avoLerp(_ a: NSRect, _ b: NSRect, _ p: CGFloat) -> NSRect {
+    NSRect(x: a.origin.x + (b.origin.x - a.origin.x) * p,
+           y: a.origin.y + (b.origin.y - a.origin.y) * p,
+           width: a.width + (b.width - a.width) * p,
+           height: a.height + (b.height - a.height) * p)
+}
+
+let avoScreen = AvoTestScreen(
+    frame: NSRect(x: -10000, y: -10000, width: 20000, height: 20000),
+    visible: NSRect(x: -10000, y: -10000, width: 20000, height: 20000))
+let avoScreen2 = AvoTestScreen(
+    frame: NSRect(x: -10000, y: -10000, width: 20000, height: 20000),
+    visible: NSRect(x: -10000, y: -10000, width: 20000, height: 20000))
+let avoPet = CGRect(x: 100, y: 100, width: 172, height: 179)            // maxY=279
+let avoObstacle = CGRect(x: 120, y: 279, width: 60, height: 24)          // 控制按钮 279..303
+let avoBaseQuartz = Geometry.safeDockFrame(
+    pet: avoPet, avoiding: [], dockSize: CGSize(width: 200, height: 48), gap: 2, screen: avoScreen).frame!
+let avoAvoidQuartz = Geometry.safeDockFrame(
+    pet: avoPet, avoiding: [avoObstacle], dockSize: CGSize(width: 200, height: 48), gap: 2, screen: avoScreen).frame!
+check("T-avo0 前置：基础位281/避让位305（Quartz）",
+      avoBaseQuartz.origin.y == 281 && avoAvoidQuartz.origin.y == 305,
+      "base=\(avoBaseQuartz.origin.y) avoid=\(avoAvoidQuartz.origin.y)")
+let avoBaseAppKit = Geometry.appKitRectFromQuartz(avoBaseQuartz)
+let avoAvoidAppKit = Geometry.appKitRectFromQuartz(avoAvoidQuartz)
+
+var avoClock: TimeInterval = 0
+var avoLinks: [TestAnimationDisplayLink] = []
+var avoTimers: [TestFollowTickTimer] = []
+func avoMakeDock(linkFactory: @escaping (NSObject, Selector) -> FollowDisplayLink?) -> DockPanel {
+    DockPanel(
+        makeAnimationDisplayLink: linkFactory,
+        makeAnimationTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            avoTimers.append(timer)
+            return timer
+        },
+        animationMonotonicNow: { avoClock }
+    )
+}
+let avoDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+
+// T-avo1 按钮出现（障碍 0→1）：放置拍停在起点，fake link 显示节拍推进，200ms 精确到位。
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 0)
+let avoAppearStart = avoDock.frame
+check("T-avo1a 出现首拍：snap 基础位且无动画源",
+      avoFrameNear(avoAppearStart, avoBaseAppKit) && avoLinks.isEmpty && avoTimers.isEmpty,
+      "start=\(avoAppearStart)")
+avoClock = 10
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 10)
+var avoAppearFrames = [avoDock.frame]
+for avoOffset in [0.05, 0.1, 0.15, 0.2] {
+    avoClock = 10 + avoOffset
+    avoLinks.last?.fire()
+    avoAppearFrames.append(avoDock.frame)
+}
+let avoAppearExpected = [0.05, 0.1, 0.15, 0.2].map {
+    avoLerp(avoBaseAppKit, avoAvoidAppKit,
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+var avoAppearProgressiveOK = avoFrameNear(avoAppearFrames[0], avoBaseAppKit)
+for avoIdx in 0..<4 {
+    avoAppearProgressiveOK = avoAppearProgressiveOK
+        && avoFrameNear(avoAppearFrames[avoIdx + 1], avoAppearExpected[avoIdx])
+}
+check("T-avo1b 出现：ease-in-out 曲线帧(0.15625/0.5/0.84375/1)渐进且前半慢于线性",
+      avoAppearProgressiveOK
+        && DockFrameInterpolator.smoothstep(0.25) > 0
+        && DockFrameInterpolator.smoothstep(0.25) < 0.25,
+      "frames=\(avoAppearFrames)")
+check("T-avo1c 出现：200ms 精确落终点且段完成 invalidate 链接",
+      avoFrameNear(avoAppearFrames[4], avoAvoidAppKit)
+        && abs(avoAppearFrames[4].origin.y - avoAvoidAppKit.origin.y) < 0.51
+        && avoLinks.count == 1 && avoLinks[0].added && avoLinks[0].invalidated,
+      "final=\(avoAppearFrames[4]) links=\(avoLinks.count)")
+
+// T-avo2 按钮消失（障碍 1→0）：从避让位渐进回基础位，完成后 invalidate。
+avoClock = 11
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 11)
+var avoVanishFrames = [avoDock.frame]
+for avoOffset in [0.05, 0.1, 0.15, 0.2] {
+    avoClock = 11 + avoOffset
+    avoLinks.last?.fire()
+    avoVanishFrames.append(avoDock.frame)
+}
+let avoVanishExpected = [0.05, 0.1, 0.15, 0.2].map {
+    avoLerp(avoAvoidAppKit, avoBaseAppKit,
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+check("T-avo2 消失：渐进回基础位且完成后 invalidate",
+      avoFrameNear(avoVanishFrames[0], avoAvoidAppKit)
+        && (0..<4).allSatisfy { avoFrameNear(avoVanishFrames[$0 + 1], avoVanishExpected[$0]) }
+        && avoFrameNear(avoVanishFrames[4], avoBaseAppKit)
+        && avoLinks.count == 2 && avoLinks[1].invalidated,
+      "frames=\(avoVanishFrames)")
+
+// T-avo3 障碍纯平移（数量与相对范围不变）：拖动走 32ms movement 插值，不启动动画源。
+let avoMovedPet = avoPet.offsetBy(dx: 60, dy: 0)
+let avoMovedObstacle = avoObstacle.offsetBy(dx: 60, dy: 0)
+let avoMovedAvoidAppKit = Geometry.appKitRectFromQuartz(avoAvoidQuartz.offsetBy(dx: 60, dy: 0))
+let avoMoveDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+_ = avoMoveDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                           movementChanged: false, monotonicNow: 12)
+let avoMoveStart = avoMoveDock.frame
+avoClock = 13
+_ = avoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle], visibleScreen: avoScreen,
+                           movementChanged: true, monotonicNow: 13)
+avoClock = 13.016
+_ = avoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle], visibleScreen: avoScreen,
+                           movementChanged: false, monotonicNow: 13.016)
+let avoMoveMid = avoMoveDock.frame
+avoClock = 13.04
+_ = avoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle], visibleScreen: avoScreen,
+                           movementChanged: false, monotonicNow: 13.04)
+let avoMoveFinal = avoMoveDock.frame
+check("T-avo3 障碍纯平移：32ms movement 插值且不启动动画源",
+      avoFrameNear(avoMoveStart, avoAvoidAppKit)
+        && between(avoMoveMid.origin.x,
+                   min(avoAvoidAppKit.origin.x, avoMovedAvoidAppKit.origin.x) + 8,
+                   max(avoAvoidAppKit.origin.x, avoMovedAvoidAppKit.origin.x) - 8)
+        && !avoFrameNear(avoMoveMid, avoAvoidAppKit) && !avoFrameNear(avoMoveMid, avoMovedAvoidAppKit)
+        && avoFrameNear(avoMoveFinal, avoMovedAvoidAppKit)
+        && avoLinks.count == 2 && avoTimers.isEmpty,
+      "start=\(avoMoveStart) mid=\(avoMoveMid) final=\(avoMoveFinal)")
+
+// T-avo4 插值器数学（纯值）：smoothstep 单调、200ms 精确、无过冲、retarget/movement 覆盖/snap。
+var avoMath = DockFrameInterpolator()
+_ = avoMath.update(to: interpA, at: 0, movementChanged: false)
+let avoMathStart = avoMath.updateAvoidance(to: interpB, at: 0)
+let avoMathKindActive = avoMath.segmentKind == .avoidance     // 采样前快照（采样会推进/完成段）
+let avoMathEase = [0.05, 0.1, 0.15].map { avoMath.frame(at: $0)! }
+let avoMathEnd = avoMath.frame(at: DockFrameInterpolator.avoidanceDuration)!
+let avoMathAfterEnd = avoMath.frame(at: DockFrameInterpolator.avoidanceDuration + 0.05)!
+let avoMathEaseExpected = [0.05, 0.1, 0.15].map {
+    avoLerp(interpA, interpB,
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+check("T-avo4a avoidance 数学：smoothstep 单调、200ms 精确到 target、无过冲",
+      rectNear(avoMathStart, interpA)
+        && avoMathKindActive
+        && (0..<3).allSatisfy { rectNear(avoMathEase[$0], avoMathEaseExpected[$0]) }
+        && (0..<2).allSatisfy {
+            abs(avoMathEase[$0 + 1].origin.x - avoMathEase[$0].origin.x) > 0.01
+        }
+        && rectNear(avoMathEnd, interpB) && avoMath.segmentStartedAt == nil && avoMath.segmentKind == nil
+        && rectNear(avoMathAfterEnd, interpB),
+      "ease=\(avoMathEase) end=\(avoMathEnd)")
+check("T-avo4b smoothstep：中点=线性中点、1/4点介于 step 与线性之间",
+      DockFrameInterpolator.smoothstep(0.5) == 0.5
+        && DockFrameInterpolator.smoothstep(0.25) > 0
+        && DockFrameInterpolator.smoothstep(0.25) < 0.25
+        && DockFrameInterpolator.smoothstep(0.75) > 0.75
+        && DockFrameInterpolator.smoothstep(0.75) < 1,
+      "s0.25=\(DockFrameInterpolator.smoothstep(0.25))")
+let avoRetargetStarted = avoMath.updateAvoidance(to: interpC, at: 0.3)
+let avoRetargetFrom = avoMath.frame(at: 0.35)!
+let avoRetargetRestart = avoMath.updateAvoidance(to: interpA, at: 0.35)
+let avoRetargetKindActive = avoMath.segmentKind == .avoidance
+let avoRetargetMid = avoMath.frame(at: 0.45)!   // 0.1s/0.2s = 50% ease 中点
+let avoRetargetExpectedMid = avoLerp(avoRetargetFrom, interpA, CGFloat(DockFrameInterpolator.smoothstep(0.5)))
+check("T-avo4c 动画中 avoidance retarget：从当前渲染帧起新段（latest-only）",
+      rectNear(avoRetargetStarted, interpB) && rectNear(avoRetargetRestart, avoRetargetFrom)
+        && rectNear(avoRetargetMid, avoRetargetExpectedMid)
+        && avoRetargetKindActive,
+      "started=\(avoRetargetStarted) from=\(avoRetargetFrom) mid=\(avoRetargetMid)")
+_ = avoMath.frame(at: 0.38)!
+let avoOverrideStart = avoMath.update(to: interpB, at: 0.38, movementChanged: true)
+let avoOverrideKindMovement = avoMath.segmentKind == .movement
+let avoOverrideMid = avoMath.frame(at: 0.396)!
+let avoOverrideEnd = avoMath.frame(at: 0.413)!
+let avoOverrideExpectedMid = avoLerp(avoOverrideStart, interpB, 0.5)
+check("T-avo4d 动画中 movement 到来：立即切 32ms 线性段并精确到位",
+      avoOverrideKindMovement
+        && rectNear(avoOverrideMid, avoOverrideExpectedMid)
+        && rectNear(avoOverrideEnd, interpB),
+      "mid=\(avoOverrideMid) end=\(avoOverrideEnd)")
+let avoMathSnap = avoMath.update(to: interpA, at: 0.42, movementChanged: false)
+check("T-avo4e snap 终止：非移动目标变化立即 snap 且不留段",
+      rectNear(avoMathSnap, interpA) && avoMath.segmentStartedAt == nil && avoMath.segmentKind == nil,
+      "snap=\(avoMathSnap)")
+
+// T-avo5 生命周期：hide/换屏路径 invalidate；hide 后重现首放 snap。
+avoClock = 20
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 20)
+let avoHideLinksBefore = avoLinks.count
+avoClock = 20.5
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 20.5)
+avoDock.hideIfNeeded()
+let avoHideLinksAfterHide = avoLinks.count
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 21)
+check("T-avo5a 隐藏路径：invalidate 动画源且重现首放 snap（不再动画）",
+      avoHideLinksAfterHide == avoHideLinksBefore + 1
+        && avoLinks.last?.invalidated == true
+        && avoLinks.count == avoHideLinksAfterHide
+        && avoFrameNear(avoDock.frame, avoBaseAppKit),
+      "links=\(avoLinks.count) frame=\(avoDock.frame)")
+avoClock = 21.5
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                       movementChanged: false, monotonicNow: 21.5)
+avoClock = 21.6
+_ = avoDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen2,
+                       movementChanged: false, monotonicNow: 21.6)
+check("T-avo5b 换屏路径：立即 snap 到目标且 invalidate 动画源",
+      avoFrameNear(avoDock.frame, avoAvoidAppKit) && avoLinks.last?.invalidated == true,
+      "frame=\(avoDock.frame)")
+
+// T-avo6 macOS13 fallback：display link 工厂返回 nil → 60Hz repeating Timer 渲染渐进并完成失效。
+let avoFallbackDock = avoMakeDock(linkFactory: { _, _ in nil })
+_ = avoFallbackDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                               movementChanged: false, monotonicNow: 22)
+let avoFallbackTimersBefore = avoTimers.count
+_ = avoFallbackDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                               movementChanged: false, monotonicNow: 22.5)
+let avoFallbackTimer = avoTimers.last!
+avoClock = 22.6
+avoFallbackTimer.fire()
+let avoFallbackMid = avoFallbackDock.frame
+avoClock = 22.75
+avoFallbackTimer.fire()
+let avoFallbackFinal = avoFallbackDock.frame
+check("T-avo6 macOS13 fallback：nil link→60Hz repeating Timer 渲染渐进并完成失效",
+      avoTimers.count == avoFallbackTimersBefore + 1
+        && avoFallbackTimer.repeats
+        && abs(avoFallbackTimer.interval - DockPanel.avoidanceFallbackInterval) < 0.0001
+        && between(avoFallbackMid.origin.y,
+                   min(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y) + 4,
+                   max(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y) - 4)
+        && !avoFrameNear(avoFallbackMid, avoBaseAppKit) && !avoFrameNear(avoFallbackMid, avoAvoidAppKit)
+        && avoFrameNear(avoFallbackFinal, avoAvoidAppKit)
+        && avoFallbackTimer.invalidated,
+      "mid=\(avoFallbackMid) final=\(avoFallbackFinal)")
+
+// T-avo7 生产组合：FollowLayoutPass → 真实 DockPanel.placeBelow + fake link 手动 fire。
+// 按钮出现 → dock 渐进下移（≥3 个中间帧递增）；消失 → 渐进上移；最终帧精确。
+let avoProdMascot = mkw(9701, layer: 2, avoPet, title: "Codex Pet Mascot Effect")
+let avoProdControl = mkw(9702, layer: 3, CGRect(x: 140, y: 279, width: 60, height: 24))
+let avoProdProbe = BubbleVisibilityProbe(
+    monotonicNow: { 50_000 }, canCapture: { true }, capturer: { _ in .unavailable })
+let avoProdDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+var avoProdObstacleCounts: [Int] = []
+func avoProdPlace(candidates: [WinCandidate]) -> Bool {
+    FollowLayoutPass.placeDock(
+        mascot: avoProdMascot,
+        candidates: candidates,
+        bubbleProbe: avoProdProbe,
+        frameSink: { pet, obstacles in
+            avoProdObstacleCounts.append(obstacles.count)
+            return avoProdDock.placeBelow(
+                petQuartzRect: pet,
+                avoiding: obstacles,
+                visibleScreen: avoScreen,
+                movementChanged: false,
+                monotonicNow: avoClock)
+        })
+}
+avoClock = 30
+_ = avoProdPlace(candidates: [avoProdMascot])
+let avoProdLinksBefore = avoLinks.count
+avoClock = 30.1
+let avoProdShown = avoProdPlace(candidates: [avoProdMascot, avoProdControl])
+var avoProdFrames = [avoProdDock.frame]
+for avoOffset in [0.05, 0.09, 0.13, 0.17, 0.21] {
+    avoClock = 30.1 + avoOffset
+    avoLinks.last?.fire()
+    avoProdFrames.append(avoProdDock.frame)
+}
+let avoProdLo = min(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y)
+let avoProdHi = max(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y)
+check("T-avo7a 生产组合按钮出现：渐进下移（≥3 中间帧严格递增）且最终精确",
+      avoProdShown && avoProdObstacleCounts == [0, 1]
+        && avoLinks.count == avoProdLinksBefore + 1
+        && (1..<5).allSatisfy { avoProdFrames[$0].origin.y > avoProdLo + 1 && avoProdFrames[$0].origin.y < avoProdHi - 1 }
+        && (1..<4).allSatisfy {
+            abs(avoProdFrames[$0 + 1].origin.y - avoBaseAppKit.origin.y)
+                > abs(avoProdFrames[$0].origin.y - avoBaseAppKit.origin.y)
+        }
+        && avoFrameNear(avoProdFrames[5], avoAvoidAppKit),
+      "frames=\(avoProdFrames)")
+avoClock = 31
+_ = avoProdPlace(candidates: [avoProdMascot])
+var avoProdVanishFrames = [avoProdDock.frame]
+for avoOffset in [0.05, 0.12, 0.19, 0.24] {
+    avoClock = 31 + avoOffset
+    avoLinks.last?.fire()
+    avoProdVanishFrames.append(avoProdDock.frame)
+}
+check("T-avo7b 生产组合按钮消失：渐进回基础位、最终精确、链接失效",
+      avoProdObstacleCounts == [0, 1, 0]
+        && !avoFrameNear(avoProdVanishFrames[1], avoBaseAppKit)
+        && !avoFrameNear(avoProdVanishFrames[1], avoAvoidAppKit)
+        && avoFrameNear(avoProdVanishFrames[4], avoBaseAppKit)
+        && avoLinks.last?.invalidated == true,
+      "frames=\(avoProdVanishFrames)")
+print("\n[障碍平滑过渡] \(pass - avoPass) passed, \(fail - avoBase) failed")
+
+
 // ---- T-avoid: 会话气泡避让（obstaclesNear + safeDockFrame + placeBelow）----
 let avBase = fail, avPass = pass
+
+
+
 let petRect = CGRect(x: 100, y: 100, width: 172, height: 179)   // Mascot 几何（示例）
 let mascotW = mkw(1, layer: 2, petRect, title: "Codex Pet Mascot Effect")
 let dockSize = CGSize(width: 200, height: 48)
