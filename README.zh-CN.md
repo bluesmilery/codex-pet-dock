@@ -23,7 +23,7 @@
 - **透明底座 HUD**：紧贴宠物下方、不重叠，显示 `WEEK LEFT`（含本周期到期时间）与 `WEEK TOKENS`；数据缺失时以 `—` 占位。
 - **详情卡**：点击底座展开 / 关闭，列出套餐、重置时间、缓存比例、输入、输出、会话数、更新时间，以及本机估算说明。
 - **自适应跟随**：macOS 14+ 跟随底座窗口所在屏幕的原生显示节拍；可见窗口暂时没有所属屏幕时改用 repeating Timer，并在屏幕变化后重新选择 display link。macOS 13 按当前屏幕刷新能力选择该 Timer，刷新能力变化时重建，并上限为 120 Hz。密集回调只保留最新的一个待执行 tick；静止判定相对固定抖动锚点，在 60/120 Hz 和不规则节拍下保持相同的实际时长语义，随后降为以每次完整 tick 起点为锚的 0.1 秒静止探测；若气泡 probe 尚未 due，只等待到本 tick 完成时仍剩余的 probe 延迟。工作超时只立即合并一次 latest-only follow-up，不回放错过的探测。宠物隐藏或 Codex 退出时底座与详情同步隐藏，重现后重新捕获。
-- **会话气泡避让**：当 Codex 会话气泡出现在宠物下方时，底座自动下移避开重叠。使用 `ScreenCaptureKit`（macOS 14+）检测气泡是否实际绘制内容（仅 alpha 像素统计——不 OCR、不保存图像、不记录颜色或文字）；气泡候选仍存在时，下一次允许启动探测的受应用控制等待最长 0.1 秒，实际捕获仍遵守 strict single-flight。探测 cadence 与跟随调度共用同一单调时钟，系统时间校准不会加快或延后捕获。成功识别收起态后唤醒一次合并的完整布局 tick，即使宠物未移动也让底座回到正下方。成功取得的 ScreenCaptureKit 窗口清单不再包含此前成功观察过的目标时，即使 CG 候选短暂残留也会使该气泡失效；权限、清单、截图或像素观察不可用时仍保守避让。移动跟随只追最新目标，使用最长 32ms 的显式线性插值；障碍或其他安全布局变化立即 snap。macOS 13、屏幕录制 preflight 尚未生效或捕获失败时保守避让；preflight 不可用期间跳过后台捕获。宠物靠近屏幕边缘时，底座水平 clamp 到屏内（像消息条一样贴边展示）。
+- **会话气泡避让**：当 Codex 会话气泡出现在宠物下方时，底座自动下移避开重叠。使用 `ScreenCaptureKit`（macOS 14+）检测气泡是否实际绘制内容（仅 alpha 像素统计——不 OCR、不保存图像、不记录颜色或文字）；气泡候选仍存在时，下一次允许启动探测的受应用控制等待最长 0.1 秒，实际捕获仍遵守 strict single-flight。探测 cadence 与跟随调度共用同一单调时钟，系统时间校准不会加快或延后捕获。可见性变为无可见内容时唤醒一次合并的完整布局 tick，即使宠物未移动也让底座回到正下方；有无可见内容按现场校准的噪声下限判定（收起后 ~39-57px 的不可见小点忽略，~189-194px 的控制按钮计入），可见气泡按可见内容 bbox 避让——底座紧贴内容底 + 间距，而非整窗底；收起后的基础位同样锚定宠物可见内容底（Composition Surface 的 contentBottom 观察），不再停在带透明 padding 的 Mascot 窗口底下方，观察不可用（降级/冷启动）时回退窗口底。渲染在宿主 "Codex Pet Composition Surface" 大窗里的展开气泡卡按该精确标题识别（重复实例去重、大窗捕获降采样）并同样避让。成功取得的 ScreenCaptureKit 窗口清单不再包含此前成功观察过的目标时，即使 CG 候选短暂残留也会使该气泡失效；权限、清单、截图或像素观察不可用时，几何气泡候选（activity stack 等小窗）仍保守避让（整窗 bounds）；Composition Surface 通道在降级状态下跳过（见上方已知限制），因为无像素数据时整窗避让没有依据。宠物窗口移动只追最新目标，使用最长 32ms 的显式线性插值（含拖动中障碍平移）；静止时的目标变化（障碍出现/消失、气泡展开/收起等内容锚变化及 ±1px 锚微变）以 200ms ease-in-out 过渡并按显示节拍渲染（macOS 14+ 底座自有 display link，macOS 13 回退 60Hz Timer），动画中目标再变从当前帧 latest-only 平滑续接；隐藏/换屏/越界等安全路径仍立即 snap。macOS 13、屏幕录制 preflight 尚未生效或捕获失败时，几何气泡候选保守避让、Composition Surface 通道跳过；preflight 不可用期间跳过后台捕获。宠物靠近屏幕边缘时，底座水平 clamp 到屏内（像消息条一样贴边展示）。
 - **真实数据，严格隐私**：
   - `WEEK LEFT`：经 `codex app-server` 的 JSON-RPC 读取官方周额度（`primary` 周窗口）。
   - `WEEK TOKENS`：聚合 `~/.codex/sessions` 本机会话日志的 token 增量。
@@ -73,7 +73,7 @@
 
 **屏幕录制权限（TCC）**：`CGWindowListCopyWindowInfo` 是唯一公开的跨应用窗口枚举 API；macOS 在未授权时会将其过滤为空列表。`PetDock.app` 每个进程至多主动请求一次权限；preflight 不可用期间不进入后台 `ScreenCaptureKit` 捕获，避免反复提示，同时保留气泡保守避让与状态栏提醒。请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 **PetDock**，然后退出并重启 app 使权限生效。
 
-> ⚠️ ad-hoc 签名没有 team ID，TCC 按 ad-hoc 签名的代码目录哈希认证；每次重新签名（如重新执行 `make app`）都会改变该哈希值，使授权失效而需要重新授予。生产环境建议改用稳定开发者签名或 notarized 构建。
+> ⚠️ TCC 按应用代码签名认证屏幕录制授权。ad-hoc 签名没有稳定身份，每次重新签名（如重新执行 `make app`）都会改变代码目录哈希、使授权失效。因此 `make app` 在本机存在自签证书 `PetDock Local Development` 时自动优先用它签名（可用 `STABLE_SIGN_IDENTITY` 覆盖）；用该稳定证书签名时，重新签名后授权在本机继续保留。`STABLE_SIGN_IDENTITY` 的取值应为纯证书名（不含引号、分号、反引号等 shell 元字符）。没有该证书时构建失败并提示原因。该证书为本机自签身份（无 Developer ID、未公证），私钥不会分发。
 
 ---
 
@@ -91,7 +91,7 @@ uv sync --dev     # 按 uv.lock 创建 Python 3.12 的 .venv，并安装 pytest
 
 ```sh
 make build        # swift build -c release，产出 .build/release/PetDock
-make app          # 组装 build/PetDock.app 并 ad-hoc 签名（Identifier=io.github.bluesmilery.codexpetdock）
+make app          # 组装 build/PetDock.app；本机存在 'PetDock Local Development' 证书时自动稳定签名，否则构建失败（Identifier=io.github.bluesmilery.codexpetdock）
 make run          # 构建 app、启动（日志写入 Application Support/PetDock/Logs 私有目录）
 make diagnose     # 构建并跑一次脱敏诊断（写入 Diagnostics/diagnose.txt 私有文件）
 pkill -f PetDock  # 停止运行
@@ -105,13 +105,13 @@ make clean-logs   # 清理 Application Support/PetDock 私有运行 / 诊断日�
 
 日志、诊断与 token 缓存统一位于 `~/Library/Application Support/PetDock/` 私有目录（目录 0700、文件 0600），日志拒绝 symlink 重定向。Codex helper 仅接收最小白名单环境，不继承 API key、cookie、代理凭证或未知变量；依赖环境变量认证的用户请改用 Codex 自身登录态。
 
-**分发**：当前发布包为 ad-hoc 签名（无 team ID）、未 notarized 的 arm64 预编译包。具体校验值与下载方式以发布说明为准。
+**分发**：当前发布包为本机签名（无 team ID）、未 notarized 的 arm64 预编译包。构建机存在 'PetDock Local Development' 证书时 `make app` 自动稳定签名，否则构建失败；实际签名方式、校验值与下载渠道以发布说明为准。
 
 **预览安装**（非一键可信安装）：
 
 1. 下载 `CodexPetDock-0.2.0-macOS-arm64.zip` 并解压。
 2. 将 `PetDock.app` 移至 `/Applications`（或任意固定位置）。
-3. 因应用为 ad-hoc 签名（无 Developer ID、未公证），macOS Gatekeeper 可能拦截首次启动。前往**系统设置 › 隐私与安全性**，点击**仍要打开**（或在 Gatekeeper 对话框中选"打开"）。详见 [Apple 官方指南](https://support.apple.com/guide/mac-help/mh40616/mac)。
+3. 因应用为本机自签证书签名（无 Developer ID、未公证），macOS Gatekeeper 可能拦截首次启动。前往**系统设置 › 隐私与安全性**，点击**仍要打开**（或在 Gatekeeper 对话框中选"打开"）。详见 [Apple 官方指南](https://support.apple.com/guide/mac-help/mh40616/mac)。
 4. 首次启动后，授予**屏幕录制**权限（跨应用窗口枚举所需），然后重启应用。
 5. 确保本机已安装并登录 `codex` CLI（`@openai/codex`）——`WEEK LEFT` 依赖其可用。
 
@@ -192,8 +192,10 @@ make test         # 全量（docs gate + privacy + Swift UI/data/shell fixture�
 
 ## ⚠️ 已知限制
 
-- **ad-hoc 签名 TCC 不稳定**：每次重新签名会改变代码目录哈希，导致屏幕录制授权失效，需重新授予。
+- **缺少证书时构建失败**：本机没有 `PetDock Local Development` 证书时，`make app` 构建失败；ad-hoc 签名会随每次重新签名改变代码目录哈希、使屏幕录制授权失效，因此不允许回落。
 - **屏幕录制权限是硬前提**：未授权时无法枚举到 Codex 窗口，底座不会出现。
+- **Composition Surface 气泡避让依赖像素观察**：降级路径（macOS 13、屏幕录制授权被拒或捕获失败）下 Composition Surface 气泡不作为障碍，可能与底座重叠（与该通道引入前行为一致）；正常模式冷启动首次探测完成前（≤~0.3s），若气泡恰好已展开，同样短暂重叠后由首次探测自动纠正。
+- **详情卡不逐帧跟随避让动画**：底座 avoidance 动画期间，详情卡仍按 follow tick（~0.1s）重排，动画帧之间最多与底座短暂分离；这是接受的已知限制。
 - **`codex app-server` 为 experimental**：协议字段可能随 codex 版本变化；已做稳定子集解析与缺失字段降级。
 - **跨应用窗口相对 z-order 不可控**：以 `.floating` 层级 + 几何不重叠的方式降级处理。
 - **平台范围有限**：当前仅适配 Apple Silicon 上的 macOS 13+，且仅针对 Codex 桌面宠物。
