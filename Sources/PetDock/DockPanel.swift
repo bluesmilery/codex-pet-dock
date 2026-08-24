@@ -3,8 +3,8 @@ import QuartzCore
 
 /// 底座 frame 的 latest-only 插值状态。
 /// 只保存当前渲染值与一个在途 segment；没有 Timer、动画队列或预测目标。
-/// segment 分两类：movement（宠物拖动跟随，32ms 线性）与 avoidance（障碍出现/消失/
-/// 相对范围变化，200ms ease-in-out）；均从当前渲染帧 latest-only 重定向，不排队历史目标。
+/// segment 分两类：movement（宠物窗口实质移动的拖动跟随，32ms 线性）与 avoidance（静止时
+/// 内容/障碍/锚目标变化，200ms ease-in-out）；均从当前渲染帧 latest-only 重定向，不排队历史目标。
 struct DockFrameInterpolator {
     static let maximumDuration: TimeInterval = 0.032
     static let avoidanceDuration: TimeInterval = 0.2
@@ -72,10 +72,11 @@ struct DockFrameInterpolator {
         return sampled
     }
 
-    /// movementChanged 只允许宠物移动驱动 32ms 线性插值；障碍/屏幕等目标变化由调用方 snap。
+    /// 宠物移动（movementChanged）驱动的 32ms 线性插值；静止时的内容/障碍/锚目标变化
+    /// 由调用方走 updateAvoidance 平滑过渡，安全路径（无屏/换屏/隐藏后）经 reset 后在此 snap。
     /// avoidance 动画中 movement 到来时从当前渲染帧切 movement 段（avoidance 段终止）。
     @discardableResult
-    mutating func update(to target: NSRect, at now: TimeInterval, movementChanged: Bool) -> NSRect {
+    mutating func update(to target: NSRect, at now: TimeInterval) -> NSRect {
         guard let currentTarget = targetFrame, renderedFrame != nil else {
             return snap(to: target)
         }
@@ -83,7 +84,6 @@ struct DockFrameInterpolator {
             return snap(to: target)
         }
         guard currentTarget != target else { return current }
-        guard movementChanged else { return snap(to: target) }
         guard current != target else { return snap(to: target) }
         segmentStartFrame = current
         targetFrame = target
@@ -93,9 +93,10 @@ struct DockFrameInterpolator {
         return current
     }
 
-    /// 障碍出现/消失/相对范围变化的 avoidance 过渡：从当前渲染帧起 200ms ease-in-out 段。
-    /// latest-only retarget：动画中再次 avoidanceChange 从当前渲染帧重启新段；
-    /// 同一 avoidance 目标重放（stable tick）继续当前段，不重置进度。
+    /// 静止时目标变化（内容/障碍/锚，如气泡展开/收起、按钮出现/消失、锚 ±1px 微变）的
+    /// avoidance 过渡：从当前渲染帧起 200ms ease-in-out 段。latest-only retarget：动画中
+    /// 目标再变从当前渲染帧重启新段（平滑续接，不 snap 截断）；同一目标重放（stable tick）
+    /// 继续当前在途段（movement 拖尾或 avoidance 均不重置进度），无在途段且已到位则 snap。
     @discardableResult
     mutating func updateAvoidance(to target: NSRect, at now: TimeInterval) -> NSRect {
         guard renderedFrame != nil, targetFrame != nil else {
@@ -104,7 +105,7 @@ struct DockFrameInterpolator {
         guard let current = frame(at: now) else {
             return snap(to: target)
         }
-        if targetFrame == target, isAvoidanceSegmentActive {
+        if targetFrame == target, segmentStartedAt != nil {
             return current
         }
         guard current != target else { return snap(to: target) }
@@ -150,8 +151,6 @@ final class DockPanel: NSObject {
     private var didShow = false
     private var screenObserver: NSObjectProtocol?
     private var frameInterpolator = DockFrameInterpolator()
-    private var lastAvoiding: [CGRect]?
-    private var lastPetQuartzRect: CGRect?
     private var lastVisibleScreenID: ObjectIdentifier?
     private let makeAnimationDisplayLink: AnimationDisplayLinkFactory
     private let makeAnimationTimer: AnimationTimerFactory
@@ -215,8 +214,6 @@ final class DockPanel: NSObject {
             queue: .main
         ) { [weak self] _ in
             self?.frameInterpolator.reset()
-            self?.lastAvoiding = nil
-            self?.lastPetQuartzRect = nil
             self?.lastVisibleScreenID = nil
             self?.stopAvoidanceAnimation()
             self?.onScreenChange?()
@@ -254,8 +251,6 @@ final class DockPanel: NSObject {
 
     func hideIfNeeded() {
         frameInterpolator.reset()
-        lastAvoiding = nil
-        lastPetQuartzRect = nil
         lastVisibleScreenID = nil
         stopAvoidanceAnimation()
         guard didShow else { return }
@@ -279,31 +274,12 @@ final class DockPanel: NSObject {
         let screenID = visibleScreen.map(ObjectIdentifier.init)
         let screenChanged = lastVisibleScreenID != screenID
         let hasVisibleScreen = visibleScreen != nil
-        // 障碍变化分类（只对“避让形态变化”平滑过渡）：
-        // - avoidanceChange：障碍数量变化（按钮/气泡出现或消失），或任一障碍相对宠物的
-        //   垂直范围（obstacle.maxY - pet.maxY）变化超过 1px 容差（气泡展开/收起、内容锚
-        //   变化；宠物动画的逐帧微变由容差吸收）→ 200ms ease-in-out avoidance 段；
-        // - 纯移动：数量与相对范围不变、障碍 rect 只随宠物平移 → 沿用 movementChanged 的
-        //   32ms 线性插值路径（拖动语义不变）。
-        // screenChanged / 无屏 / 首次显示 / 越界隐藏 / hideIfNeeded 仍立即 snap（安全路径
-        // 不得被动画延迟）。相对范围用传入 pet rect（生产为内容锚 adjustedPet）计算。
-        var avoidanceChange = false
-        if hasVisibleScreen, !screenChanged,
-           let lastObstacles = lastAvoiding, let lastPet = lastPetQuartzRect {
-            if lastObstacles.count != obstacles.count {
-                avoidanceChange = true
-            } else {
-                avoidanceChange = zip(lastObstacles, obstacles).contains { last, current in
-                    abs((current.maxY - pet.maxY) - (last.maxY - lastPet.maxY)) > 1
-                }
-            }
-        }
+        // 无屏 / 换屏 → reset（安全路径不得被动画延迟；首次显示 / 隐藏后 renderedFrame
+        // 亦为 nil，越界隐藏在下方 hideIfNeeded 内 reset）。
         if !hasVisibleScreen || screenChanged {
             frameInterpolator.reset()
         }
         lastVisibleScreenID = screenID
-        lastAvoiding = obstacles
-        lastPetQuartzRect = pet
 
         let target: NSRect
         if obstacles.isEmpty && visibleScreen == nil {
@@ -318,12 +294,21 @@ final class DockPanel: NSObject {
             target = Geometry.appKitRectFromQuartz(q)
         }
 
-        let shouldAnimate = movementChanged && hasVisibleScreen && !screenChanged && !avoidanceChange
+        // 分类（movementChanged 驱动）：movementChanged（宠物窗口是否实质移动，来自
+        // Follower.shouldSetFrame）是区分“移动”与“内容/障碍/锚变化”的权威信号——
+        // 不再用障碍 count/range 分类（CS 锚变化时障碍 rect 与 adjustedPet.maxY 协变，
+        // count 与相对范围均不变，会误入移动路径被 snap；动画中 ±1px 锚微变同理截断在途段）。
+        // 1. movementChanged=true → 32ms 线性 movement 段（终止在途 avoidance 段与动画源），
+        //    覆盖拖动（含拖动中障碍平移、拖动中按钮出现，32ms 快速跟随优于 snap）；
+        // 2. movementChanged=false 且目标变化 → updateAvoidance 200ms smoothstep：无在途段
+        //    起段+起动画源，有在途段 latest-only retarget 平滑续接（CS 锚变化自然落入）；
+        // 3. movementChanged=false 且目标不变 → hold（在途段继续，由动画源/跟随节拍渲染）。
+        // 安全路径（无屏/换屏/首显/隐藏/越界）经上方 reset 后两个入口均立即 snap 并失效动画源。
         let frame: NSRect
-        if avoidanceChange {
-            frame = frameInterpolator.updateAvoidance(to: target, at: monotonicNow)
+        if movementChanged && hasVisibleScreen && !screenChanged {
+            frame = frameInterpolator.update(to: target, at: monotonicNow)
         } else {
-            frame = frameInterpolator.update(to: target, at: monotonicNow, movementChanged: shouldAnimate)
+            frame = frameInterpolator.updateAvoidance(to: target, at: monotonicNow)
         }
         panel.setFrame(frame, display: true)
         // Owner read-back：setFrame 会做像素对齐等状态修正，请求值不等于最终 owner 状态；
