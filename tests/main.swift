@@ -462,8 +462,8 @@ func between(_ value: CGFloat, _ a: CGFloat, _ b: CGFloat) -> Bool {
 }
 
 var baseInterpolator = DockFrameInterpolator()
-_ = baseInterpolator.update(to: interpA, at: 0, movementChanged: false)
-let interpStart = baseInterpolator.update(to: interpB, at: 0, movementChanged: true)
+_ = baseInterpolator.snap(to: interpA)
+let interpStart = baseInterpolator.update(to: interpB, at: 0)
 let interp16 = baseInterpolator.frame(at: 0.016)
 let interp32 = baseInterpolator.frame(at: DockFrameInterpolator.maximumDuration)
 check("T-ip1 0ms从起点开始且16ms在线段中点", rectNear(interpStart, interpA) && rectNear(interp16, NSRect(x: 50, y: 40, width: 200, height: 48)),
@@ -473,8 +473,8 @@ check("T-ip2 32ms精确到终点且segment结束", rectNear(interp32, interpB) &
 
 func interpolationSamples(at times: [TimeInterval]) -> [NSRect] {
     var interpolator = DockFrameInterpolator()
-    _ = interpolator.update(to: interpA, at: 0, movementChanged: false)
-    _ = interpolator.update(to: interpB, at: 0, movementChanged: true)
+    _ = interpolator.snap(to: interpA)
+    _ = interpolator.update(to: interpB, at: 0)
     return times.compactMap { interpolator.frame(at: $0) }
 }
 let samples60 = interpolationSamples(at: [0, 1.0 / 60.0, 2.0 / 60.0])
@@ -491,10 +491,10 @@ check("T-ip3 60/120Hz与不规则节拍均单调且无过冲", allSamplesBounded
       "60=\(samples60) 120=\(samples120) irregular=\(samplesIrregular)")
 
 var retargetInterpolator = DockFrameInterpolator()
-_ = retargetInterpolator.update(to: interpA, at: 0, movementChanged: false)
-_ = retargetInterpolator.update(to: interpB, at: 0, movementChanged: true)
+_ = retargetInterpolator.snap(to: interpA)
+_ = retargetInterpolator.update(to: interpB, at: 0)
 let retargetSource = retargetInterpolator.frame(at: 0.016)
-let retargetStart = retargetInterpolator.update(to: interpC, at: 0.016, movementChanged: true)
+let retargetStart = retargetInterpolator.update(to: interpC, at: 0.016)
 let retargetMid = retargetInterpolator.frame(at: 0.032)
 let retargetEnd = retargetInterpolator.frame(at: 0.048)
 let expectedRetargetMid = NSRect(x: ((retargetSource?.origin.x ?? interpA.origin.x) + interpC.origin.x) / 2,
@@ -506,20 +506,26 @@ check("T-ip4 retarget从当前采样值开始且只追最新目标",
         && rectNear(retargetEnd, interpC),
       "source=\(String(describing: retargetSource)) mid=\(String(describing: retargetMid)) end=\(String(describing: retargetEnd))")
 
-var safetyInterpolator = DockFrameInterpolator()
-_ = safetyInterpolator.update(to: interpA, at: 0, movementChanged: false)
-_ = safetyInterpolator.update(to: interpB, at: 0, movementChanged: true)
-let safetySnap = safetyInterpolator.update(to: interpC, at: 0.008, movementChanged: false)
-check("T-ip5 障碍/安全目标变化立即snap且不留segment",
-      rectNear(safetySnap, interpC) && safetyInterpolator.segmentStartedAt == nil,
-      "snap=\(safetySnap) started=\(String(describing: safetyInterpolator.segmentStartedAt))")
-safetyInterpolator.reset()
-check("T-ip6 reset用于隐藏/无screen/首次显示路径", safetyInterpolator.renderedFrame == nil
-        && safetyInterpolator.targetFrame == nil && safetyInterpolator.segmentStartedAt == nil, "")
+var stationaryInterpolator = DockFrameInterpolator()
+_ = stationaryInterpolator.snap(to: interpA)
+let stationaryStart = stationaryInterpolator.updateAvoidance(to: interpC, at: 0)
+let stationaryKindActive = stationaryInterpolator.segmentKind == .avoidance   // 采样前快照
+let stationaryMid = stationaryInterpolator.frame(at: 0.1)
+let stationaryEnd = stationaryInterpolator.frame(at: DockFrameInterpolator.avoidanceDuration)
+check("T-ip5 静止目标变化(内容/障碍/锚)走avoidance平滑非snap(语义来源:movementChanged分类)",
+      rectNear(stationaryStart, interpA)
+        && stationaryKindActive
+        && !rectNear(stationaryMid, interpA) && !rectNear(stationaryMid, interpC)
+        && between(stationaryMid!.origin.x, interpA.origin.x, interpC.origin.x)
+        && rectNear(stationaryEnd, interpC),
+      "start=\(String(describing: stationaryStart)) mid=\(String(describing: stationaryMid)) end=\(String(describing: stationaryEnd))")
+stationaryInterpolator.reset()
+check("T-ip6 reset用于隐藏/无screen/首次显示路径", stationaryInterpolator.renderedFrame == nil
+        && stationaryInterpolator.targetFrame == nil && stationaryInterpolator.segmentStartedAt == nil, "")
 
 var stableInterpolator = DockFrameInterpolator()
-_ = stableInterpolator.update(to: interpA, at: 0, movementChanged: false)
-_ = stableInterpolator.update(to: interpB, at: 0, movementChanged: true)
+_ = stableInterpolator.snap(to: interpA)
+_ = stableInterpolator.update(to: interpB, at: 0)
 let stableFinal = stableInterpolator.frame(at: Follower.stationaryDuration)
 check("T-ip7 stable阈值前最终插值段已精确到位", rectNear(stableFinal, interpB),
       "stableDuration=\(Follower.stationaryDuration) final=\(String(describing: stableFinal))")
@@ -596,7 +602,7 @@ if let interpolationScreen = NSScreen.screens.first {
         avoiding: [panelObstacle],
         visibleScreen: interpolationScreen,
         movementChanged: false,
-        monotonicNow: 0.116
+        monotonicNow: 0.032
     )
     let panelAvoidMid = panelInterpolator.frame
     _ = panelInterpolator.placeBelow(
@@ -604,15 +610,15 @@ if let interpolationScreen = NSScreen.screens.first {
         avoiding: [panelObstacle],
         visibleScreen: interpolationScreen,
         movementChanged: false,
-        monotonicNow: 0.25
+        monotonicNow: 0.08
     )
-    check("T-ip9 DockPanel障碍出现平滑过渡(200ms ease-in-out;安全路径仍snap)",
+    check("T-ip9 拖动中障碍出现走32ms movement插值(静止出现走avoidance见T-avo1;安全路径仍snap)",
           abs(panelAvoidPlaced.origin.y - panelMovingMid.origin.y) < 1.0
             && between(panelAvoidMid.origin.y,
                        min(panelMovingMid.origin.y, panelSafetyTarget.origin.y) + 4,
                        max(panelMovingMid.origin.y, panelSafetyTarget.origin.y) - 4)
             && abs(panelInterpolator.frame.origin.y - panelSafetyTarget.origin.y) < 1.0
-            && ipAvoLinks.count == 1 && ipAvoLinks[0].invalidated,
+            && ipAvoLinks.isEmpty,
           "placed=\(panelAvoidPlaced) mid=\(panelAvoidMid) final=\(panelInterpolator.frame) target=\(panelSafetyTarget)")
     panelInterpolator.hideIfNeeded()
     _ = panelInterpolator.placeBelow(
@@ -649,11 +655,11 @@ print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) faile
 
 // ---- T-avo: 障碍出现/消失平滑过渡（200ms ease-in-out + DockPanel 自有显示节拍渲染源） ----
 // 用户症状：控制按钮出现/消失时 dock 瞬间跳变（基线 obstaclesChanged → snap；基线红测
-// T-avo1/2/3 在 5fbe237 上 3 failed 已记录）。新语义：障碍数量或相对宠物垂直范围变化 →
-// 200ms ease-in-out avoidance segment，动画期间由 DockPanel 自有 display link（macOS13/
-// 不可用 → 60Hz repeating Timer fallback）以显示节拍渲染（stable follow tick 仅 0.1s
-// cadence，只靠 tick 采样每段仅 ~2 点呈台阶）；障碍纯平移沿用 32ms movement 插值；
-// 无屏/换屏/隐藏/越界等安全路径仍立即 snap。
+// T-avo1/2/3 在 5fbe237 上 3 failed 已记录）。新语义（movementChanged 驱动分类）：宠物窗口
+// 实质移动 → 32ms movement 插值；静止时内容/障碍/锚目标变化 → 200ms ease-in-out
+// avoidance segment，动画期间由 DockPanel 自有 display link（macOS13/不可用 → 60Hz
+// repeating Timer fallback）以显示节拍渲染（stable follow tick 仅 0.1s cadence，只靠 tick
+// 采样每段仅 ~2 点呈台阶）；无屏/换屏/隐藏/越界等安全路径仍立即 snap。
 let avoBase = fail, avoPass = pass
 
 /// 可注入合成屏（NSScreen 是系统只读集合；headless 无 WindowServer 时 screens 为空）。
@@ -798,7 +804,8 @@ check("T-avo2 消失：渐进回基础位且完成后 invalidate",
         && avoLinks.count == 2 && avoLinks[1].invalidated,
       "frames=\(avoVanishFrames)")
 
-// T-avo3 障碍纯平移（数量与相对范围不变）：拖动走 32ms movement 插值，不启动动画源。
+// T-avo3 障碍纯平移：movementChanged=true（宠物实质移动、目标随动）→ 拖动走 32ms
+// movement 插值（语义来源：movementChanged 分类，不再比对障碍数量/相对范围），不启动动画源。
 let avoMovedPet = avoPet.offsetBy(dx: 60, dy: 0)
 let avoMovedObstacle = avoObstacle.offsetBy(dx: 60, dy: 0)
 let avoMovedAvoidAppKit = Geometry.appKitRectFromQuartz(avoAvoidQuartz.offsetBy(dx: 60, dy: 0))
@@ -833,7 +840,7 @@ check("T-avo3 障碍纯平移：32ms movement 插值且不启动动画源",
 
 // T-avo4 插值器数学（纯值）：smoothstep 单调、200ms 精确、无过冲、retarget/movement 覆盖/snap。
 var avoMath = DockFrameInterpolator()
-_ = avoMath.update(to: interpA, at: 0, movementChanged: false)
+_ = avoMath.snap(to: interpA)
 let avoMathStart = avoMath.updateAvoidance(to: interpB, at: 0)
 let avoMathKindActive = avoMath.segmentKind == .avoidance     // 采样前快照（采样会推进/完成段）
 let avoMathEase = [0.05, 0.1, 0.15].map { avoMath.frame(at: $0)! }
@@ -872,7 +879,7 @@ check("T-avo4c 动画中 avoidance retarget：从当前渲染帧起新段（late
         && avoRetargetKindActive,
       "started=\(avoRetargetStarted) from=\(avoRetargetFrom) mid=\(avoRetargetMid)")
 _ = avoMath.frame(at: 0.38)!
-let avoOverrideStart = avoMath.update(to: interpB, at: 0.38, movementChanged: true)
+let avoOverrideStart = avoMath.update(to: interpB, at: 0.38)
 let avoOverrideKindMovement = avoMath.segmentKind == .movement
 let avoOverrideMid = avoMath.frame(at: 0.396)!
 let avoOverrideEnd = avoMath.frame(at: 0.413)!
@@ -882,10 +889,17 @@ check("T-avo4d 动画中 movement 到来：立即切 32ms 线性段并精确到�
         && rectNear(avoOverrideMid, avoOverrideExpectedMid)
         && rectNear(avoOverrideEnd, interpB),
       "mid=\(avoOverrideMid) end=\(avoOverrideEnd)")
-let avoMathSnap = avoMath.update(to: interpA, at: 0.42, movementChanged: false)
-check("T-avo4e snap 终止：非移动目标变化立即 snap 且不留段",
-      rectNear(avoMathSnap, interpA) && avoMath.segmentStartedAt == nil && avoMath.segmentKind == nil,
-      "snap=\(avoMathSnap)")
+let avoStationaryStart = avoMath.updateAvoidance(to: interpA, at: 0.42)
+let avoStationaryKindActive = avoMath.segmentKind == .avoidance
+let avoStationaryMid = avoMath.frame(at: 0.52)!
+avoMath.reset()
+let avoResetSnap = avoMath.updateAvoidance(to: interpB, at: 0.6)
+check("T-avo4e 静止目标变化起avoidance段；reset后updateAvoidance立即snap不留段(安全路径)",
+      rectNear(avoStationaryStart, interpB) && avoStationaryKindActive
+        && !rectNear(avoStationaryMid, interpA) && !rectNear(avoStationaryMid, interpB)
+        && between(avoStationaryMid.origin.x, interpA.origin.x, interpB.origin.x)
+        && rectNear(avoResetSnap, interpB) && avoMath.segmentStartedAt == nil && avoMath.segmentKind == nil,
+      "start=\(avoStationaryStart) mid=\(avoStationaryMid) resetSnap=\(avoResetSnap)")
 
 // T-avo5 生命周期：hide/换屏路径 invalidate；hide 后重现首放 snap。
 avoClock = 20
@@ -1011,6 +1025,251 @@ check("T-avo7b 生产组合按钮消失：渐进回基础位、最终精确、�
         && avoLinks.last?.invalidated == true,
       "frames=\(avoProdVanishFrames)")
 print("\n[障碍平滑过渡] \(pass - avoPass) passed, \(fail - avoBase) failed")
+
+
+// ---- T-p1: P1 回归（review-smooth 首轮 P1-1/P1-2；movementChanged 驱动分类）----
+// 症状：分类只认障碍 count/range 时，CS 锚变化（气泡展开/收起：CS 障碍 rect 与
+// adjustedPet.maxY 协变，count 1→1、range 恒 0）落入 movement 路径，movementChanged=false
+// 的目标变化被 snap（P1-1：470↔362 跳变）；在途 avoidance 动画中锚 ±1px 微变同样走
+// movement 路径 snap，截断动画（P1-2：~12px 跳变）。新语义：movementChanged（宠物窗口
+// 是否实质移动，来自 Follower.shouldSetFrame）是区分“移动”与“内容/障碍/锚变化”的权威
+// 信号——静止时任何目标变化统一走 200ms avoidance 平滑（latest-only retarget 平滑续接）。
+let pavoBase = fail, pavoPass = pass
+
+// 生产组合 fixture（现场几何，与 T-cs 同构）：宠物 172x179 maxY=386；Composition Surface
+// 768x912@(-3)，3 个同 bounds 重复实例去重为代表；无 ACT（保持触发形态 count 1→1）。
+let pavoPet = CGRect(x: 1487, y: 207, width: 172, height: 179)
+let pavoMascot = mkw(9801, layer: 2, pavoPet, title: "Codex Pet Mascot Effect")
+let pavoSurfaceBounds = CGRect(x: 1189, y: -3, width: 768, height: 912)
+let pavoSurfaces = [28901, 28902, 28903].map {
+    mkw(UInt32($0), layer: 3, pavoSurfaceBounds, title: "Codex Pet Composition Surface")
+}
+func pavoAppKitDockFrame(y: CGFloat) -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(
+        x: pavoPet.minX + (pavoPet.width - 200) / 2, y: y, width: 200, height: 48))
+}
+var pavoStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(28901): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470),
+]
+let pavoProbe = BubbleVisibilityProbe(
+    monotonicNow: { avoClock }, canCapture: { true },
+    capturer: { c in .stats(pavoStats[c.wid] ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1)) })
+var pavoShapeLog: [(count: Int, range: CGFloat)] = []
+func pavoPlace(dock: DockPanel) -> Bool {
+    FollowLayoutPass.placeDock(
+        mascot: pavoMascot,
+        candidates: [pavoMascot] + pavoSurfaces,
+        bubbleProbe: pavoProbe,
+        frameSink: { pet, obstacles in
+            pavoShapeLog.append((obstacles.count, obstacles.first.map { $0.maxY - pet.maxY } ?? 0))
+            return dock.placeBelow(
+                petQuartzRect: pet, avoiding: obstacles, visibleScreen: avoScreen,
+                movementChanged: false, monotonicNow: avoClock)
+        })
+}
+
+// T-p1a 前置（冷启动→展开 470）：首 tick 无 cache → CS 跳过、基础位回退窗口底 388；
+// 观察（contentBottom=470）到达后目标 470 经 avoidance 平滑到位。
+let pavoDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+avoClock = 40
+_ = pavoPlace(dock: pavoDock)
+check("T-p1a 冷启动首tick无cache→基础位回退窗口底388",
+      avoFrameNear(pavoDock.frame, pavoAppKitDockFrame(y: 388)) && pavoShapeLog.last?.count == 0,
+      "frame=\(pavoDock.frame) shapes=\(pavoShapeLog)")
+_ = waitPumpingMain { !pavoProbe.lock.withLock { $0.inFlight } }
+avoClock = 40.2
+_ = pavoPlace(dock: pavoDock)
+for pavoOffset in [0.05, 0.1, 0.15, 0.21] {
+    avoClock = 40.2 + pavoOffset
+    avoLinks.last?.fire()
+}
+check("T-p1a2 展开470观察到达→avoidance渐进到位(前置)",
+      avoFrameNear(pavoDock.frame, pavoAppKitDockFrame(y: 470))
+        && avoLinks.last?.invalidated == true,
+      "frame=\(pavoDock.frame)")
+
+// T-p1b 收起（P1-1 正片）：contentBottom 470→362（count 1→1、range 恒 0、
+// movementChanged=false）→ dock 渐进回基础位 362（≥3 中间帧严格趋近、非 snap），
+// 动画源期间活跃、最终精确到位并失效。
+pavoStats[CGWindowID(28901)] = BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362)
+pavoShapeLog.removeAll()
+let pavoCollapseLinksBefore = avoLinks.count
+avoClock = 41
+_ = pavoPlace(dock: pavoDock)                    // 重捕获在途（旧 cache 470 仍生效）→ hold
+_ = waitPumpingMain { !pavoProbe.lock.withLock { $0.inFlight } }
+avoClock = 41.2
+_ = pavoPlace(dock: pavoDock)                    // cache 362 → 静止目标变化 → avoidance 段
+let pavoCollapsePlaced = pavoDock.frame
+var pavoCollapseFrames = [pavoCollapsePlaced]
+var pavoCollapseMidLinkActive = false
+for pavoOffset in [0.05, 0.1, 0.15] {
+    avoClock = 41.2 + pavoOffset
+    avoLinks.last?.fire()
+    pavoCollapseFrames.append(pavoDock.frame)
+    pavoCollapseMidLinkActive = avoLinks.last?.invalidated == false
+}
+avoClock = 41.41   // 越过 41.2+0.2 的浮点表示边界，确保段完成判定（帧值仍精确到终点）
+avoLinks.last?.fire()
+pavoCollapseFrames.append(pavoDock.frame)
+let pavoCollapseExpected = [0.05, 0.1, 0.15, 0.2].map {
+    avoLerp(pavoAppKitDockFrame(y: 470), pavoAppKitDockFrame(y: 362),
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+check("T-p1b 收起(P1-1):count1→1/range0→0/静止→渐进回基础位362(非snap)",
+      pavoShapeLog.count == 2
+        && pavoShapeLog.allSatisfy { $0.count == 1 && abs($0.range) < 0.000_001 }
+        && avoFrameNear(pavoCollapsePlaced, pavoAppKitDockFrame(y: 470))
+        && avoLinks.count == pavoCollapseLinksBefore + 1
+        && pavoCollapseMidLinkActive
+        && (0..<4).allSatisfy { avoFrameNear(pavoCollapseFrames[$0 + 1], pavoCollapseExpected[$0]) }
+        && (1..<4).allSatisfy {
+            abs(pavoCollapseFrames[$0].origin.y - pavoAppKitDockFrame(y: 362).origin.y)
+                > abs(pavoCollapseFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 362).origin.y) + 4
+        }
+        && avoFrameNear(pavoCollapseFrames[4], pavoAppKitDockFrame(y: 362))
+        && avoLinks.last?.invalidated == true,
+      "shapes=\(pavoShapeLog) frames=\(pavoCollapseFrames)")
+
+// T-p1c 展开（P1-1 反向）：362→470 同触发形态（count 1→1、range 0→0）→ 同样渐进。
+pavoStats[CGWindowID(28901)] = BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470)
+pavoShapeLog.removeAll()
+let pavoExpandLinksBefore = avoLinks.count
+avoClock = 42
+_ = pavoPlace(dock: pavoDock)
+_ = waitPumpingMain { !pavoProbe.lock.withLock { $0.inFlight } }
+avoClock = 42.2
+_ = pavoPlace(dock: pavoDock)
+var pavoExpandFrames = [pavoDock.frame]
+for pavoOffset in [0.05, 0.1, 0.15, 0.21] {
+    avoClock = 42.2 + pavoOffset
+    avoLinks.last?.fire()
+    pavoExpandFrames.append(pavoDock.frame)
+}
+let pavoExpandExpected = [0.05, 0.1, 0.15, 0.2].map {
+    avoLerp(pavoAppKitDockFrame(y: 362), pavoAppKitDockFrame(y: 470),
+            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+}
+check("T-p1c 展开(P1-1反向):362→470渐进到位(非snap)",
+      pavoShapeLog.count == 2
+        && pavoShapeLog.allSatisfy { $0.count == 1 && abs($0.range) < 0.000_001 }
+        && avoLinks.count == pavoExpandLinksBefore + 1
+        && (0..<4).allSatisfy { avoFrameNear(pavoExpandFrames[$0 + 1], pavoExpandExpected[$0]) }
+        && (1..<4).allSatisfy {
+            abs(pavoExpandFrames[$0].origin.y - pavoAppKitDockFrame(y: 470).origin.y)
+                > abs(pavoExpandFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 470).origin.y) + 4
+        }
+        && avoFrameNear(pavoExpandFrames[4], pavoAppKitDockFrame(y: 470)),
+      "shapes=\(pavoShapeLog) frames=\(pavoExpandFrames)")
+
+// T-p1d（P1-2）：按钮消失回落动画进行中（0.08s 处），下一 tick 锚 contentBottom +1px →
+// latest-only retarget 平滑续接：retarget 拍帧 = 旧段该时刻采样值（而非新终点 snap 截断），
+// 后续帧按新段曲线单调趋近 ±1px 新基础位，最终精确；同目标 stable tick（hold）不重置进度。
+let pav2Dock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+avoClock = 45
+_ = pav2Dock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                      movementChanged: false, monotonicNow: 45)
+avoClock = 45.2
+_ = pav2Dock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                      movementChanged: false, monotonicNow: 45.2)   // 消失回落段起点
+avoClock = 45.28
+avoLinks.last?.fire()                                                // 0.08s 中点采样
+let pav2MidFrame = pav2Dock.frame
+let pav2Base281AppKit = Geometry.appKitRectFromQuartz(
+    CGRect(x: avoBaseQuartz.origin.x, y: 281, width: 200, height: 48))
+let pav2Base282AppKit = Geometry.appKitRectFromQuartz(
+    CGRect(x: avoBaseQuartz.origin.x, y: 282, width: 200, height: 48))
+let pav2RetargetLinksBefore = avoLinks.count
+avoClock = 45.3
+_ = pav2Dock.placeBelow(petQuartzRect: avoPet.offsetBy(dx: 0, dy: 1), avoiding: [],
+                      visibleScreen: avoScreen, movementChanged: false, monotonicNow: 45.3)
+let pav2RetargetFrame = pav2Dock.frame
+let pav2ExpectedRetarget = avoLerp(avoAvoidAppKit, pav2Base281AppKit,
+                                 CGFloat(DockFrameInterpolator.smoothstep(0.5)))
+var pav2Frames = [pav2RetargetFrame]
+var pav2Expected = [pav2ExpectedRetarget]
+for pav2Offset in [0.02, 0.06] {
+    avoClock = 45.3 + pav2Offset
+    avoLinks.last?.fire()
+    pav2Frames.append(pav2Dock.frame)
+    pav2Expected.append(avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
+                              CGFloat(DockFrameInterpolator.smoothstep(pav2Offset / DockFrameInterpolator.avoidanceDuration))))
+}
+avoClock = 45.38
+_ = pav2Dock.placeBelow(petQuartzRect: avoPet.offsetBy(dx: 0, dy: 1), avoiding: [],
+                      visibleScreen: avoScreen, movementChanged: false, monotonicNow: 45.38)
+let pav2HoldFrame = pav2Dock.frame
+for pav2Offset in [0.1] {
+    avoClock = 45.3 + pav2Offset
+    avoLinks.last?.fire()
+    pav2Frames.append(pav2Dock.frame)
+    pav2Expected.append(avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
+                              CGFloat(DockFrameInterpolator.smoothstep(pav2Offset / DockFrameInterpolator.avoidanceDuration))))
+}
+avoClock = 45.51   // 越过 45.3+0.2 的浮点表示边界；段完成精确落终点
+avoLinks.last?.fire()
+pav2Frames.append(pav2Dock.frame)
+pav2Expected.append(pav2Base282AppKit)
+check("T-p1d (P1-2)回落动画中锚+1px→latest-only续接(无snap截断),hold不重置,最终精确",
+      avoFrameNear(pav2MidFrame, avoLerp(avoAvoidAppKit, pav2Base281AppKit,
+                                       CGFloat(DockFrameInterpolator.smoothstep(0.4))))
+        && avoFrameNear(pav2RetargetFrame, pav2ExpectedRetarget)
+        && abs(pav2RetargetFrame.origin.y - pav2Base282AppKit.origin.y) > 2
+        && avoLinks.count == pav2RetargetLinksBefore
+        && avoFrameNear(pav2HoldFrame, avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
+                                             CGFloat(DockFrameInterpolator.smoothstep(0.4))))
+        && (0..<5).allSatisfy { avoFrameNear(pav2Frames[$0], pav2Expected[$0]) }
+        && avoFrameNear(pav2Frames[4], pav2Base282AppKit)
+        && avoLinks.last?.invalidated == true,
+      "mid=\(pav2MidFrame) retarget=\(pav2RetargetFrame) hold=\(pav2HoldFrame) frames=\(pav2Frames)")
+
+// T-p1m：avoidance 动画中 movementChanged=true（拖动）→ 立即切 32ms movement 段并
+// invalidate 动画源（movement 覆盖语义；拖动中障碍平移走 movement 插值而非 avoidance，
+// 与 T-avo3 同源；纯值层见 T-avo4d）。
+let pavoMoveDock = avoMakeDock(linkFactory: { target, selector in
+    let link = TestAnimationDisplayLink(target: target, selector: selector)
+    avoLinks.append(link)
+    return link
+})
+avoClock = 46
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoPet, avoiding: [], visibleScreen: avoScreen,
+                          movementChanged: false, monotonicNow: 46)
+avoClock = 46.2
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoPet, avoiding: [avoObstacle], visibleScreen: avoScreen,
+                          movementChanged: false, monotonicNow: 46.2)   // avoidance 段 + link
+avoClock = 46.25
+avoLinks.last?.fire()
+let pavoMoveMid = pavoMoveDock.frame
+let pavoMoveLinksBefore = avoLinks.count
+avoClock = 46.25
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle],
+                          visibleScreen: avoScreen, movementChanged: true, monotonicNow: 46.25)
+let pavoMovePlaced = pavoMoveDock.frame
+avoClock = 46.266
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle],
+                          visibleScreen: avoScreen, movementChanged: false, monotonicNow: 46.266)
+let pavoMoveFollow = pavoMoveDock.frame
+avoClock = 46.3
+_ = pavoMoveDock.placeBelow(petQuartzRect: avoMovedPet, avoiding: [avoMovedObstacle],
+                          visibleScreen: avoScreen, movementChanged: false, monotonicNow: 46.3)
+check("T-p1m 动画中movementChanged=true→切32ms段+invalidate动画源(障碍平移走movement)",
+      !avoFrameNear(pavoMoveMid, avoAvoidAppKit) && !avoFrameNear(pavoMoveMid, avoBaseAppKit)
+        && avoLinks.count == pavoMoveLinksBefore && avoLinks.last?.invalidated == true
+        && avoFrameNear(pavoMovePlaced, pavoMoveMid)
+        && between(pavoMoveFollow.origin.x,
+                   min(pavoMoveMid.origin.x, avoMovedAvoidAppKit.origin.x) + 8,
+                   max(pavoMoveMid.origin.x, avoMovedAvoidAppKit.origin.x) - 8)
+        && !avoFrameNear(pavoMoveFollow, pavoMoveMid)
+        && avoFrameNear(pavoMoveDock.frame, avoMovedAvoidAppKit),
+      "mid=\(pavoMoveMid) placed=\(pavoMovePlaced) follow=\(pavoMoveFollow) final=\(pavoMoveDock.frame)")
+print("\n[P1回归 movementChanged分类] \(pass - pavoPass) passed, \(fail - pavoBase) failed")
 
 
 // ---- T-avoid: 会话气泡避让（obstaclesNear + safeDockFrame + placeBelow）----
