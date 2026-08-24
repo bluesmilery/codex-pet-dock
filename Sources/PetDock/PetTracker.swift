@@ -281,7 +281,10 @@ enum PetTracker {
         }
         var obstacles = deduplicatedObstacles(geometricObstacles)
         if let rep = compositionSurfaceRep { obstacles.append(rep) }
-        return obstacles.sorted { $0.wid < $1.wid }   // 与既有输出口径一致的稳定排序
+        // wid 升序仅是输出稳定性排序，不参与 CS 代表选择——代表已在上方循环按原始
+        // candidates 顺序（前到后）选定，若在排序后的列表上取首位会选中 wid 最小的
+        // 最深层残影（现场前层 wid 反而更大）。
+        return obstacles.sorted { $0.wid < $1.wid }
     }
 
     /// 障碍种类：决定可见性判定方式与保守降级语义（三类，见 obstacleKind）。
