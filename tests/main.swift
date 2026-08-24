@@ -4082,6 +4082,109 @@ if let size = csSize {
 
 print("\n[Composition Surface 气泡通道] \(pass - csPass) passed, \(fail - csBase) failed")
 
+// ---- T-csm: 多尺寸 Composition Surface 幽灵内容回归（2026-08-24 现场 e1d94c6 症状）----
+// 现场症状（用户今晨截图 + 主 Agent qa_snapshot 取证）：气泡在宠物**上方**时，宿主同时
+// 存在多种 bounds 的 Composition Surface 窗口（CGWindowList 顺序前到后：前层新
+// 768x978@(-581,609) / 后层旧 768x912@(-581,675)，全部 onscreen layer3）。desktopIndependentWindow
+// 捕获窗口自身内容、感知不到前层遮挡：后层残留宿主布局切换前的旧气泡卡（内容延伸到
+// abs y1150 = 宠物下方 86px 的幽灵）；旧去重按 (owner,title,layer,bounds) 签名——bounds
+// 不同不去重 → 后层幽灵与真实内容都成为障碍/锚 → dock 被推到 1153（现场实测停靠位），
+// 宠物(petMaxY=1064)与 dock 之间出现大气泡尺寸空白。前层真实可见内容只到 y1119
+//（宠物下方控制按钮）。修复语义：CS 通道按标题去重——candidates 输入顺序（=CGWindowList
+// 前到后）首个 CS 实例保留为唯一代表，其余 CS 实例不论 bounds 全部跳过；被遮挡的后层
+// 残影不再产生障碍/锚/像素捕获。
+let csmBase = fail, csmPass = pass
+let csmPet = CGRect(x: -283, y: 885, width: 172, height: 179)   // petMaxY=1064（现场）
+let csmMascot = mkw(910, layer: 2, csmPet, title: "Codex Pet Mascot Effect")
+let csmFront = mkw(35840, layer: 3, CGRect(x: -581, y: 609, width: 768, height: 978),
+                   title: "Codex Pet Composition Surface")   // 前层（新）
+let csmBack = mkw(34985, layer: 3, CGRect(x: -581, y: 675, width: 768, height: 912),
+                  title: "Codex Pet Composition Surface")   // 后层（旧，幽灵内容）
+let csmAct = mkw(35123, layer: 3, CGRect(x: -304, y: 1063, width: 214, height: 74),
+                 title: "Codex Pet Activity Stack Backing")
+let csmDockX = csmPet.minX + (csmPet.width - 200) / 2
+func csmAppKitFrame(y: CGFloat) -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(x: csmDockX, y: y, width: 200, height: 48))
+}
+
+// 单元：CS 标题级去重（跨 bounds）→ 仅输入顺序首位（前层）成为唯一 CS 障碍。
+check("T-csm1 多尺寸CS标题级去重→仅输入顺序首位(前层35840)为唯一CS障碍",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot, csmFront, csmBack, csmAct])
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(35840)], "")
+// 顺序敏感性：candidates 反转（后层在前）→ 代表随列表首位变化，证明是前到后列表顺序
+// 语义而非 wid 排序（旧去重代表由 wid 升序决定）。
+check("T-csm2 candidates顺序反转→代表随列表首位变为后层(前到后语义,非wid排序)",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot, csmBack, csmFront, csmAct])
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(34985)], "")
+// 既有同 bounds 多实例语义：仍恰好 1 个 CS 障碍，代表=输入顺序首位（wid 乱序输入）。
+let csmSameBounds = CGRect(x: -581, y: 675, width: 768, height: 912)
+let csmDupes = [40205, 40199, 40300, 40001].map {
+    mkw(UInt32($0), layer: 3, csmSameBounds, title: "Codex Pet Composition Surface")
+}
+check("T-csm3 同bounds多实例CS仍去重为1(输入顺序首位40205)",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot] + csmDupes)
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(40205)], "")
+// 非 CS 通道既有签名去重不回归：同 bounds 重复 ACT → 1 个障碍；不同 bounds → 保留两个。
+let csmActDupes = [
+    mkw(40310, layer: 3, CGRect(x: -304, y: 1063, width: 214, height: 74),
+        title: "Codex Pet Activity Stack Backing"),
+    mkw(40311, layer: 3, CGRect(x: -304, y: 1063, width: 214, height: 74),
+        title: "Codex Pet Activity Stack Backing"),
+]
+check("T-csm4 非CS同bounds重复窗口仍按签名去重为1",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot] + csmActDupes).count == 1, "")
+check("T-csm4b 非CS不同bounds双实例不去重(签名含bounds语义保持)",
+      PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot, csmActDupes[0],
+        mkw(40312, layer: 3, CGRect(x: -304, y: 1066, width: 214, height: 74),
+            title: "Codex Pet Activity Stack Backing")]).count == 2, "")
+
+// 生产组合：FollowLayoutPass → 真实 DockPanel.placeBelow → DockPanel.frame（两 tick，
+// 与 csRunTwoTickLayout 同构）。capturer 按 wid 区分前后层：前层真实可见内容
+// contentBottom=510（abs 1119，宠物下方按钮）；后层幽灵 contentBottom=475（abs 1150）；
+// ACT 仅 41px 噪声 → hidden。期望实际 frame 锚前层可见内容底 609+510+1+2=1122，
+// 而非幽灵底 675+475+1+2=1153（现场实测错误停靠位）。
+csTime = 24_000
+let csmCaptured = OSAllocatedUnfairLock(initialState: [CGWindowID]())
+let csmStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(35840): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 510),
+    CGWindowID(34985): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 475),
+    CGWindowID(35123): BubbleAlphaStats(nonTransparentPixelCount: 41, contentBottom: 28),
+]
+let csmCap: BubbleCapturer = { c in
+    csmCaptured.withLock { $0.append(c.wid) }
+    return .stats(csmStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let csmProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: csmCap)
+let csmDock = DockPanel()
+let csmObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
+func csmPlace(_ candidates: [WinCandidate]) -> Bool {
+    func place() -> Bool {
+        FollowLayoutPass.placeDock(
+            mascot: csmMascot, candidates: candidates, bubbleProbe: csmProbe,
+            frameSink: { pet, obstacles in
+                csmObstacleCounts.withLock { $0.append(obstacles.count) }
+                return csmDock.placeBelow(
+                    petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                    movementChanged: false, monotonicNow: csTime)
+            })
+    }
+    _ = place()
+    let completed = waitPumpingMain { !csmProbe.lock.withLock { $0.inFlight } }
+    _ = place()
+    return completed
+}
+let csmOK = csmPlace([csmMascot, csmFront, csmBack, csmAct])
+check("T-csm5 现场多尺寸CS→实际panel锚前层可见内容底(y=1122)而非幽灵底(y=1153)",
+      csmOK && dockFrameNear(csmDock.frame, csmAppKitFrame(y: 1122)),
+      "frame=\(csmDock.frame) expected=\(csmAppKitFrame(y: 1122))")
+check("T-csm6 仅前层CS+ACT成为probe候选(后层幽灵不被捕获)",
+      csmCaptured.withLock { $0 } == [CGWindowID(35123), CGWindowID(35840)],
+      "captured=\(csmCaptured.withLock { $0.map { Int($0) } })")
+
+print("\n[Composition Surface 多尺寸幽灵] \(pass - csmPass) passed, \(fail - csmBase) failed")
+
 // ---- T-anc: dock 基础位锚定宠物可见内容底（2026-08-24 现场像素级症状）----
 // 现场症状（主 Agent 截屏取证）：收起态宠物可见内容（绿色椭圆底座）底在 abs y≈328，
 // Mascot 窗口底在 369 → 基线 dock 停 371，视觉空白 ≈44px。根因：基础位锚 Mascot 窗口底

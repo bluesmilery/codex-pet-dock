@@ -404,3 +404,23 @@
 - 本 implement 沙箱与前几轮相同无 WindowServer（`NSScreen.screens.count==0`）：test-ui 运行时 fatal（既有 `Fatal error: 无屏幕` guard）。语义由同源 headless 驱动承担（/tmp/pd-avo-driver/main.swift：仅替换该 guard 为固定负 origin 合成屏 struct、primary fixture expected screen 传 nil、3 处 #filePath 固定为带引号的本 worktree 路径；其余源清单与 `-warnings-as-errors -DPETDOCK_TESTING` flags 与 make test-ui 完全一致）。新 T-avo 段的 NSScreen 依赖经 NSScreen 子类注入合成屏（系统只读集合无法注入实例），headless 与 GUI 会话都可执行；既有 T-ip8/9/10 的 screens-first 分支在 headless 驱动走既有「无screen跳过」路径（其 GUI 会话行为由同段注入 fake link 保证确定性）。
 - 基线红测在同一 headless 驱动上以未修改 Sources 执行（产品源零改动）；红测块在实现后由注入 fake 的完整覆盖替换。红测原始输出已记录：354 passed / 3 failed（fail 项即用户症状）。修复树 369 passed / 0 failed。
 - swiftc/SwiftPM 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`；swift build 另用 `--disable-sandbox`；python 门禁使用任务指定 venv python（/Users/Gai/workspace/codex-pet-dock/.venv/bin/python）。
+
+---
+
+## CS 多尺寸实例幽灵内容回归修复（impl-front 轮，2026-08-24）
+
+- 任务：fix-bubble-collapse-smooth-follow（延续轮；用户在 e1d94c6 候选上报告：气泡在宠物上方时，宠物与 dock 之间出现大气泡尺寸空白，“就好像消息气泡在下面一样”；主 Agent qa_snapshot 现场取证数据链完整，见派发记录）。
+- 批准产品基线：`e1d94c6b9a41f1f1f168f265a72359e8ef907448`（worktree HEAD，实现前 clean；红测仅叠加 tests/main.swift test-only 块，产品源零改动）。
+- 根因（主 Agent 指定，基线红测复现一致）：气泡在上时宿主同时存在多种 bounds 的 Composition Surface 窗口（CGWindowList 前到后：前层新 768x978@(-581,609)、后层旧 768x912@(-581,675)）。旧去重按 (owner,title,layer,bounds) 签名——bounds 不同不去重 → 前后层都成为独立障碍/锚；desktopIndependentWindow 捕获窗口自身内容、感知不到前层遮挡，后层残留宿主布局切换前的幽灵气泡卡（内容到 abs y1150，宠物下方 86px）→ dock 被推到 1153。前层真实可见内容只到 y1119（宠物下方控制按钮）。
+- 最小修复（仅 `Sources/PetDock/PetTracker.swift` obstaclesNear）：CS 通道改为标题级去重（跨 bounds）——candidates 输入顺序（=CGWindowList 前到后）首个 isCompositionSurfaceObstacle 命中实例保留为唯一代表，其余 CS 实例不论 bounds 全部跳过；被遮挡的后层残影不再产生障碍/内容锚/像素捕获。几何 bubble/control 通道与 (owner,title,layer,bounds) 签名去重（wid 升序代表）语义不变；输出保持 wid 升序稳定排序。FollowLayoutPass 的 classified.first(.compositionSurface) 代表选取不变（CS 只剩一个实例后自然一致）；CS 通道 bounds.maxY > petMaxY 前置保留。
+
+| 症状 / AC | 证据类型 | 触发 / 扰动 | 基线来源 / 结果 | 生产消费者 / 路径 | 最终所有者 / 断言 | 命令 / 结果 | 手工缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S-ghost 气泡在上时 dock 与宠物间大气泡尺寸空白（停靠 y1153，应为 ~1122） | behavior（生产组合，T-csm5/T-csm6） | 现场形态 fixture：宠物 172x179@(-283,885)（petMaxY=1064）+ 前层 CS 768x978@609（contentBottom=510 → 可见内容底 abs 1119）+ 后层 CS 768x912@675（幽灵 contentBottom=475 → abs 1150）+ ACT 噪声点（41px → hidden）；两 tick 生产布局，capturer 按 wid 区分前后层 | 基线 `e1d94c6` Sources 零改动 + test-only 红测（同源 headless 驱动）：T-csm5 FAIL——实际 `DockPanel.frame` y=1153（幽灵底），精确复现现场停靠位；T-csm6 captured=[34985,35123,35840]（后层幽灵也被捕获） | fake capturer（按 wid）→ 真实 `BubbleVisibilityProbe` → `FollowLayoutPass.placeDock`（obstaclesNear 标题级去重 + obstacleKind）→ frameSink → **真实 `DockPanel.placeBelow`** | T-csm5：实际 frame y=1122（前层可见内容底 609+510+1+gap 2），非 1153；T-csm6：捕获 wid 集合恰 {前层 35840, ACT 35123}，后层幽灵不捕获 | 同源 headless 驱动（同 test-ui 源清单/flags）：基线 377 passed/5 failed（T-csm1/2/3/5/6 红）→ 修复树 382 passed/0 failed | 真机气泡在上/在下视觉体感与真实 SCK 遮挡行为留视觉 QA |
+| CS 去重语义单元 | behavior（T-csm1/2/3/4/4b） | 多 bounds CS 前到后输入 → 仅列表首位为代表；candidates 反转 → 代表随列表首位变化（前到后列表顺序语义，非 wid 排序）；同 bounds 4 实例乱序 wid 输入 → 仍 1 个障碍、代表=输入首位；非 CS 同 bounds 重复 ACT → 签名去重 1 个；不同 bounds → 保留 2 个（既有签名语义不回归） | 修复树新增（基线红，见上） | PetTracker.obstaclesNear（CS 标题级去重分支 + deduplicatedObstacles 签名去重） | 每条对应 check 断言代表 wid / 障碍计数 | 同上（绿） | 无 |
+| 既有场景回归 | behavior | T-cs1/T-cs2（7 同 bounds 实例去重为 1 代表 27814、恰好 1 次 CS 捕获 + ACT）、T-cs3-11、T-anc、T-bv45、T-avo、T-p1 等全量 | 修复树 | — | 全部保持绿（同 bounds 场景在新去重路径下代表仍为列表首位——现场枚举顺序即 wid 升序，语义一致） | 同上 382/0 | 无 |
+| 硬门禁 | build/docs/static | 候选完整树 | 基线之上执行 | swiftc/SwiftPM/python gate 消费当前工作树 | 见交付报告 | swift build -c release（headless 驱动同源编译 0 warning）；make test PYTHON=任务 venv（test-ui 运行时由同源 headless 驱动承担）；docs-check/test-docs 结果见交付报告 | 完整 make test（GUI 会话 test-ui/test-shell 运行时）与真机视觉需对冻结 SHA 复跑 |
+
+### 实现环境限制（本轮，如实记录）
+
+- 本 implement 沙箱与前几轮相同无 WindowServer（`NSScreen.screens.count==0`）：test-ui 运行时在既有 NSScreen guard fatal。语义由同源 headless 驱动副本承担（/tmp/pd-headless/main.swift：仅替换该 guard 为固定负 origin 合成屏 NSScreen 子类、primary fixture expected screen 传 nil、3 处 #filePath 根固定为本 worktree，其余源清单与 `-warnings-as-errors -DPETDOCK_TESTING` flags 与 make test-ui 完全一致）。基线红测在同一驱动上以未修改 Sources 执行，产品源零改动。
