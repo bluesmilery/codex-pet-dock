@@ -984,7 +984,11 @@ let avoProdHi = max(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y)
 check("T-avo7a 生产组合按钮出现：渐进下移（≥3 中间帧严格递增）且最终精确",
       avoProdShown && avoProdObstacleCounts == [0, 1]
         && avoLinks.count == avoProdLinksBefore + 1
-        && (1..<5).allSatisfy { avoProdFrames[$0].origin.y > avoProdLo + 1 && avoProdFrames[$0].origin.y < avoProdHi - 1 }
+        // 前三个中间帧必须严格处于两端内部（远离边界）；第四帧处于 95% 采样点，
+        // ease-in-out 尾段天然贴近目标（smoothstep(0.95)≈0.993），像素对齐后可能与
+        // lo+1 重合——只要求严格未达最终值（< hi 且 > lo），最终精确由 frames[5] 断言。
+        && (1..<4).allSatisfy { avoProdFrames[$0].origin.y > avoProdLo + 1 && avoProdFrames[$0].origin.y < avoProdHi - 1 }
+        && avoProdFrames[4].origin.y > avoProdLo && avoProdFrames[4].origin.y < avoProdHi
         && (1..<4).allSatisfy {
             abs(avoProdFrames[$0 + 1].origin.y - avoBaseAppKit.origin.y)
                 > abs(avoProdFrames[$0].origin.y - avoBaseAppKit.origin.y)
