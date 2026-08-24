@@ -1,5 +1,20 @@
 # 气泡收起与平滑跟随：延期交接
 
+## 2026-08-24 增量：六轮修复闭环（已停放 4cacff3）
+
+- 本节为最新状态。feature/fix-bubble-pet-selection = accepted SHA 4cacff3a8c065a63961d0c37e84201bae9fa23c3（未合入 dev）。
+- 修复链（每轮均独立 Review 清零 + 全量门禁绿）：
+  1. dc1d139 宠物识别滞回劫持（隐藏气泡窗口被当宠物锚定）。
+  2. 0d6285e 拖动粘性可见性（纯几何平移保留捕获缓存，消除拖动空白）。
+  3. d53017e/2bd5d6e 内容 bbox 避让 + 噪声下限 80px（避让可见内容而非整窗；不可见小点忽略）。
+  4. 5fbe237 dock 基础位锚定宠物可见内容底（Composition Surface contentBottom 实时锚）。
+  5. e1d94c6 障碍出现/消失 200ms smoothstep 平滑过渡（movementChanged 驱动路由；静止目标变化一律平滑，拖动 32ms；自有 display link 渲染，macOS13 Timer 兜底）。
+  6. 4cacff3 CS 多尺寸实例幽灵内容回归（气泡在上方时后层残影把 dock 推到幽灵卡下方）：CS 通道按标题+原始候选顺序去重仅保留最前层，几何通道签名去重不变；T-csm7 锁定顺序合同；fixture 全脱敏（合成 wid/坐标）。
+- 用户已确认：气泡展开/收起/重叠、控制按钮回位、拖动无空白、移动丝滑均正常；气泡在上方空白为最后一轮修复对象（自动证据全绿，真机体感待用户下轮确认）。
+- 已知边界（文档已载）：详情卡与 avoidance 动画节拍差（~0.1s，接受的已知限制）；CS 前层 targetMissing 时短暂回退窗口底（≤0.1s 自愈）；宠物动画 contentBottom 微变至多 10Hz 微跳（>4px 再评滞回）。
+- 归档候选：build/candidates/2026-08-24-182814-cs-frontmost-final-fix-bubble-pet-selection-4cacff3/PetDock.app（稳定签名，当前 /Applications 未替换，运行实例来自该候选）。
+- 合入 dev 需专门会话；合入时与 stable-codesign 分支（Makefile/AGENTS/README）有重叠，须按 AGENTS 手工组合保留双方验收内容。
+
 ## 2026-08-23 增量：宠物识别劫持修复（已停放）
 
 本节为最新状态；以下原有章节保留为上一轮延期记录。
