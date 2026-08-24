@@ -1,6 +1,6 @@
 # 底座会话气泡避让架构
 
-> Codex 桌面宠物下方存在会话气泡等浮层时，底座不与气泡重叠；优先下移到最近安全位置，若越出当前屏幕可见区则隐藏底座。障碍消失后自动回到宠物正下方。
+> Codex 桌面宠物下方存在会话气泡等浮层时，底座不与气泡重叠；优先下移到最近安全位置，若越出当前屏幕可见区则隐藏底座。障碍消失后自动回到宠物可见内容正下方（基础位锚定可见内容底，而非 Mascot 窗口底）。
 
 避让只改变底座几何展示，不改变宠物识别、跟随目标或数据暂停语义。控制按钮避让属于同一障碍分类链路，产品行为保持现有结论。
 
@@ -30,6 +30,19 @@
 `DockPanel.placeBelow(petQuartzRect:avoiding:visibleScreen:movementChanged:monotonicNow:)` 在 frame 为 nil 时隐藏底座并返回 false；成功则设置 frame 并返回 true。移动状态只对最新目标做最长 32ms 的显式线性插值，不排队历史 frame；首次显示、障碍 / 屏幕变化、无有效 screen、隐藏和其他安全复位路径立即 snap。默认 `avoiding=[] / visibleScreen=nil` 仍是宠物正下方的兼容行为。
 
 主循环的语义是：宠物可见时展示底座并对齐详情，避让失败只隐藏底座；宠物可见性仍由跟随逻辑决定，数据 `pause()` / `resume()` 不与避让隐藏耦合。
+
+## 基础位锚定宠物可见内容底
+
+宠物可见内容渲染在 Composition Surface（恒 visible、携带 `contentBottom` 观察），而 Mascot 窗口底部存在大量透明 padding（现场实测可见内容底 abs y≈328、Mascot 窗口底 369，视觉空白 44px）。因此 `FollowLayoutPass.placeDock` 传给 frame sink 的布局锚不再固定为 Mascot 窗口底，而是“有效宠物内容底”：
+
+1. 在分类去重后的候选中取 Composition Surface 代表（`.compositionSurface`，`obstaclesNear` 去重后恰一个）。
+2. `bubbleProbe.observation(for: 代表.wid)` 为 visible 且携带 `contentBottom` 时，`effectivePetMaxY = 代表.bounds.minY + contentBottom + 1`（Quartz 全局 y；`contentBottom` 是窗口内像素行，与避让矩形高度 `contentBottom + 1` 同口径），并以 `max(mascot.bounds.minY, …)` 保护。
+3. 否则（hidden、降级 macOS 13 / TCC 拒绝 / 捕获失败、冷启动首 tick 无 cache）回退 `mascot.bounds.maxY`，降级语义与本通道引入前一致。
+4. 以 `adjustedPet`（origin.x / width 不变——水平居中仍按 Mascot 窗口，仅高度收缩/延伸到 `effectivePetMaxY`）调用 frame sink；`DockPanel.placeBelow` 与 `Geometry.safeDockFrame` 完全不变，基础位自然变为内容底 + gap。
+
+展开/收起由此统一：展开时气泡卡内容底与 `effectivePetMaxY` 同源（基础位即内容底 + gap，CS 内容障碍与基础位 dock 无垂直相交，不产生双重下移，仍停在 ~470）；收起时基础位直接回到宠物底座下方（T-anc1 现场 fixture：331 = 内容底 329 + gap 2，而非窗口底锚 371）。控制按钮等 ACT 障碍避让仍在基础位之上链式生效（T-anc5：内容底基础位 362 + ACT 内容障碍 → 425）。
+
+已知权衡：宠物动画（叶子摆动等）会使 `contentBottom` 逐帧微变，dock 基础位随之微跳；当前不加平滑，若真机观察到 >4px 高频抖动，后续轮再加滞回。
 
 ## BubbleVisibility 可见性与内容 bbox 避让
 
@@ -82,4 +95,4 @@ Composition Surface 是常驻大窗（现场实测 768×912）：像素内容全
 make test-ui
 ```
 
-`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、固定宽度、水平 clamp、屏幕边界、权限门控、三态捕获结果、可见性变化通知、候选消失复位、elapsed-time stable 语义、调度合并和 32ms bounded interpolation。具体用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、macOS 13 Timer、实际 display-link cadence、多屏硬件与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
+`test-ui` 不需要屏幕录制权限，使用纯函数与依赖注入覆盖识别、障碍链式下移、基础位内容底锚定、固定宽度、水平 clamp、屏幕边界、权限门控、三态捕获结果、可见性变化通知、候选消失复位、elapsed-time stable 语义、调度合并和 32ms bounded interpolation。具体用例以 `tests/main.swift` 为准。真实 TCC、ScreenCaptureKit 像素捕获、macOS 13 Timer、实际 display-link cadence、多屏硬件、宠物动画下的基础位微跳体感与 Accessibility 交互仍需单独真机验证，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。

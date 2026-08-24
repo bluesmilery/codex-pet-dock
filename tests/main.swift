@@ -3262,9 +3262,10 @@ check("T-cs2 7重复实例去重→恰好1个Composition probe候选(捕获={278
       csExpandedCaptured.withLock { $0 } == [CGWindowID(27814), CGWindowID(27900)],
       "captured=\(csExpandedCaptured.withLock { $0.map { Int($0) } })")
 
-// RED-S2 收起态：Composition Surface 内容全在 petMaxY 以上（contentBottom=362 → 避让矩形底
-// abs y360，与 dock(388..436) 无垂直重叠）；ACT 仅剩 41px 不可见噪声点（窗口内 y[21,28]）。
-// 期望 dock 回基础位 petMaxY+2=388；基线（下限 3）把 41px 判 visible → 停 y415。
+// RED-S2 收起态：Composition Surface 内容全在 petMaxY 以上（contentBottom=362 → 可见内容底
+// abs y360），Mascot 窗口底 386 以下有 26px 透明 padding；ACT 仅剩 41px 不可见噪声点
+// （窗口内 y[21,28]）。期望 dock 基础位锚定可见内容底 360+2=362（T-anc 语义），而非窗口底
+// petMaxY+2=388；更早基线（下限 3）把 41px 判 visible → 停 y415。
 csTime = 23_000
 let csCollapsedStats: [CGWindowID: BubbleAlphaStats] = [
     CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362),
@@ -3281,16 +3282,17 @@ let csCollapsedObstacleCounts = OSAllocatedUnfairLock(initialState: [Int]())
 let csCollapsedOK = csRunTwoTickLayout(
     probe: csCollapsedProbe, dock: csCollapsedDock,
     obstacleCounts: csCollapsedObstacleCounts, candidates: [csMascot] + csSurfaces + [csAct])
-check("T-cs6 RED-S2 收起态噪声点(41px)→hidden→实际panel回基础位388(非415)",
-      csCollapsedOK && dockFrameNear(csCollapsedDock.frame, csAppKitFrame(y: 388)),
-      "frame=\(csCollapsedDock.frame) expected=\(csAppKitFrame(y: 388))")
+check("T-cs6 RED-S2 收起态噪声点(41px)→hidden→实际panel回内容底基础位362(非窗口底388)",
+      csCollapsedOK && dockFrameNear(csCollapsedDock.frame, csAppKitFrame(y: 362)),
+      "frame=\(csCollapsedDock.frame) expected=\(csAppKitFrame(y: 362))")
 check("T-cs6b ACT噪声点观察=hidden;Composition代表=visible(宠物像素)",
       csCollapsedProbe.observation(for: CGWindowID(27900)).visibility == .hidden
         && csCollapsedProbe.observation(for: CGWindowID(27814)).visibility == .visible, "")
 
-// 收起态仅有 Composition Surface（内容=宠物像素，全在 petMaxY 以上）→ 避让矩形与 dock
-// 无垂直重叠 → 不避让，dock 基础位（防止标题通道引入过度避让）。首 tick 无观察数据
-// → 跳过（计数 0）；次 tick stats visible 内容 bbox 进入障碍集（计数 1）但无垂直重叠。
+// 收起态仅有 Composition Surface（内容=宠物像素，可见底 abs y360 在窗口底 386 以上）→
+// 避让矩形与 dock 无垂直重叠 → 不避让；基础位锚定可见内容底 362（T-anc 语义），防止标题
+// 通道引入过度避让。首 tick 无观察数据 → 回退窗口底锚 388 且跳过（计数 0）；次 tick
+// stats visible 内容 bbox 进入障碍集（计数 1）但锚定内容底、无垂直重叠。
 csTime = 24_000
 let csSurfOnlyCap: BubbleCapturer = { _ in
     .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362))
@@ -3302,8 +3304,8 @@ let csSurfOnlyCounts = OSAllocatedUnfairLock(initialState: [Int]())
 let csSurfOnlyOK = csRunTwoTickLayout(
     probe: csSurfOnlyProbe, dock: csSurfOnlyDock,
     obstacleCounts: csSurfOnlyCounts, candidates: [csMascot] + csSurfaces)
-check("T-cs7 收起态仅Composition(矩形底abs360)→无垂直重叠→dock基础位388",
-      csSurfOnlyOK && dockFrameNear(csSurfOnlyDock.frame, csAppKitFrame(y: 388))
+check("T-cs7 收起态仅Composition(内容底abs360)→无垂直重叠→dock内容底基础位362",
+      csSurfOnlyOK && dockFrameNear(csSurfOnlyDock.frame, csAppKitFrame(y: 362))
         && csSurfOnlyCounts.withLock { $0 } == [0, 1],
       "frame=\(csSurfOnlyDock.frame) counts=\(csSurfOnlyCounts.withLock { $0 })")
 
@@ -3418,6 +3420,204 @@ if let size = csSize {
 }
 
 print("\n[Composition Surface 气泡通道] \(pass - csPass) passed, \(fail - csBase) failed")
+
+// ---- T-anc: dock 基础位锚定宠物可见内容底（2026-08-24 现场像素级症状）----
+// 现场症状（主 Agent 截屏取证）：收起态宠物可见内容（绿色椭圆底座）底在 abs y≈328，
+// Mascot 窗口底在 369 → 基线 dock 停 371，视觉空白 ≈44px。根因：基础位锚 Mascot 窗口底
+// （bounds.maxY+gap），而 Mascot 窗口底部有大量透明 padding；宠物像素实际渲染在
+// Composition Surface，其 contentBottom 观察就是宠物可见内容的实时底边。
+// 语义（与避让矩形同一 contentBottom 口径）：可见内容底边 abs y = 代表.bounds.minY +
+// contentBottom + 1（contentBottom 为窗口内像素行），基础位 = 内容底边 + gap。
+let ancBase = fail, ancPass = pass
+let ancPet = CGRect(x: 1487, y: 190, width: 172, height: 179)   // petMaxY=369（现场）
+let ancMascot = mkw(900, layer: 2, ancPet, title: "Codex Pet Mascot Effect")
+let ancDockX = ancPet.minX + (ancPet.width - 200) / 2   // 水平仍按 Mascot 窗口居中
+func ancAppKitFrame(y: CGFloat) -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(x: ancDockX, y: y, width: 200, height: 48))
+}
+// 生产组合（与 csRunTwoTickLayout 同构，mascot/candidates 参数化；petRects 记录
+// frameSink 实收的布局锚，用于断言 anchor 契约本身）。
+func ancRunTwoTickLayout(
+    probe: BubbleVisibilityProbe,
+    dock: DockPanel,
+    mascot: WinCandidate,
+    candidates: [WinCandidate],
+    petRects: OSAllocatedUnfairLock<[CGRect]>,
+    obstacleCounts: OSAllocatedUnfairLock<[Int]>
+) -> Bool {
+    func place() -> Bool {
+        FollowLayoutPass.placeDock(
+            mascot: mascot,
+            candidates: candidates,
+            bubbleProbe: probe,
+            frameSink: { pet, obstacles in
+                petRects.withLock { $0.append(pet) }
+                obstacleCounts.withLock { $0.append(obstacles.count) }
+                return dock.placeBelow(
+                    petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                    movementChanged: false, monotonicNow: csTime)
+            })
+    }
+    _ = place()
+    let completed = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    _ = place()
+    return completed
+}
+
+// RED：现场收起态。CS 代表（去重后 wid 27814）contentBottom=331（窗口内）→ 可见内容底边
+// abs y329（= -3 + 331 + 1，与避让矩形高度 contentBottom+1 同口径）；ACT 仅 41px 噪声点 →
+// hidden。期望基础位 = 329+2 = 331，而非基线窗口底 369+2 = 371（44px 视觉空白来源）。
+csTime = 25_000
+let ancCollapsedStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 331),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 41, contentBottom: 28),
+]
+let ancCollapsedCap: BubbleCapturer = { c in
+    .stats(ancCollapsedStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let ancCollapsedProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: ancCollapsedCap)
+let ancCollapsedDock = DockPanel()
+let ancCollapsedPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancCollapsedCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let ancCollapsedOK = ancRunTwoTickLayout(
+    probe: ancCollapsedProbe, dock: ancCollapsedDock,
+    mascot: ancMascot, candidates: [ancMascot] + csSurfaces + [csAct],
+    petRects: ancCollapsedPetRects, obstacleCounts: ancCollapsedCounts)
+check("T-anc1 RED 现场收起态→实际panel锚内容底331(非窗口底371,消44px空白)",
+      ancCollapsedOK && dockFrameNear(ancCollapsedDock.frame, ancAppKitFrame(y: 331)),
+      "frame=\(ancCollapsedDock.frame) expected=\(ancAppKitFrame(y: 331))")
+// anchor 契约：首 tick 无 cache → 回退窗口底锚（petRects[0].maxY=369）；次 tick stats 到达
+// → frameSink 收到调整后 pet（origin/width 不变、maxY=329，高度 139）。
+check("T-anc1b anchor契约:tick1回退369;tick2调整pet(maxY329,origin/width不变)",
+      ancCollapsedPetRects.withLock { $0.count } == 2
+        && ancCollapsedPetRects.withLock { $0 }[0] == ancPet
+        && ancCollapsedPetRects.withLock { $0 }[1]
+             == CGRect(x: ancPet.minX, y: ancPet.minY, width: ancPet.width, height: 139),
+      "pets=\(ancCollapsedPetRects.withLock { $0 })")
+
+// 展开态回归（无双重下移）：气泡卡渲染进 CS（contentBottom=470 窗口内 → 内容底边 abs 468）
+// → 基础位本身 = 468+2 = 470；CS 内容障碍底边同为 468，与基础位 dock 无垂直相交 → 不再
+// 下移，最终 470 与基线避让结果一致。
+csTime = 25_100
+let ancExpandedStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 38),
+]
+let ancExpandedCap: BubbleCapturer = { c in
+    .stats(ancExpandedStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let ancExpandedProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: ancExpandedCap)
+let ancExpandedDock = DockPanel()
+let ancExpandedPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancExpandedCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let ancExpandedOK = ancRunTwoTickLayout(
+    probe: ancExpandedProbe, dock: ancExpandedDock,
+    mascot: ancMascot, candidates: [ancMascot] + csSurfaces + [csAct],
+    petRects: ancExpandedPetRects, obstacleCounts: ancExpandedCounts)
+check("T-anc2 展开态内容底470→dock仍470(基础位即内容底,无双重下移)",
+      ancExpandedOK && dockFrameNear(ancExpandedDock.frame, ancAppKitFrame(y: 470)),
+      "frame=\(ancExpandedDock.frame) expected=\(ancAppKitFrame(y: 470))")
+check("T-anc2b 展开态anchor=内容底468(避让起点与障碍底同源,一步到位)",
+      ancExpandedPetRects.withLock { $0 }.count == 2
+        && ancExpandedPetRects.withLock { $0 }[1].maxY == 468
+        && ancExpandedCounts.withLock { $0 } == [1, 2],
+      "pets=\(ancExpandedPetRects.withLock { $0 }) counts=\(ancExpandedCounts.withLock { $0 })")
+
+// 降级回退：CS 恒 unavailable（macOS 13 / TCC 拒绝 / 捕获失败同路径）→ 无 contentBottom →
+// 基础位回退 Mascot 窗口底 369+2=371（现状不变；与 T-cs10 系列同语义、现场几何）。
+csTime = 25_200
+let ancDegradeProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: { _ in .unavailable })
+let ancDegradeDock = DockPanel()
+let ancDegradePetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancDegradeCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let ancDegradeOK = ancRunTwoTickLayout(
+    probe: ancDegradeProbe, dock: ancDegradeDock,
+    mascot: ancMascot, candidates: [ancMascot] + csSurfaces,
+    petRects: ancDegradePetRects, obstacleCounts: ancDegradeCounts)
+check("T-anc3 降级CS无观察→基础位回退窗口底371(petRects两tick均=窗口)",
+      ancDegradeOK && dockFrameNear(ancDegradeDock.frame, ancAppKitFrame(y: 371))
+        && ancDegradePetRects.withLock { $0 } == [ancPet, ancPet]
+        && ancDegradeCounts.withLock { $0 } == [0, 0],
+      "frame=\(ancDegradeDock.frame) pets=\(ancDegradePetRects.withLock { $0 }) counts=\(ancDegradeCounts.withLock { $0 })")
+
+// 拖动粘性：CS/宠物整体平移 (+40,-25)、0.1s cadence 内不重捕获（捕获计数不增）→
+// contentBottom cache 粘性保留 → adjustedPet 随宠物移动，dock 相对可见内容底偏移不变。
+csTime = 25_300
+let ancDragCaptured = OSAllocatedUnfairLock(initialState: 0)
+let ancDragProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true },
+    capturer: { _ in
+        ancDragCaptured.withLock { $0 += 1 }
+        return .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 331))
+    })
+let ancDragDock = DockPanel()
+let ancDragPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancDragCounts = OSAllocatedUnfairLock(initialState: [Int]())
+_ = ancRunTwoTickLayout(
+    probe: ancDragProbe, dock: ancDragDock,
+    mascot: ancMascot, candidates: [ancMascot] + csSurfaces,
+    petRects: ancDragPetRects, obstacleCounts: ancDragCounts)
+let ancDragCapturesBefore = ancDragCaptured.withLock { $0 }
+csTime += 0.05   // cadence 内：不重捕获，cache 粘性
+let ancPetMoved = ancPet.offsetBy(dx: 40, dy: -25)
+let ancMascotMoved = mkw(900, layer: 2, ancPetMoved, title: "Codex Pet Mascot Effect")
+let ancSurfacesMoved = [27814, 27815, 27816, 27817, 28787, 28788, 28789].map {
+    mkw(UInt32($0), layer: 3, csSurfaceBounds.offsetBy(dx: 40, dy: -25),
+        title: "Codex Pet Composition Surface")
+}
+let ancDragMovedPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancDragMovedPlaced = FollowLayoutPass.placeDock(
+    mascot: ancMascotMoved, candidates: [ancMascotMoved] + ancSurfacesMoved,
+    bubbleProbe: ancDragProbe,
+    frameSink: { pet, obstacles in
+        ancDragMovedPetRects.withLock { $0.append(pet) }
+        return ancDragDock.placeBelow(
+            petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+            movementChanged: false, monotonicNow: csTime)
+    })
+check("T-anc4 拖动(+40,-25)cache粘性→dock随动(y306=331-25,x+40;不重捕获)",
+      ancDragMovedPlaced
+        && ancDragCaptured.withLock { $0 } == ancDragCapturesBefore
+        && dockFrameNear(
+            ancDragDock.frame,
+            Geometry.appKitRectFromQuartz(
+                CGRect(x: ancDockX + 40, y: 331 - 25, width: 200, height: 48)))
+        && ancDragMovedPetRects.withLock { $0 } == [
+            CGRect(x: ancPet.minX + 40, y: ancPet.minY - 25, width: ancPet.width, height: 139)],
+      "frame=\(ancDragDock.frame) pets=\(ancDragMovedPetRects.withLock { $0 }) captures=\(ancDragCaptured.withLock { $0 })")
+
+// ACT 控制按钮出现（现场 194px、contentBottom=38 → 内容底边 abs 423）：内容底基础位 362 的
+// dock(362..410) 与 ACT 内容矩形(384..423) 相交 → 在基础位之上正确避让到 425（避让链路
+// 不因基础位下移而丢失；基线窗口底锚 388 同样避让到 425）。
+csTime = 25_400
+let ancActStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(27814): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362),
+    CGWindowID(27900): BubbleAlphaStats(nonTransparentPixelCount: 194, contentBottom: 38),
+]
+let ancActCap: BubbleCapturer = { c in
+    .stats(ancActStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let ancActProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: ancActCap)
+let ancActDock = DockPanel()
+let ancActPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let ancActCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let ancActOK = ancRunTwoTickLayout(
+    probe: ancActProbe, dock: ancActDock,
+    mascot: csMascot, candidates: [csMascot] + csSurfaces + [csAct],
+    petRects: ancActPetRects, obstacleCounts: ancActCounts)
+check("T-anc5 收起+ACT按钮(障碍底423)→dock避让425(内容底基础位362之上)",
+      ancActOK && dockFrameNear(ancActDock.frame, csAppKitFrame(y: 425))
+        && ancActCounts.withLock { $0 } == [1, 2],
+      "frame=\(ancActDock.frame) counts=\(ancActCounts.withLock { $0 })")
+
+print("\n[dock 基础位内容底锚定] \(pass - ancPass) passed, \(fail - ancBase) failed")
 
 // ---- T-clamp: clampDockX 纯函数 + safeDockFrame 水平 clamp ----
 let clBase = fail, clPass = pass
