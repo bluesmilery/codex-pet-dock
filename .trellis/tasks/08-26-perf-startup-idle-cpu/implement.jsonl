@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/macos/quality-guidelines.md", "reason": "0 warning/TDD/门禁要求"}
+{"file": ".trellis/spec/macos/privacy-guidelines.md", "reason": "token 日志读取隐私边界"}
+{"file": ".trellis/spec/macos/appkit-conventions.md", "reason": "主线程/Timer 接线约束"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "新增常量与 helper 前先搜索"}
