@@ -1,6 +1,6 @@
 [project]
 name = "codex-pet-dock"
-version = "0.2.0"
+version = "0.3.0"
 description = "Python tooling environment for Codex Pet Dock docs and privacy gates."
 requires-python = ">=3.12"
 dependencies = []

@@ -303,7 +303,7 @@
 
 - 本 implement 沙箱与上一轮相同无 WindowServer（`NSScreen.screens.count==0`）：`make test-ui` 的既有 `tests/main.swift:180` guard 会 fatalError。test-ui 改用 headless 驱动副本运行：复制 `tests/main.swift` 到 /tmp，仅替换该 NSScreen guard 为固定负 origin 合成屏 frame（primary fixture 走既有合成负坐标分支），并把 3 处 `#filePath` 推导的仓库根固定为本 worktree 绝对路径（T-sch4f/T-re8/T-re12b source guard 需要），其余测试与源文件清单、`-warnings-as-errors -DPETDOCK_TESTING` flags 与 `make test-ui` 完全一致。
 - 该差异只影响 Geometry 屏幕 fixture 与 source guard 的路径解析；本候选新增测试（T-bv43/T-bv44）与被测生产链不依赖 NSScreen。完整 `make test` 需在 GUI 会话对冻结 SHA 复跑。
-- `swift build` 使用 `--disable-sandbox` 与 /tmp 缓存路径（外层 seatbelt 禁止 SwiftPM 内层 sandbox 与 `~/Library` 写入）；python 门禁使用任务指定 `/Users/<user>/workspace/codex-pet-dock/.venv/bin/python`。
+- `swift build` 使用 `--disable-sandbox` 与 /tmp 缓存路径（外层 seatbelt 禁止 SwiftPM 内层 sandbox 与 `~/Library` 写入）；python 门禁使用任务指定项目 venv python（`<primary>/.venv/bin/python`）。
 
 ---
 
@@ -403,7 +403,7 @@
 
 - 本 implement 沙箱与前几轮相同无 WindowServer（`NSScreen.screens.count==0`）：test-ui 运行时 fatal（既有 `Fatal error: 无屏幕` guard）。语义由同源 headless 驱动承担（/tmp/pd-avo-driver/main.swift：仅替换该 guard 为固定负 origin 合成屏 struct、primary fixture expected screen 传 nil、3 处 #filePath 固定为带引号的本 worktree 路径；其余源清单与 `-warnings-as-errors -DPETDOCK_TESTING` flags 与 make test-ui 完全一致）。新 T-avo 段的 NSScreen 依赖经 NSScreen 子类注入合成屏（系统只读集合无法注入实例），headless 与 GUI 会话都可执行；既有 T-ip8/9/10 的 screens-first 分支在 headless 驱动走既有「无screen跳过」路径（其 GUI 会话行为由同段注入 fake link 保证确定性）。
 - 基线红测在同一 headless 驱动上以未修改 Sources 执行（产品源零改动）；红测块在实现后由注入 fake 的完整覆盖替换。红测原始输出已记录：354 passed / 3 failed（fail 项即用户症状）。修复树 369 passed / 0 failed。
-- swiftc/SwiftPM 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`；swift build 另用 `--disable-sandbox`；python 门禁使用任务指定 venv python（/Users/<user>/workspace/codex-pet-dock/.venv/bin/python）。
+- swiftc/SwiftPM 类目标统一 `CLANG_MODULE_CACHE_PATH=/tmp/petdock-mcache`；swift build 另用 `--disable-sandbox`；python 门禁使用任务指定 venv python（`<primary>/.venv/bin/python`）。
 
 ---
 
