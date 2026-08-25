@@ -2371,6 +2371,68 @@ check("T-sch4e reset/空候选/权限false均不残留retry hint",
       "reset=\(String(describing: hintAfterReset)) empty=\(String(describing: hintAfterEmpty)) "
         + "permission=\(String(describing: hintAfterPermissionLoss))")
 
+do {
+    let stableClock = OSAllocatedUnfairLock(initialState: TimeInterval(14_000))
+    let stableCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+    let stableCandidate = mkw(801, layer: 3, bubbleForCollapse, title: "Codex Bubble")
+    var stableTicks = 0
+    var pendingRetryInsideTick: TimeInterval?
+    var heartbeatPendingInsideTick: TimeInterval?
+    var stableTimers: [TestFollowTickTimer] = []
+    var stableProbe: BubbleVisibilityProbe!
+    let stableScheduler = FollowTickScheduler(
+        runTick: {
+            stableTicks += 1
+            stableProbe.probe(candidates: [stableCandidate])
+            pendingRetryInsideTick = stableProbe.lock.withLock { $0.pendingRetryAt }
+            if stableTicks == 2 {
+                heartbeatPendingInsideTick = pendingRetryInsideTick
+            }
+            return .stable
+        },
+        makeDisplayLink: { _, _ in nil },
+        canUseDisplayLink: { false },
+        maximumFramesPerSecond: { 60 },
+        monotonicNow: { stableClock.withLock { $0 } },
+        stableDelayHint: { stableProbe.takePendingRetryDelay() },
+        makeTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            stableTimers.append(timer)
+            return timer
+        }
+    )
+    stableProbe = BubbleVisibilityProbe(
+        monotonicNow: { stableClock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _ in
+            stableCaptureCalls.withLock { $0 += 1 }
+            return .stats(expandedS)
+        })
+    stableScheduler.start()
+    stableScheduler.requestWake()
+    _ = waitPumpingMain { stableTicks == 1 }
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+
+    stableClock.withLock { $0 = 14_000.95 }
+    let stableTickTimer = stableTimers.last { !$0.invalidated }!
+    stableTickTimer.fire()
+    _ = waitPumpingMain { stableTicks == 2 }
+    let retryTimer = stableTimers.last!
+
+    stableClock.withLock { $0 = 14_001 }
+    retryTimer.fire()
+    _ = waitPumpingMain { stableTicks == 3 }
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+    check("T-sch4g 固定identity心跳hint→scheduler安排1.0s界one-shot",
+          heartbeatPendingInsideTick == 14_001
+                && !retryTimer.repeats
+                && abs(retryTimer.interval - 0.05) < 0.000_001
+                && stableCaptureCalls.withLock { $0 } == 2,
+          "pending=\(String(describing: heartbeatPendingInsideTick)) "
+              + "interval=\(retryTimer.interval) calls=\(stableCaptureCalls.withLock { $0 })")
+    stableScheduler.stop()
+}
+
 // T-sch4f (v5 source guard): cadence 生产文件不得引入墙上时间输入。
 // break-loop 4 结论：局部 wall fake 未被 scheduler/probe 消费，不能证明墙钟独立性；
 // cadence 生产契约本就不接受墙钟，因此用可执行 source/API guard 直接扫描

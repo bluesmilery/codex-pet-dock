@@ -13,6 +13,14 @@ protocol TokenLogReading {
     mutating func readPoints(from: Date, to: Date) throws -> TokenWindow
 }
 
+protocol TokenLogFileHandle {
+    func seek(toOffset offset: UInt64) throws
+    func read(upToCount count: Int) throws -> Data?
+    func close() throws
+}
+
+extension FileHandle: TokenLogFileHandle {}
+
 /// 解析 `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`。
 ///
 /// 合规边界：只提取每行**顶层 timestamp** 与 **payload.info.last_token_usage.total_tokens**
@@ -29,6 +37,7 @@ struct TokenUsageLogReader: TokenLogReading {
     let sessionsRoot: URL
     /// 增量缓存落盘位置（nil=仅进程内）。
     let cacheURL: URL?
+    private let openFileHandle: (URL) throws -> TokenLogFileHandle
 
     /// 进程内增量缓存（opaque key → {size, points}）。
     private var memCache: [String: CacheEntry]
@@ -58,9 +67,16 @@ struct TokenUsageLogReader: TokenLogReading {
         }
     }
 
-    init(sessionsRoot: URL, cacheURL: URL? = nil) {
+    init(
+        sessionsRoot: URL,
+        cacheURL: URL? = nil,
+        openFileHandle: @escaping (URL) throws -> TokenLogFileHandle = {
+            try FileHandle(forReadingFrom: $0)
+        }
+    ) {
         self.sessionsRoot = sessionsRoot
         self.cacheURL = cacheURL
+        self.openFileHandle = openFileHandle
         var loaded: [String: CacheEntry] = [:]
         var cacheNeedsRewrite = false
         if let cacheURL,
@@ -106,7 +122,6 @@ struct TokenUsageLogReader: TokenLogReading {
                 } else {
                     points = []
                     debugFilesParsed += 1
-                    memCache[key] = CacheEntry(size: size, parsedBytes: 0, points: points)
                 }
             } else if size > 0, let hit = memCache[key],
                       hit.parsedBytes > 0, hit.parsedBytes <= hit.size, size > hit.size,
@@ -122,7 +137,6 @@ struct TokenUsageLogReader: TokenLogReading {
                         size: size, parsedBytes: parsed.parsedBytes, points: points)
                 } else {
                     points = []
-                    memCache[key] = CacheEntry(size: size, parsedBytes: 0, points: points)
                 }
                 debugFilesParsed += 1
             }
@@ -269,7 +283,7 @@ struct TokenUsageLogReader: TokenLogReading {
     private func parseFile(
         _ url: URL, startingAt offset: Int64, through end: Int64
     ) -> (points: [TokenUsagePoint], parsedBytes: Int64)? {
-        guard offset >= 0, let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        guard offset >= 0, let handle = try? openFileHandle(url) else { return nil }
         defer { try? handle.close() }
         let maximumBytes = Int(max(0, end - offset))
         try? handle.seek(toOffset: UInt64(offset))
@@ -295,7 +309,7 @@ struct TokenUsageLogReader: TokenLogReading {
         } catch {
             return nil
         }
-        guard totalRead <= maximumBytes else {
+        guard totalRead == maximumBytes else {
             return nil
         }
         return (points, offset + Int64(totalRead - buffer.count))

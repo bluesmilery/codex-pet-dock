@@ -296,12 +296,23 @@ struct DataTestRunner {
                   "tokens=\(appended.points.map(\.tokens)) full=\(incrementalReader.debugFilesParsed) "
                       + "inc=\(String(incrementalReader.debugIncrementalParses))")
 
+            try! Data(completeFirst.utf8).write(to: file)
+            let shrunkAboveCursor = try! incrementalReader.readPoints(
+                from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            check("T3e0 收缩后size>=parsedBytes→全量重解析且保留完整旧行",
+                  shrunkAboveCursor.points.map(\.tokens) == [100]
+                    && incrementalReader.debugFilesParsed == 2
+                    && incrementalReader.debugIncrementalParses == 1,
+                  "points=\(shrunkAboveCursor.points.map(\.tokens)) "
+                      + "full=\(incrementalReader.debugFilesParsed) "
+                      + "inc=\(String(incrementalReader.debugIncrementalParses))")
+
             try! Data(completeFirst.data(using: .utf8)!.prefix(50)).write(to: file)
             let shrunk = try! incrementalReader.readPoints(
                 from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
             check("T3e 文件收缩→回退全量并重置增量游标",
                   shrunk.points.isEmpty
-                    && incrementalReader.debugFilesParsed == 2
+                    && incrementalReader.debugFilesParsed == 3
                     && incrementalReader.debugIncrementalParses == 1,
                   "points=\(shrunk.points.count) full=\(incrementalReader.debugFilesParsed) "
                       + "inc=\(String(incrementalReader.debugIncrementalParses))")
@@ -357,6 +368,76 @@ struct DataTestRunner {
             try? FileManager.default.removeItem(at: cacheRoot)
         }
         section("v2→v3 迁移")
+
+        do {
+            final class ShortReadFileHandle: TokenLogFileHandle {
+                private let data: Data
+                private var didRead = false
+
+                init(data: Data) { self.data = data }
+
+                func seek(toOffset offset: UInt64) {}
+                func read(upToCount count: Int) -> Data? {
+                    guard !didRead else { return nil }
+                    didRead = true
+                    return data.prefix(count)
+                }
+                func close() {}
+            }
+
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-token-short-read-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: root)
+            let comps = FixtureCalendar.utc.dateComponents(
+                [.year, .month, .day], from: FixtureCalendar.anchorDay)
+            let dayPath = String(format: "%04d/%02d/%02d", comps.year!, comps.month!, comps.day!)
+            let file = root.appendingPathComponent("\(dayPath)/rollout-fixture.jsonl")
+            try! FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let firstLine = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-03T12:00:00.000Z\","
+                + "\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":100}}}}\n"
+            let firstData = Data(firstLine.utf8)
+            try! firstData.write(to: file)
+            let key = TokenUsageLogReader.cacheKey(for: file, sessionsRoot: root)!
+            let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-token-short-read-cache-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: cacheRoot)
+            try! FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+            let cacheURL = cacheRoot.appendingPathComponent("cache.json")
+            var fileOpens = 0
+            var reader = TokenUsageLogReader(sessionsRoot: root, cacheURL: cacheURL) { [file] _ in
+                fileOpens += 1
+                if fileOpens == 2 {
+                    try! firstData.write(to: file)
+                }
+                return ShortReadFileHandle(data: firstData)
+            }
+            _ = try! reader.readPoints(from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+
+            let appendedLine = firstLine.replacingOccurrences(of: "\"total_tokens\":100", with: "\"total_tokens\":300")
+                + "  \n"
+            let appendHandle = try! FileHandle(forWritingTo: file)
+            try! appendHandle.seekToEnd()
+            try! appendHandle.write(contentsOf: Data(appendedLine.utf8))
+            try! appendHandle.close()
+            let truncatedSize = Int64(firstData.count)
+            let truncated = try! reader.readPoints(
+                from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            let cacheObject = try! JSONSerialization.jsonObject(
+                with: Data(contentsOf: cacheURL)) as? [String: [String: Any]]
+            let cachedSize = (cacheObject?[key]?["size"] as? NSNumber)?.int64Value
+            check("T3g 增量读遇到并发截断→不合并旧点且不写回stale size",
+                  truncated.points.isEmpty
+                    && cachedSize == truncatedSize
+                    && reader.debugIncrementalParses == 0
+                    && reader.debugFilesParsed == 2,
+                  "points=\(truncated.points.map(\.tokens)) cached=\(String(describing: cachedSize)) "
+                      + "truncated=\(truncatedSize) full=\(reader.debugFilesParsed) "
+                      + "inc=\(String(reader.debugIncrementalParses)) opens=\(fileOpens)")
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: cacheRoot)
+        }
+        section("并发截断守卫")
 
         // ---- T-cache-privacy: cache URL symlink must not be read ----
         do {
