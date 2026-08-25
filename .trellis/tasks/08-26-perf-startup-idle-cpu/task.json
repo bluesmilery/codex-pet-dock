@@ -15,12 +15,12 @@
   "branch": "codex/perf-startup-idle-cpu",
   "base_branch": "dev",
   "worktree_path": null,
-  "commit": null,
+  "commit": "8dc8f48ed67fdd391964b34178c47111417c625d",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Review round-2 APPROVED (P0/P1/P2=0); runtime QA: launch OK, stable-signed, TCC carried, pet-visible stationary CPU 0.0%, v2->v3 migration 207/207, 5-min incremental refresh no CPU spike; candidate archived 2026-08-26-004500-perf-startup-idle-cpu-8dc8f48 and left running for user morning acceptance",
   "meta": {}
 }
