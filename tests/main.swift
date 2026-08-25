@@ -1530,6 +1530,76 @@ check("T-bv11 reset→cached空(inFlight不变)", probe.lock.withLock { $0.cache
 probe.lock.withLock { $0.inFlight = false }
 check("T-bv12 wid不在当前候选集→hidden(当前帧失效)", probe.visibility(for: CGWindowID(99)) == .hidden, "")
 
+// T-bv13 (v6): 窗口身份稳定时使用 1s 心跳；身份变化立即恢复 0.1s 快速节奏。
+// factory/capture 计数证明同一轮候选共享一个 capturer，ScreenCaptureKit 清单枚举只发生一次。
+do {
+    let stableClock = OSAllocatedUnfairLock(initialState: TimeInterval(4_000))
+    let factoryCalls = OSAllocatedUnfairLock(initialState: 0)
+    let captureCalls = OSAllocatedUnfairLock(initialState: 0)
+    let makeCapturer: BubbleCapturerFactory = {
+        factoryCalls.withLock { $0 += 1 }
+        return { _ in
+            captureCalls.withLock { $0 += 1 }
+            return .stats(expandedS)
+        }
+    }
+    let stableBounds = CGRect(x: 0, y: 580, width: 345, height: 64)
+    let stableCandidate = mkw(101, layer: 3, stableBounds, title: "Codex Bubble")
+    let stableProbe = BubbleVisibilityProbe(
+        monotonicNow: { stableClock.withLock { $0 } }, canCapture: { true }, makeCapturer: makeCapturer)
+
+    stableProbe.probe(candidates: [stableCandidate])
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+    stableClock.withLock { $0 = 4_000.5 }
+    stableProbe.probe(candidates: [stableCandidate])
+    stableClock.withLock { $0 = 4_001 }
+    stableProbe.probe(candidates: [stableCandidate])
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+    check("T-bv13a 稳定身份0.5s不捕获、1.0s捕获",
+          factoryCalls.withLock { $0 } == 2 && captureCalls.withLock { $0 } == 2,
+          "factory=\(factoryCalls.withLock { $0 }) captures=\(captureCalls.withLock { $0 })")
+
+    stableClock.withLock { $0 = 4_001.05 }
+    let identityChangedCandidate = mkw(
+        101, layer: 3, stableBounds.offsetBy(dx: 2, dy: 0),
+        title: "Codex Bubble Changed", alpha: 0.99)
+    stableProbe.probe(candidates: [identityChangedCandidate])
+    let gatedCalls = (factoryCalls.withLock { $0 }, captureCalls.withLock { $0 })
+    stableClock.withLock { $0 = 4_001.101 }
+    stableProbe.probe(candidates: [identityChangedCandidate])
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+    check("T-bv13b 身份变化后0.1s内恢复快速捕获",
+          gatedCalls.0 == 2 && gatedCalls.1 == 2
+                && factoryCalls.withLock { $0 } == 3
+                && captureCalls.withLock { $0 } == 3,
+          "gated=\(gatedCalls.0)/\(gatedCalls.1) "
+              + "factory=\(factoryCalls.withLock { $0 }) captures=\(captureCalls.withLock { $0 })")
+}
+
+do {
+    let sharedTime: TimeInterval = 4_100
+    let sharedFactoryCalls = OSAllocatedUnfairLock(initialState: 0)
+    let sharedCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+    let sharedMakeCapturer: BubbleCapturerFactory = {
+        sharedFactoryCalls.withLock { $0 += 1 }
+        return { _ in
+            sharedCaptureCalls.withLock { $0 += 1 }
+            return .stats(expandedS)
+        }
+    }
+    let sharedProbe = BubbleVisibilityProbe(
+        monotonicNow: { sharedTime }, canCapture: { true }, makeCapturer: sharedMakeCapturer)
+    sharedProbe.probe(candidates: [
+        mkw(102, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64)),
+        mkw(103, layer: 3, CGRect(x: 20, y: 580, width: 345, height: 64))
+    ])
+    _ = waitPumpingMain { !sharedProbe.lock.withLock { $0.inFlight } }
+    check("T-bv13c 一轮N候选仅调用一次capturer工厂",
+          sharedFactoryCalls.withLock { $0 } == 1
+                && sharedCaptureCalls.withLock { $0 } == 2,
+          "factory=\(sharedFactoryCalls.withLock { $0 }) captures=\(sharedCaptureCalls.withLock { $0 })")
+}
+
 // 异步集成（fake capturer + RunLoop pump）：pending capture 完成 → cached 更新
 var fakeTime: TimeInterval = 2000
 let fakeHidden: BubbleCapturer = { _ in .stats(noiseS) }
@@ -2120,8 +2190,8 @@ func productionProbeCadence(
     var ticks = 0
     let captureCalls = OSAllocatedUnfairLock(initialState: 0)
     let releaseFirstCapture = OSAllocatedUnfairLock(initialState: false)
+    let bubbleAlpha = OSAllocatedUnfairLock(initialState: 1.0)
     let mascot = mkw(603, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
-    let bubble = mkw(601, layer: 3, bubbleForCollapse)
     let capturer: BubbleCapturer = { _ in
         let call = captureCalls.withLock { count -> Int in
             count += 1
@@ -2145,6 +2215,10 @@ func productionProbeCadence(
                 return value
             }
             probeAttempts.append(probeTime)
+            let bubble = bubbleAlpha.withLock { alpha -> WinCandidate in
+                alpha = alpha >= 1 ? 0.99 : alpha + 0.01
+                return mkw(601, layer: 3, bubbleForCollapse, alpha: alpha)
+            }
             _ = FollowLayoutPass.placeDock(
                 mascot: mascot,
                 candidates: [mascot, bubble],
@@ -3357,7 +3431,7 @@ check("T-bv41c RED 同WID身份变化使旧in-flight结果失效",
 // 真正身份变化（WID 集合或任一非 bounds 身份字段）维持现行 generation 递增 + 清空 + 保守
 // visible。写入校验保持现行严格语义：完成回调仍要求 generation 与 knownCandidates 完全
 // 一致，bounds 平移期间启动的旧捕获结果一律丢弃，绝不写入新几何；粘性只影响 cache 保留。
-// 权衡：拖动期间展开/收起的真实状态变化最迟在拖动结束后的下一次捕获收敛（≤0.2s），见
+    // 权衡：拖动期间展开/收起的真实状态变化最迟在拖动结束后的稳定心跳捕获（≤1s）收敛，见
 // docs/architecture/dock-obstacle-avoidance.md「拖动期间的粘性可见性」。
 var dragTime: TimeInterval = 16_500
 let dragOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(noiseS))
@@ -3415,7 +3489,7 @@ check("T-bv43c 拖动期间visible同样保持（粘性对称）",
 // 一次权威 targetMissing 仍判 hidden，与 T-bv39f 语义一致。
 _ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
 dragOutcome.withLock { $0 = .targetMissing }
-dragTime += 0.11
+dragTime += 1.01
 dragProbe.probe(candidates: [mkw(531, layer: 3, dragHiddenRun.finalBounds)])
 _ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
 check("T-bv43d 纯几何拖动保留成功观察资格→targetMissing权威hidden",
@@ -3424,7 +3498,7 @@ check("T-bv43d 纯几何拖动保留成功观察资格→targetMissing权威hidd
 // 拖动结束后正常捕获刷新：hidden→visible 状态变化必须写回并唤醒一次布局。
 dragOutcome.withLock { $0 = .stats(expandedS) }
 let wakesBeforeRefresh = dragWakes.withLock { $0 }
-dragTime += 0.11
+dragTime += 1.01
 dragProbe.probe(candidates: [mkw(531, layer: 3, dragHiddenRun.finalBounds)])
 _ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
 check("T-bv43f 拖动结束后捕获刷新hidden→visible并唤醒一次",
@@ -3451,7 +3525,7 @@ let inflightEntered1 = waitPumpingMain {
 inflightGate.release()
 _ = waitPumpingMain { !inflightProbe.lock.withLock { $0.inFlight } }
 let inflightPreHidden = inflightProbe.visibility(for: inflightStable.wid) == .hidden
-dragTime += 0.11
+dragTime += 1.01
 let inflightMoved = CGRect(x: dragStart.origin.x + 7, y: dragStart.origin.y + 5,
                            width: dragStart.width, height: dragStart.height)
 inflightProbe.probe(candidates: [mkw(537, layer: 3, inflightMoved)])
@@ -3621,7 +3695,7 @@ check("T-bv44b RED 拖动期间dock保持无障碍基础位(隐藏气泡不推�
         + "frame=\(bv44Dock.frame) expected=\(bv44BaseFrame())")
 
 bv44Outcome.withLock { $0 = .stats(expandedS) }
-bv44Time += 0.11
+bv44Time += 1.01
 bv44Scheduler.requestWake()
 let bv44RefreshTick = bv44Ticks.withLock { $0 } + 1
 _ = waitPumpingMain { bv44Ticks.withLock { $0 } == bv44RefreshTick }
@@ -3779,7 +3853,7 @@ check("T-bv45h 拖动平移期间contentBottom粘性保留→障碍矩形随窗�
       "obstaclesOK=\(bv45DragObstaclesOK)")
 
 // (h) wake 语义保持：只有可见性状态变化唤醒；同一 probe 的内容底变化（visible→visible）
-// 不额外唤醒，由既有 0.1s cadence 的下一次完整 tick 应用。
+    // 不额外唤醒，由既有稳定心跳的下一次完整 tick 应用。
 let bv45Wakes = OSAllocatedUnfairLock(initialState: 0)
 let bv45WakeStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(bv45BarStats))
 let bv45WakeProbe = BubbleVisibilityProbe(
@@ -3790,9 +3864,9 @@ bv45WakeProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
 _ = waitPumpingMain { !bv45WakeProbe.lock.withLock { $0.inFlight } }
 let bv45WakesAfterBar = bv45Wakes.withLock { $0 }
 let bv45BottomAfterBar = bv45WakeProbe.observation(for: CGWindowID(544)).contentBottom
-// 同一 probe：cache 已写入 visible/21，0.1s cadence 后二次捕获内容底 53（visible→visible）
+    // 同一 probe：cache 已写入 visible/21，稳定心跳后二次捕获内容底 53（visible→visible）
 bv45WakeStats.withLock { $0 = .stats(expandedS) }
-bv45Time += 0.11
+bv45Time += 1.01
 bv45WakeProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
 _ = waitPumpingMain { !bv45WakeProbe.lock.withLock { $0.inFlight } }
 check("T-bv45i 同probe内容底21→53(visible→visible)不wake且观察更新",
@@ -4971,6 +5045,13 @@ check("P9a pv=T dv=T → showUI", FollowTickPlanner.decide(input: FollowTickInpu
 check("P9b pv=T dv=F → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: true, wasPetVisible: false, dockVisible: false)).hideUI)
 check("P9c pv=F dv=T → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: false, wasPetVisible: true, dockVisible: true)).hideUI)
 check("P9d pv=F dv=F → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: false, wasPetVisible: true, dockVisible: false)).hideUI)
+
+check("P10a 首个petVisible上升沿后的数据刷新延迟5s",
+      FollowTickPlanner.initialDataRefreshDelay(hasCompletedFirstRefresh: false) == 5.0,
+      "delay=\(FollowTickPlanner.initialDataRefreshDelay(hasCompletedFirstRefresh: false))")
+check("P10b 首刷完成后resume恢复立即刷新",
+      FollowTickPlanner.initialDataRefreshDelay(hasCompletedFirstRefresh: true) == 0,
+      "delay=\(FollowTickPlanner.initialDataRefreshDelay(hasCompletedFirstRefresh: true))")
 
 print("\n[FollowTickPlan] \(pass - plPass) passed, \(fail - plBase) failed")
 

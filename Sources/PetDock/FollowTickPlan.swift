@@ -372,6 +372,11 @@ struct FollowTickPlan: Equatable {
 
 /// 跟随 tick 编排纯决策。
 enum FollowTickPlanner {
+    /// 首个宠物可见上升沿后的数据刷新延迟，避免与启动/首帧竞争 CPU。
+    static func initialDataRefreshDelay(hasCompletedFirstRefresh: Bool) -> TimeInterval {
+        hasCompletedFirstRefresh ? 0 : 5
+    }
+
     /// 纯函数：根据快照决策编排动作。
     /// - 数据探测仅跟随宠物可见性（与用户是否隐藏 UI 解耦）。
     /// - UI 可见 = 宠物可见 && 用户可见；用户隐藏只关 UI，仍跟踪宠物。

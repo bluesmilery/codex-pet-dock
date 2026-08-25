@@ -19,9 +19,11 @@ protocol TokenLogReading {
 /// （单次增量；已验证 Σ last_token_usage.total_tokens = 会话累计，跨会话求和不重复）。
 /// **绝不读取 / 记录 / 输出会话正文**；缓存也只持久化 timestamp + tokens。
 ///
-/// 增量缓存：按「版本化路径摘要 → {size, points}」缓存整文件解析结果。size 不变则复用，变化则重读全文件
-/// （rollout 文件均较小，<5MB）。缓存落盘以跨进程复用，绝不持久化原始路径。
+/// 增量缓存：按「路径摘要 → {size, parsedBytes, points}」缓存解析结果。size 未变直接复用；
+/// append-only 增长时从换行对齐的 parsedBytes 续读，收缩/v2 旧缓存回退全量。缓存落盘以跨进程
+/// 复用，绝不持久化原始路径。
 struct TokenUsageLogReader: TokenLogReading {
+    private static let parseChunkSize = 1 << 20
     private static let maxCacheBytes: Int64 = 1_048_576
 
     let sessionsRoot: URL
@@ -33,10 +35,27 @@ struct TokenUsageLogReader: TokenLogReading {
 
     /// 仅供测试：累计发生实际文件解析（未命中缓存）的次数，用于验证增量缓存命中。
     private(set) var debugFilesParsed = 0
+    /// 仅供测试：累计从 parsedBytes 续读的文件轮次（不含全量解析）。
+    private(set) var debugIncrementalParses = 0
 
     private struct CacheEntry: Codable {
         let size: Int64
+        /// 恰好消费到最后一个完整换行后的字节偏移；v2 缓存无此字段时解码为 0。
+        let parsedBytes: Int64
         let points: [TokenUsagePoint]
+
+        init(size: Int64, parsedBytes: Int64, points: [TokenUsagePoint]) {
+            self.size = size
+            self.parsedBytes = parsedBytes
+            self.points = points
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            size = try container.decode(Int64.self, forKey: .size)
+            parsedBytes = try container.decodeIfPresent(Int64.self, forKey: .parsedBytes) ?? 0
+            points = try container.decode([TokenUsagePoint].self, forKey: .points)
+        }
     }
 
     init(sessionsRoot: URL, cacheURL: URL? = nil) {
@@ -74,13 +93,38 @@ struct TokenUsageLogReader: TokenLogReading {
         for file in files {
             guard let key = Self.cacheKey(for: file, sessionsRoot: sessionsRoot) else { continue }
             let size = ((try? fm.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value ?? -1
-            let points: [TokenUsagePoint]
+            var points: [TokenUsagePoint]
             if size >= 0, let hit = memCache[key], hit.size == size {
-                points = hit.points           // size 未变 → 复用缓存
+                if hit.parsedBytes > 0 {
+                    points = hit.points       // size 未变 → 复用缓存
+                } else if let parsed = parseFile(file, startingAt: 0, through: size) {
+                    // v2 条目无换行游标：首次刷新一次性全量迁移为 v3。
+                    points = parsed.points
+                    debugFilesParsed += 1
+                    memCache[key] = CacheEntry(
+                        size: size, parsedBytes: parsed.parsedBytes, points: points)
+                } else {
+                    points = []
+                    debugFilesParsed += 1
+                    memCache[key] = CacheEntry(size: size, parsedBytes: 0, points: points)
+                }
+            } else if size > 0, let hit = memCache[key],
+                      hit.parsedBytes > 0, hit.parsedBytes <= hit.size, size > hit.size,
+                      let parsed = parseFile(file, startingAt: hit.parsedBytes, through: size) {
+                points = hit.points + parsed.points
+                debugIncrementalParses += 1
+                memCache[key] = CacheEntry(
+                    size: size, parsedBytes: parsed.parsedBytes, points: points)
             } else {
-                points = parseFile(file)
+                if let parsed = parseFile(file, startingAt: 0, through: size) {
+                    points = parsed.points
+                    memCache[key] = CacheEntry(
+                        size: size, parsedBytes: parsed.parsedBytes, points: points)
+                } else {
+                    points = []
+                    memCache[key] = CacheEntry(size: size, parsedBytes: 0, points: points)
+                }
                 debugFilesParsed += 1
-                memCache[key] = CacheEntry(size: size, points: points)
             }
             // 仅纳入窗口内点；该文件贡献了至少一个窗口内点 → 计入唯一会话文件数。
             let inWindow = points.filter { $0.timestamp >= from && $0.timestamp <= to }
@@ -221,13 +265,40 @@ struct TokenUsageLogReader: TokenLogReading {
         return files
     }
 
-    private func parseFile(_ url: URL) -> [TokenUsagePoint] {
-        guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { return [] }
-        var pts: [TokenUsagePoint] = []
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            if let p = Self.parseLine(String(line)) { pts.append(p) }
+    /// 按块读取并只消费完整换行；parsedBytes 保持换行对齐，未完成尾行留给下一次增量。
+    private func parseFile(
+        _ url: URL, startingAt offset: Int64, through end: Int64
+    ) -> (points: [TokenUsagePoint], parsedBytes: Int64)? {
+        guard offset >= 0, let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let maximumBytes = Int(max(0, end - offset))
+        try? handle.seek(toOffset: UInt64(offset))
+
+        var points: [TokenUsagePoint] = []
+        var buffer = Data()
+        var totalRead = 0
+        do {
+            while totalRead < maximumBytes {
+                let chunkSize = min(Self.parseChunkSize, maximumBytes - totalRead)
+                guard let chunk = try handle.read(upToCount: chunkSize),
+                      !chunk.isEmpty else { break }
+                totalRead += chunk.count
+                buffer.append(chunk)
+                while let newline = buffer.firstIndex(of: 0x0A) {
+                    let line = buffer[..<newline]
+                    if let point = Self.parseLine(String(decoding: line, as: UTF8.self)) {
+                        points.append(point)
+                    }
+                    buffer.removeSubrange(buffer.startIndex...newline)
+                }
+            }
+        } catch {
+            return nil
         }
-        return pts
+        guard totalRead <= maximumBytes else {
+            return nil
+        }
+        return (points, offset + Int64(totalRead - buffer.count))
     }
 
     /// 解析单行，提取 (timestamp, last_token_usage.{total,input,cached,output}_tokens)。

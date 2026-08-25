@@ -129,6 +129,8 @@ enum BubbleVisibilityClassifier {
 
 /// 像素捕获器接口（@Sendable 闭包，后台 Task 安全传递）。
 typealias BubbleCapturer = @Sendable (WinCandidate) async -> BubbleCaptureOutcome
+/// 每轮探测先创建一次 capturer；默认实现共享一次 ScreenCaptureKit 窗口清单枚举。
+typealias BubbleCapturerFactory = @Sendable () async -> BubbleCapturer
 
 /// 单进程启动期权限请求 gate：已授权不请求，未授权也至多请求一次。
 struct ScreenCapturePermissionRequestGate {
@@ -146,6 +148,7 @@ struct ScreenCapturePermissionRequestGate {
 /// 像素捕获在 `Task.detached` 后台执行（不跑主线程），完成后经 lock + generation 校验更新。
 final class BubbleVisibilityProbe: Sendable {
     static let minInterval: TimeInterval = 0.1
+    static let stableProbeInterval: TimeInterval = 1.0
 
     /// 受锁保护的可变状态（同 module 测试可经 lock 访问）。
     internal struct ProbeState: Sendable {
@@ -153,6 +156,8 @@ final class BubbleVisibilityProbe: Sendable {
         var lastCaptureAt: TimeInterval = -.greatestFiniteMagnitude
         var inFlight = false
         var pendingRetryAt: TimeInterval?
+        /// 窗口身份不稳定时使用 0.1s 快速节奏；捕获启动后切回 1.0s 低频心跳。
+        var identityDirty = true
         /// 候选版本：候选集合/identity 变化或 reset 递增。旧 Task 回调 generation 不匹配时丢弃。
         var generation = 0
         /// 最近一次 `probe(candidates:)` 传入的 wid 集合（当前帧实际存在的候选）。
@@ -170,19 +175,24 @@ final class BubbleVisibilityProbe: Sendable {
     internal let lock: OSAllocatedUnfairLock<ProbeState>
     private let monotonicNow: @Sendable () -> TimeInterval
     private let canCapture: @Sendable () -> Bool
-    private let capturer: BubbleCapturer
+    private let makeCapturer: BubbleCapturerFactory
     private let evidence: (any RuntimeEvidenceRecording)?
     private let onVisibilityChange: @Sendable () -> Void
 
     init(monotonicNow: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-         canCapture: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
-         capturer: BubbleCapturer? = nil,
-         evidence: (any RuntimeEvidenceRecording)? = nil,
-         onVisibilityChange: @escaping @Sendable () -> Void = {}) {
+                 canCapture: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
+                 capturer: BubbleCapturer? = nil,
+                 makeCapturer: BubbleCapturerFactory? = nil,
+                 evidence: (any RuntimeEvidenceRecording)? = nil,
+                 onVisibilityChange: @escaping @Sendable () -> Void = {}) {
         self.lock = OSAllocatedUnfairLock(initialState: ProbeState())
         self.monotonicNow = monotonicNow
         self.canCapture = canCapture
-        self.capturer = capturer ?? Self.defaultCapturer
+        if let capturer {
+            self.makeCapturer = { capturer }
+        } else {
+            self.makeCapturer = makeCapturer ?? Self.defaultMakeCapturer
+        }
         self.evidence = evidence
         self.onVisibilityChange = onVisibilityChange
     }
@@ -192,7 +202,8 @@ final class BubbleVisibilityProbe: Sendable {
     /// 是否可触发探测（0.1s cadence + single-flight）。
     func isDue(_ time: TimeInterval) -> Bool {
         lock.withLock { s in
-            !s.inFlight && time - s.lastCaptureAt >= Self.minInterval
+            let interval = s.identityDirty ? Self.minInterval : Self.stableProbeInterval
+            return !s.inFlight && time - s.lastCaptureAt >= interval
         }
     }
 
@@ -234,6 +245,7 @@ final class BubbleVisibilityProbe: Sendable {
                 s.generation += 1
                 s.cached.removeAll()
                 s.successfullyObservedWids.removeAll()
+                s.identityDirty = true
             }
             let identityChanged = candidatesChanged && !candidates.isEmpty
             s.knownWids = nextWids
@@ -267,19 +279,21 @@ final class BubbleVisibilityProbe: Sendable {
                 return (0, [], [:], false, identityChanged)
             }
             let elapsed = time - s.lastCaptureAt
-            guard elapsed >= Self.minInterval else {
-                s.pendingRetryAt = s.lastCaptureAt + Self.minInterval
+            let interval = s.identityDirty ? Self.minInterval : Self.stableProbeInterval
+            guard elapsed >= interval else {
+                s.pendingRetryAt = s.lastCaptureAt + interval
                 return (0, [], [:], false, identityChanged)
             }
             s.inFlight = true
             s.lastCaptureAt = time
+            s.identityDirty = false
             return (s.generation, s.successfullyObservedWids, s.knownCandidates, true, identityChanged)
         }
         // identity telemetry 必须在 capture gate 之前：候选非空且 known identity 变化时，
         // 即使 capture 未 due 或 inFlight（shouldStart=false），H4b 的 identity 抖动也不能漏计。
         if identityChanged { evidence?.recordIdentityChange() }
         guard shouldStart else { return }
-        let cap = capturer
+        let makeCapturer = self.makeCapturer
         let notify = onVisibilityChange
         // Task.detached：不捕获 self（仅捕获 Sendable 值 lock/cap/gen/observed/candidates/identity）→ 0 #SendableClosureCaptures warning。
         // 像素计算（cap → captureStats → computeAlphaStats）在后台线程执行。
@@ -287,6 +301,7 @@ final class BubbleVisibilityProbe: Sendable {
         // 计数延迟到 completion 的 generation+identity 接受校验之后：
         // stale/过期 in-flight 结果不写 cache，也绝不进入真实统计。
         Task.detached { [lock, evidence] in
+            let cap = await makeCapturer()
             var r: [CGWindowID: BubbleObservation] = [:]
             var observedWids = Set<CGWindowID>()
             var evidencePairs: [(RuntimeCaptureOutcomeKind, BubbleVisibility)] = []
@@ -372,14 +387,19 @@ final class BubbleVisibilityProbe: Sendable {
             s.knownCandidates.removeAll()
             s.successfullyObservedWids.removeAll()
             s.pendingRetryAt = nil
+            s.identityDirty = true
         }
     }
 
     // MARK: - 默认捕获器（macOS 14+ ScreenCaptureKit，macOS 13/失败 → unavailable 保守 visible）
 
-    private static let defaultCapturer: BubbleCapturer = { candidate in
-        guard #available(macOS 14.0, *) else { return .unavailable }
-        return await captureStats(candidate)
+    private static let defaultMakeCapturer: BubbleCapturerFactory = {
+        guard #available(macOS 14.0, *) else { return { _ in .unavailable } }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: false) else {
+            return { _ in .unavailable }
+        }
+        return { candidate in await captureStats(candidate, content: content) }
     }
 
     // MARK: - ScreenCaptureKit 捕获（static，后台执行）
@@ -416,13 +436,9 @@ final class BubbleVisibilityProbe: Sendable {
     }
 
     @available(macOS 14.0, *)
-    private static func captureStats(_ candidate: WinCandidate) async -> BubbleCaptureOutcome {
-        let content: SCShareableContent
-        do {
-            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        } catch {
-            return .unavailable
-        }
+    private static func captureStats(
+        _ candidate: WinCandidate, content: SCShareableContent
+    ) async -> BubbleCaptureOutcome {
         guard let win = content.windows.first(where: { $0.windowID == candidate.wid }) else {
             return .targetMissing
         }
