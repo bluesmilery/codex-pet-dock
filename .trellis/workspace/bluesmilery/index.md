@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
-- **Last Active**: 2026-08-21
+- **Total Sessions**: 9
+- **Last Active**: 2026-08-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~226 | Active |
+| `journal-1.md` | ~247 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-08-26 | perf-startup-idle-cpu L2 delivery | `8dc8f48ed67fdd391964b34178c47111417c625d` | `codex/perf-startup-idle-cpu` |
 | 8 | 2026-08-21 | 完成底座统计与详情卡视觉优化 | `bc3c52f`, `f547229`, `ff098a4`, `22fad6d`, `835588f`, `f81d27e`, `66750f4`, `9556ba0`, `2db5466` | `dev` |
 | 7 | 2026-08-20 | 调整子 Agent 模型选择规则 | `cd38b03` | `dev` |
 | 6 | 2026-08-20 | 恢复 Trellis 官方 Git 管理策略 | `09991023f5e75e873f6c7957834f99145c9b72e3`, `566c1921a34f1e021a989f55786034bec29755b1`, `d82f6b28e149348fef56a05963390d9e7c11dd1c`, `3fa834980db46cb00c20d0dc8182234cb6aadfff` | `dev` |

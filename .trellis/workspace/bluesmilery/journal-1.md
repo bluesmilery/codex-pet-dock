@@ -224,3 +224,24 @@ Hardened Trellis path/runtime boundaries, private diagnostics and logs, child-pr
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: perf-startup-idle-cpu L2 delivery
+
+**Date**: 2026-08-26
+**Task**: perf-startup-idle-cpu L2 delivery
+**Branch**: `codex/perf-startup-idle-cpu`
+
+### Summary
+
+Token v3 tail-incremental parsing (207-entry migration verified), bubble 1s stable heartbeat + shared SCShareableContent, 5s first-refresh delay. R1 NOT APPROVED (P0 evidence/P1 short-read+docs/P2 tests) -> fixed -> R2 APPROVED P0P1P2=0. Runtime QA: pet-visible stationary CPU 0.0% (was 20-30%), 5-min incremental refresh no spike, TCC carried. Candidate 2026-08-26-004500-perf-startup-idle-cpu-8dc8f48 left running for user acceptance. Feature parked at feature/perf-startup-idle-cpu.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8dc8f48ed67fdd391964b34178c47111417c625d` | (see git log) |
+
+### Status
+
+[OK] **Completed**
