@@ -71,6 +71,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - 最小手术：每一行改动可追溯到任务要求。
 - 先写测试（纯函数 / fixture），再实现，最后真机验证。
 - Git 身份：`author` / `committer` 使用公开身份 `bluesmilery <19263500+bluesmilery@users.noreply.github.com>`；commit body **不带 Co-Authored-By**。
+- Commit message（subject 与 body）一律使用英文；中文表述只允许出现在代码注释、文档与任务工件中。
 
 ## 4. 质量门禁
 
