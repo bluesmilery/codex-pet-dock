@@ -15,12 +15,12 @@
   "branch": "codex/perf-startup-idle-cpu",
   "base_branch": "dev",
   "worktree_path": null,
-  "commit": "8dc8f48ed67fdd391964b34178c47111417c625d",
+  "commit": "1a8432311aba77d1729faa1f1a9a909587c7bc55",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Review round-2 APPROVED (P0/P1/P2=0); runtime QA: launch OK, stable-signed, TCC carried, pet-visible stationary CPU 0.0%, v2->v3 migration 207/207, 5-min incremental refresh no CPU spike; candidate archived 2026-08-26-004500-perf-startup-idle-cpu-8dc8f48 and left running for user morning acceptance",
+  "notes": "R5 final review APPROVED. Stable backoff: first 1s at 0.1s then 0.2s floor (+0.1s worst pickup latency, user-approved). Drag-freeze P0 fixed via 0.25s moving watchdog (baseline defect f62bfd9). Stationary CPU 28%->17.6% measured; per-tick cost now dominated by full CGWindowList parse (~35ms/tick), candidate for future enum-slimming. Candidate 2026-08-26-112600-perf-stable-backoff-1a84323 running for user QA.",
   "meta": {}
 }
