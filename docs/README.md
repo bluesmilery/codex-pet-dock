@@ -12,6 +12,7 @@
 | [数据层架构](architecture/data-layer.md) | architecture | `Sources/PetDock/Data/`、数据层 fixture | 数据字段、读取边界、并发、退避或数据验证变化 |
 | [底座气泡避让](architecture/dock-obstacle-avoidance.md) | architecture | `Geometry.swift`、`PetTracker.swift`、`BubbleVisibility.swift` 与 UI 测试 | 障碍分类、避让几何、捕获调度或真机边界变化 |
 | [Trellis 开发接入](development/trellis.md) | development | Trellis 配置、项目 `AGENTS.md` 与工作流 | 初始化方式、目录职责、文档门禁或开发流程变化 |
+| [发布上线流程](development/release.md) | development | v0.1.0–v0.4.0 发布实践与 pre-push / Release 惯例 | 合入门禁、发布步骤、tag/Release 惯例或推送通道变化 |
 | [dev 候选验收](verification/dev-candidate.md) | verification | 构建、测试、Review/QA 记录与真机 QA 证据 | 验收门禁、测试口径、验证状态或发布边界变化 |
 
 ## 目录职责
