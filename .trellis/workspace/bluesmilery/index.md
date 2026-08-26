@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-08-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~289 | Active |
+| `journal-1.md` | ~310 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-08-26 | SC onscreen-only probe list R9-R10 | `e808b52a27c6a778b418a95216b520ec425cab70` | `codex/perf-startup-idle-cpu` |
 | 11 | 2026-08-26 | onscreen enumeration + cache cap rounds R6-R8 | `3eee15895f98174c34459c2df77e954f75da9444` | `codex/perf-startup-idle-cpu` |
 | 10 | 2026-08-26 | drag-freeze fix + stable backoff rounds | `1a8432311aba77d1729faa1f1a9a909587c7bc55` | `codex/perf-startup-idle-cpu` |
 | 9 | 2026-08-26 | perf-startup-idle-cpu L2 delivery | `8dc8f48ed67fdd391964b34178c47111417c625d` | `codex/perf-startup-idle-cpu` |

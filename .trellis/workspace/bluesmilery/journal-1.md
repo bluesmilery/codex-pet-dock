@@ -287,3 +287,24 @@ User rejected 0.2s backoff latency; reverted to 0.1s and slimmed enumeration to 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: SC onscreen-only probe list R9-R10
+
+**Date**: 2026-08-26
+**Task**: SC onscreen-only probe list R9-R10
+**Branch**: `codex/perf-startup-idle-cpu`
+
+### Summary
+
+Research round sampled remaining steady CPU: SCShareableContent full-window list (610 windows, 117ms/call) spent 6.2% building SCWindow objects for windows that can never be probe candidates (same-owner rule + upstream onscreenOnly). Switched to onScreenWindowsOnly (57 windows, 29.5ms); sample share dropped to 1.0%, steady CPU 16-18% -> ~15%. Remaining cost is captureImage pixels at the 1Hz heartbeat floor. r10 APPROVED; feature parked at e808b52.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e808b52a27c6a778b418a95216b520ec425cab70` | (see git log) |
+
+### Status
+
+[OK] **Completed**
