@@ -109,7 +109,7 @@ make clean-logs   # 清理 Application Support/PetDock 私有运行 / 诊断日�
 
 **预览安装**（非一键可信安装）：
 
-1. 下载 `CodexPetDock-0.3.0-macOS-arm64.zip` 并解压。
+1. 下载 `CodexPetDock-0.4.0-macOS-arm64.zip` 并解压。
 2. 将 `PetDock.app` 移至 `/Applications`（或任意固定位置）。
 3. 因应用为本机自签证书签名（无 Developer ID、未公证），macOS Gatekeeper 可能拦截首次启动。前往**系统设置 › 隐私与安全性**，点击**仍要打开**（或在 Gatekeeper 对话框中选"打开"）。详见 [Apple 官方指南](https://support.apple.com/guide/mac-help/mh40616/mac)。
 4. 首次启动后，授予**屏幕录制**权限（跨应用窗口枚举所需），然后重启应用。
