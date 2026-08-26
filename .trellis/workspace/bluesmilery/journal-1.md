@@ -350,3 +350,24 @@ User identified that follow-up scrub commits leave leaks in ancestor trees (28 c
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: English-only commit messages: rule + full-history rewrite
+
+**Date**: 2026-08-26
+**Task**: English-only commit messages: rule + full-history rewrite
+**Branch**: `dev`
+
+### Summary
+
+User set a new rule: commit messages must be English-only, and asked history to comply. Scanned all 212 commits on main: subjects were already English but 41 messages (v0.1.0-v0.3.0 era) carried Chinese subjects/bodies. Translated all 41 via a verified exact-match mapping (41/41 hit before rewrite), rewrote with filter-branch --msg-filter on a temp branch: 212 commits checked zero CJK, tree diff empty vs old chain, merges preserved 5/5. Added the English-message rule to AGENTS.md, force-pushed (force-with-lease), repointed all four tags via GitHub API with tree+subject-verified mapping, re-published releases (tag recreation flips drafts), cleaned backups per user preference.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e6f5e80401f1115b69105447f41f53d23a36a5b6` | (see git log) |
+
+### Status
+
+[OK] **Completed**
