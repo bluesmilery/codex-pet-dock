@@ -184,6 +184,54 @@ work (headless suites cannot claim it).
 - 尺寸/耗时数字（1,345,292 bytes、28s、~10s/10s 窗口、207 文件/613MB）来自主管
   2026-08-26 QA 简报；本修复轮未重采样真机 CPU（headless 无法覆盖，QA 复测项）。
 
+## R9 SC 枚举 onScreenOnly 瘦身（当前轮）
+
+### R9 研究数据（主管实测，实现轮仅复核代码链）
+
+- 稳态 sample：`SCShareableContent.excludingDesktopWindows(false,
+  onScreenWindowsOnly: false)` 每轮探测（稳定身份 1Hz）拉全量 610 窗口清单，
+  XPC 回复解码 + 逐窗构建 SCWindow/SCRunningApplication 占稳态 CPU ~8-9%
+  （sample 246/3968）。
+- 实测对比：全量 117.4ms/call / 610 窗；`onScreenWindowsOnly: true`
+  29.5ms/call / 57 窗（约 4 倍便宜）。
+
+### R9 语义安全论证（代码链复核）
+
+- probe 候选唯一来源：`tick()` → `PetTracker.unionCandidates()`
+  （`infosProvider` 自 R6 起 `CGWindowListCopyWindowInfo([.optionOnScreenOnly],
+  ...)`）→ `selectPet` → `obstaclesNear`（前置 `c.isOnscreen` 且强制同
+  owner）→ `bubbleProbe.probe`。候选必然在 CG onscreen 集内且 owner 与宿主一致。
+- 主管实测：CG onscreen 59 窗中仅 1 个（Window Server/StatusIndicator，
+  owner="Window Server"）不在 SC onscreenOnly 清单；它在 SC 全量清单里也不存在，
+  且 owner 不可能是宿主（obstaclesNear 同 owner 前置），永远不会成为候选。
+- `main.swift` 的全量 `CGWindowListCopyWindowInfo([], ...)` 仅存在于
+  `--diagnose` 诊断模式（打印数量后退出），不进运行时候选链。
+- wid 查不到时行为不变：`captureStats` 返回 `.targetMissing` →
+  `BubbleVisibilityClassifier.classify`：同 generation 已成功观察 → hidden，
+  从未观察 → 保守 visible。
+
+### R9 改动
+
+- `Sources/PetDock/BubbleVisibility.swift` `defaultMakeCapturer`：
+  `onScreenWindowsOnly: false → true`；注释记录候选必在屏（上游 CG
+  onscreenOnly）、实测数字（117.4ms/610 窗 vs 29.5ms/57 窗、sample ~8-9%）与
+  wid 缺失时的既有保守语义。
+
+### R9 测试边界（诚实说明）
+
+- headless 无法构造 `SCShareableContent`（真实 SC 系统服务对象），真实枚举
+  行为不可测，不硬造 fake 宣称覆盖；`defaultMakeCapturer` 是系统集成点，
+  rg 全库确认无测试断言其行为（仅源码定义与 init 引用），无需同步测试。
+- wid 缺失路径由既有 T-bv 系列覆盖：T-bv5c（首次 targetMissing → 保守
+  visible）、T-bv39f2/f3/f5a（targetMissing 生命周期与回基础位）、T-bv42a/c
+  （targetMissing → callback → coalescer → 提前完整 tick → 实际 frame 复位）、
+  T-re5c（runtime evidence 计数）。本轮测试计数不变（UI 406 / Data 139 /
+  Shell 99）。
+- 真机 QA 依赖项（同候选 SHA）：（a）气泡在场时 1Hz 稳定心跳探测正常，runtime
+  evidence capture outcome 分布不劣化；（b）展开/收起/拖动/Composition Surface
+  避让不回归；（c）稳态 CPU 采样确认 ~8-9% 的 SC 清单成分消失；（d）TCC 权限流
+  不受影响（枚举失败仍走 unavailable 保守 visible）。
+
 ## Manual / device QA gaps
 
 These cannot be truthfully claimed by the headless suites and remain for user
@@ -212,3 +260,8 @@ To be filled only from the final work-tree commands:
   passed / 0 failed. Data: 139 passed / 0 failed（+2：T3h/T3i）。Shell: 99
   passed / 0 failed。全量日志 `FAIL` 计数 0；docs-check / test-docs /
   test-privacy 均随 `make test` 通过。
+- R9 round (this tree, onScreenOnly 瘦身): `swift build -c release` PASS
+  0 warnings；`make test PYTHON=<conda-base-python>` PASS：
+  UI 406 passed / 0 failed，Data 139 passed / 0 failed，Shell 99 passed /
+  0 failed，全量日志 `FAIL` 计数 0，docs-check / test-docs / test-privacy
+  均随 `make test` 通过；计数与 R6-QA 基线一致（本轮不新增测试）。

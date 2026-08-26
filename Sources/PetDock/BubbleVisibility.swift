@@ -393,10 +393,18 @@ final class BubbleVisibilityProbe: Sendable {
 
     // MARK: - 默认捕获器（macOS 14+ ScreenCaptureKit，macOS 13/失败 → unavailable 保守 visible）
 
+    /// 每轮探测（稳定身份 1Hz）只取 onscreen 清单（onScreenWindowsOnly: true）：
+    /// probe 候选全部来自上游 `PetTracker.infosProvider` 的 CGWindowList
+    /// `.optionOnScreenOnly` 枚举，必然在屏；实测全量 117.4ms/610 窗，
+    /// onscreenOnly 29.5ms/57 窗（约 4 倍），省去每轮全量 XPC 解码与逐窗构建
+    /// SCWindow/SCRunningApplication（sample 占稳态 CPU ~8-9%）。实测 CG onscreen
+    /// 与本清单的差异仅 Window Server/StatusIndicator，而 obstaclesNear 强制同
+    /// owner，它不可能成为候选；wid 查不到时走既有 targetMissing 语义
+    /// （已观察 → hidden，从未观察 → 保守 visible），不变。
     private static let defaultMakeCapturer: BubbleCapturerFactory = {
         guard #available(macOS 14.0, *) else { return { _ in .unavailable } }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: false) else {
+            false, onScreenWindowsOnly: true) else {
             return { _ in .unavailable }
         }
         return { candidate in await captureStats(candidate, content: content) }
