@@ -671,8 +671,8 @@ print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) faile
 // T-avo1/2/3 在 5fbe237 上 3 failed 已记录）。新语义（movementChanged 驱动分类）：宠物窗口
 // 实质移动 → 32ms movement 插值；静止时内容/障碍/锚目标变化 → 200ms ease-in-out
 // avoidance segment，动画期间由 DockPanel 自有 display link（macOS13/不可用 → 60Hz
-// repeating Timer fallback）以显示节拍渲染（stable follow tick 仅 0.1s cadence，只靠 tick
-// 采样每段仅 ~2 点呈台阶）；无屏/换屏/隐藏/越界等安全路径仍立即 snap。
+// repeating Timer fallback）以显示节拍渲染（stable follow tick 静止第 1 秒 0.1s、之后
+// 0.2s 封底，只靠 tick 采样每段仅 ~1-2 点呈台阶）；无屏/换屏/隐藏/越界等安全路径仍立即 snap。
 let avoBase = fail, avoPass = pass
 
 /// 可注入合成屏（NSScreen 是系统只读集合；headless 无 WindowServer 时 screens 为空）。
