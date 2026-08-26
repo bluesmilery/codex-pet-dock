@@ -15,12 +15,12 @@
   "branch": "codex/perf-startup-idle-cpu",
   "base_branch": "dev",
   "worktree_path": null,
-  "commit": "1a8432311aba77d1729faa1f1a9a909587c7bc55",
+  "commit": "3eee15895f98174c34459c2df77e954f75da9444",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "R5 final review APPROVED. Stable backoff: first 1s at 0.1s then 0.2s floor (+0.1s worst pickup latency, user-approved). Drag-freeze P0 fixed via 0.25s moving watchdog (baseline defect f62bfd9). Stationary CPU 28%->17.6% measured; per-tick cost now dominated by full CGWindowList parse (~35ms/tick), candidate for future enum-slimming. Candidate 2026-08-26-112600-perf-stable-backoff-1a84323 running for user QA.",
+  "notes": "R6-R8: onscreenOnly enumeration (8.6ms/602 -> 1.26ms/56 windows) with stable backoff reverted to original 0.1s after user feedback; R6-QA caught v3 cache 1.29MB exceeding 1MiB read cap (startup 100% CPU ~28s recurrence) -> 8MiB cap + persist guard (T3h/T3i). Final QA on 3eee158: launch ~13-15% incl first refresh, steady ~13% @ 10Hz pickup latency. Reviews r6/r7/r8 APPROVED. Candidate 2026-08-26-131500-perf-cache-cap-3eee158 running.",
   "meta": {}
 }
