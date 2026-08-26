@@ -34,7 +34,16 @@ git diff <merge-base>..dev | grep -nE '^\+.*(<绝对home路径前缀>|真实用�
 - 任务 evidence 文档是最常见泄漏点：本机解释器路径、测试命令行、绝对路径都会被带进来；发布前必须 `git grep '<home-user>' -- .trellis` 复查。
 - 发布 bundle 本身也要字节扫描：`grep -rIq '/Users/' build/candidates/<dir>/PetDock.app/` 必须无命中。
 
-## 4. 版本 bump
+## 4. 任务收尾提交（journal / 归档等 chore，必须在 bump 之前完成）
+
+**所有会产生新提交的收尾工作都在版本 bump 之前做完**：
+
+- journal 记录本次发布会话（add_session.py，内容写到脱敏/bump/归档为止；Release 发布本身是机械步骤，由 gh 输出与第 9 步终态验证留痕，journal 不必等它存在）。
+- 任务归档（task.py archive）及其他 .trellis chore。
+
+原因：tag 建立后任何新提交都会打破"四处同指"的对齐，而本仓库 tag 通道只走 GitHub API，事后补 chore 意味着再来一次 API 删建 tag 手术。chore 前置后，bump 成为最后一个内容提交，tag 从诞生起就指向最终状态。
+
+## 5. 版本 bump
 
 按语义化判断 minor / patch；性能优化、行为变化、缓存格式升级用 minor。bump 面清单：
 
@@ -44,7 +53,7 @@ git diff <merge-base>..dev | grep -nE '^\+.*(<绝对home路径前缀>|真实用�
 
 bump 形成独立提交（`chore(release): bump version to X.Y.Z`）。
 
-## 5. 构建与归档发布候选
+## 6. 构建与归档发布候选
 
 ```sh
 make app    # 稳定签名，无证书即失败（不回落 ad-hoc）
@@ -55,16 +64,16 @@ make app    # 稳定签名，无证书即失败（不回落 ad-hoc）
 - `codesign --verify --deep --verbose=2` 通过；`defaults read .../Info.plist CFBundleShortVersionString` 等于目标版本。
 - 在归档目录内打 zip：`zip -qr CodexPetDock-X.Y.Z-macOS-arm64.zip PetDock.app`，记录 SHA-256。
 
-## 6. 同步 refs
+## 7. 同步 refs
 
-发布基线对齐原则：**发布完成后本地 main、本地 dev、远程 main、tag 四处指向同一提交**（含发布后的 journal / 归档等 chore 提交，见第 8 步顺序）。
+发布基线对齐原则：**发布完成后本地 main、本地 dev、远程 main、tag 四处指向同一提交**（chore 已在第 4 步前置完成，bump 即最终提交）。
 
 推送注意（本仓库 pre-push hook 只允许 `git push origin main` 单 ref）：
 
 - **tag 推送 / 删除会被 hook 拦截**。远程 tag 操作一律走 GitHub API：`gh api -X POST repos/<owner>/<repo>/git/refs -f ref=refs/tags/vX.Y.Z -f sha=<sha>` 创建；`gh api -X DELETE repos/<owner>/<repo>/git/refs/tags/vX.Y.Z` 删除后重建实现移动。Release 元数据里的 `targetCommitish` 是创建时快照，tag 移动后不需要改它。
 - 不要尝试 `--force`（会被安全钩子拦截）或绕过钩子；API 路径就是常态通道。
 
-## 7. GitHub Release
+## 8. GitHub Release
 
 **惯例（v0.1.0–v0.4.0 确立）**：
 
@@ -86,15 +95,18 @@ gh release create vX.Y.Z <zip路径> --title 'vX.Y.Z' --prerelease \\
 2. `gh release download` 拉回资产比对 SHA-256 与本地一致。
 3. `git ls-remote origin` 核对远程 main 与 tag。
 
-## 8. 收尾
+## 9. 收尾（零新提交）
 
-1. journal 记录发布会话（`add_session.py`）；任务已归档的确认归档提交。
-2. 将 chore 提交（journal / 归档）推到远程 main，保持第 6 步的对齐原则：`git branch -f main dev && git push origin main`；tag 如需跟进，用第 6 步 API 路径重指。
+本步骤不产生任何新提交；对齐在第 7 步已天然成立。
+
+1. 核对四处引用一致：本地 main / 本地 dev / 远程 main / tag 指向同一 SHA（git rev-parse + git ls-remote）。
+2. `gh release view` 终态确认（draft=false / prerelease=true / 简约标题 / 资产在位）。
 3. 清理检查：worktree 无脏文件、无遗留子 agent / channel、运行实例与发布版本对齐（或明确告知用户差异）。
+4. 若此时发现必须修改的内容（含本文档），属于新会话工作：修复合入后再走第 7 步 API 路径重指 tag——这是补救通道，不是常规路径。
 
 ## 常见坑（实战记录）
 
 - pre-push hook 只放行 main 单 ref；tag 全走 GitHub API。
 - `gh release create` 不带 `--prerelease` 会停在草稿态；不带 `--title` 时标题取 tag 名。
 - evidence 文档里的本机路径是最高频泄漏点；第 3 步的 history 级扫描不能省。
-- merge 后的 journal / archive chore 会让 dev 领先发布 tag，属正常；按第 8 步收齐四处引用即可。
+- journal / 归档等 chore 必须在 bump 之前完成（第 4 步）；发布后再补 chore 就得走 API 删建 tag 的补救通道——v0.4.0 实际踩过这个坑。
