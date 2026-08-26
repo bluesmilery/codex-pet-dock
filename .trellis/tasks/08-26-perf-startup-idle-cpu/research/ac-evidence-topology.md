@@ -190,8 +190,8 @@ work (headless suites cannot claim it).
 
 - 稳态 sample：`SCShareableContent.excludingDesktopWindows(false,
   onScreenWindowsOnly: false)` 每轮探测（稳定身份 1Hz）拉全量 610 窗口清单，
-  XPC 回复解码 + 逐窗构建 SCWindow/SCRunningApplication 占稳态 CPU ~8-9%
-  （sample 246/3968）。
+  XPC 回复解码 + 逐窗构建 SCWindow/SCRunningApplication 占稳态 CPU 6.2%（sample 246/3968，
+  XPC 解码+SC 对象构建的合计采样口径；QA 稳态总采样 ~16% 其余来自 follow tick 与截屏本身）。
 - 实测对比：全量 117.4ms/call / 610 窗；`onScreenWindowsOnly: true`
   29.5ms/call / 57 窗（约 4 倍便宜）。
 
@@ -214,7 +214,7 @@ work (headless suites cannot claim it).
 
 - `Sources/PetDock/BubbleVisibility.swift` `defaultMakeCapturer`：
   `onScreenWindowsOnly: false → true`；注释记录候选必在屏（上游 CG
-  onscreenOnly）、实测数字（117.4ms/610 窗 vs 29.5ms/57 窗、sample ~8-9%）与
+  onscreenOnly）、实测数字（117.4ms/610 窗 vs 29.5ms/57 窗、sample 6.2%）与
   wid 缺失时的既有保守语义。
 
 ### R9 测试边界（诚实说明）
@@ -229,7 +229,7 @@ work (headless suites cannot claim it).
   Shell 99）。
 - 真机 QA 依赖项（同候选 SHA）：（a）气泡在场时 1Hz 稳定心跳探测正常，runtime
   evidence capture outcome 分布不劣化；（b）展开/收起/拖动/Composition Surface
-  避让不回归；（c）稳态 CPU 采样确认 ~8-9% 的 SC 清单成分消失；（d）TCC 权限流
+  避让不回归；（c）稳态 CPU 采样确认 ~6.2% 的 SC 清单成分消失；（d）TCC 权限流
   不受影响（枚举失败仍走 unavailable 保守 visible）。
 
 ## Manual / device QA gaps
