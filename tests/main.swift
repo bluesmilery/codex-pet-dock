@@ -2157,12 +2157,95 @@ if #available(macOS 14.0, *) {
           lifecycleLinks.count == 2 && lifecycleLinks[1].added
             && fallbackAfterScreenLoss.first?.invalidated == true,
           "links=\(lifecycleLinks.count) fallbackInvalidated=\(fallbackAfterScreenLoss.first?.invalidated ?? false)")
-    lifecycleScheduler.stop()
+lifecycleScheduler.stop()
 } else {
     check("T-sch3a macOS14 display link生命周期（当前系统跳过）", true)
     check("T-sch3b macOS14 display link生命周期（当前系统跳过）", true)
     check("T-sch3c macOS14 display link生命周期（当前系统跳过）", true)
 }
+
+// T-sch5: moving 态 display link 饿死回归（真实 NSPanel + 真实 CADisplayLink + 真实 runloop Timer）。
+// 生产冻结配置：moving + panel 可见 + window-bound display link 永久沉默 + 无兜底节拍源。
+// 不注入 fake：makeDisplayLink/canUseDisplayLink 走真实 DockPanel（生产 wiring）。
+// 显示服务器不驱动本进程 vsync 时（如本测试环境），恰好构成该冻结配置的确定性复现；
+// 能驱动 vsync 的环境中，(b) 的 orderOut 仍保证 link 静默 → 同样确定性复现。
+let guiDock = DockPanel()
+guiDock.showIfNeeded()
+var sch5State: FollowState = .moving
+var sch5Ticks = 0
+var sch5TickTimes: [TimeInterval] = []
+let sch5Now = { ProcessInfo.processInfo.systemUptime }
+let sch5Scheduler = FollowTickScheduler(
+    runTick: {
+        sch5Ticks += 1
+        sch5TickTimes.append(sch5Now())
+        return sch5State
+    },
+    makeDisplayLink: { target, selector in
+        guard #available(macOS 14.0, *) else { return nil }
+        return guiDock.makeDisplayLink(target: target, selector: selector)
+    },
+    canUseDisplayLink: { guiDock.isDisplayLinkEligible },
+    maximumFramesPerSecond: { guiDock.maximumFramesPerSecond }
+)
+sch5Scheduler.start()
+sch5Scheduler.requestWake()
+_ = waitPumpingMain { sch5Ticks >= 1 }
+
+// (a0) 首个 moving tick 后：panel 可见 → 生产 wiring 必须选择 window-bound display link。
+var sch5LinkExpected = false
+if #available(macOS 14.0, *) { sch5LinkExpected = true }
+check("T-sch5a0 moving可见panel选择display link",
+      sch5Scheduler.isDisplayLinkActive == sch5LinkExpected,
+      "isDisplayLinkActive=\(sch5Scheduler.isDisplayLinkActive)")
+
+// (a) moving 态可见 panel：follow tick 不得饿死（link 驱动，或 link 沉默时 watchdog 兜底）。
+let sch5BaseA = sch5Ticks
+_ = waitPumpingMain({ sch5Ticks >= sch5BaseA + 2 }, timeout: 1.0)
+check("T-sch5a moving可见panel节拍持续",
+      sch5Ticks >= sch5BaseA + 2,
+      "ticksDelta=\(sch5Ticks - sch5BaseA)")
+
+// (b) tick 间隙 panel 被 orderOut（模拟 placeBelow 越界隐藏等窗口生命周期事件）：
+// link 静默且 scheduler 无 reconfigure 机会 → 当前唯一节拍源消失。moving tick 仍必须继续。
+let sch5BaseB = sch5Ticks
+guiDock.hideIfNeeded()
+let sch5RecoveredHidden = waitPumpingMain({ sch5Ticks >= sch5BaseB + 2 }, timeout: 1.0)
+check("T-sch5b orderOut后moving tick不饿死",
+      sch5RecoveredHidden,
+      "ticksDelta=\(sch5Ticks - sch5BaseB)")
+check("T-sch5b2 饿死保护降级repeating Timer",
+      sch5Scheduler.isRepeatingTimerActive,
+      "isRepeatingTimerActive=\(sch5Scheduler.isRepeatingTimerActive)")
+
+// (c) panel 恢复显示：moving 节拍持续；转 stable 后恢复 0.1s one-shot cadence；
+// 再入 moving 重新选择节拍源（不因上一 episode 的降级 latch 永久锁死 Timer）。
+let sch5BaseC = sch5Ticks
+guiDock.showIfNeeded()
+_ = waitPumpingMain({ sch5Ticks >= sch5BaseC + 2 }, timeout: 1.0)
+check("T-sch5c panel恢复显示后moving节拍持续",
+      sch5Ticks >= sch5BaseC + 2,
+      "ticksDelta=\(sch5Ticks - sch5BaseC)")
+
+sch5State = .stable
+let sch5StableStart = sch5Ticks
+_ = waitPumpingMain({ sch5Ticks >= sch5StableStart + 3 }, timeout: 1.0)
+let sch5StableGap = sch5TickTimes.count >= 2
+    ? sch5TickTimes[sch5TickTimes.count - 1] - sch5TickTimes[sch5TickTimes.count - 2]
+    : 0
+check("T-sch5c2 stable恢复0.1s cadence",
+      sch5Ticks >= sch5StableStart + 3 && sch5StableGap >= 0.09 && sch5StableGap <= 0.5,
+      "ticksDelta=\(sch5Ticks - sch5StableStart) lastGap=\(String(format: "%.3f", sch5StableGap))")
+
+sch5State = .moving
+let sch5BaseD = sch5Ticks
+_ = waitPumpingMain({ sch5Ticks >= sch5BaseD + 2 }, timeout: 1.0)
+check("T-sch5c3 再入moving节拍恢复",
+      sch5Ticks >= sch5BaseD + 2,
+      "ticksDelta=\(sch5Ticks - sch5BaseD)")
+
+sch5Scheduler.stop()
+guiDock.hideIfNeeded()
 
 // T-sch4: stable scheduler 与生产 FollowLayoutPass/probe 必须共享同一可控时间线。
 // tick 起点与实际 probe 之间存在工作偏移时，due miss 只能等待剩余 probe cadence，

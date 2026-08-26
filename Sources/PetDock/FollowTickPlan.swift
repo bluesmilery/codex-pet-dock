@@ -118,6 +118,10 @@ final class FollowTickScheduler: NSObject {
     private var coalescer: FollowTickCoalescer!
     private var timer: FollowTickTimer?
     private var displayLink: FollowDisplayLink?
+    private var movingWatchdog: FollowTickTimer?
+    /// 本 moving episode 内 display link 已被 watchdog 判死：降级 repeating Timer 后
+    /// 不再重建 link，避免逐拍 create/invalidate churn；离开 moving（stable/hidden）复位。
+    private var movingLinkDegraded = false
     private var activeSource: ActiveSource = .none
     private var activeRepeatingFPS: Int?
     private var stopped = false
@@ -147,6 +151,10 @@ final class FollowTickScheduler: NSObject {
         return { gate.requestWake() }
     }
 
+    /// 测试观测钩子：当前节拍源类型（不参与调度决策）。
+    var isDisplayLinkActive: Bool { activeSource == .displayLink }
+    var isRepeatingTimerActive: Bool { activeSource == .repeatingTimer }
+
     func requestWake() { coalescer.requestWake() }
 
     func start() {
@@ -167,6 +175,12 @@ final class FollowTickScheduler: NSObject {
         return min(screenMaximum, 120)
     }
 
+    /// moving display link 饿死保护：健康 60Hz link 每 ~16.7ms 一拍并逐拍重布 watchdog，
+    /// 永不触发；超过该窗口无任何 tick（link 因窗口 orderOut / 屏参数变化 / 系统侧失效
+    /// 而静默死亡）则降级 repeating Timer。仅 moving + display link 期间存在，stable/hidden
+    /// 与静止路径零开销（保持空闲 0% CPU 成果）。
+    static let movingWatchdogInterval: TimeInterval = 0.25
+
     private func performTick() {
         precondition(Thread.isMainThread)
         guard !stopped else { return }
@@ -185,8 +199,10 @@ final class FollowTickScheduler: NSObject {
         case .moving:
             startMovingSourceIfNeeded()
         case .stable:
+            movingLinkDegraded = false
             scheduleStableTick(firstAnchor: tickStartedAt, retryAfter: stableRetryAfter)
         case .hidden:
+            movingLinkDegraded = false
             scheduleOneShot(after: Follower.hiddenInterval)
         }
     }
@@ -198,17 +214,25 @@ final class FollowTickScheduler: NSObject {
         } else {
             wantsDisplayLink = false
         }
-        if activeSource == .displayLink && wantsDisplayLink { return }
+        if activeSource == .displayLink && wantsDisplayLink {
+            armMovingWatchdog()
+            return
+        }
 
-        if #available(macOS 14.0, *), wantsDisplayLink,
+        if #available(macOS 14.0, *), wantsDisplayLink, !movingLinkDegraded,
            let link = makeDisplayLink(self, #selector(displayLinkDidFire(_:))) {
             invalidateSources()
             link.add(to: .main, forMode: .common)
             displayLink = link
             activeSource = .displayLink
+            armMovingWatchdog()
             return
         }
 
+        startRepeatingFallbackTimer()
+    }
+
+    private func startRepeatingFallbackTimer() {
         let fps = Self.fallbackFramesPerSecond(screenMaximum: maximumFramesPerSecond())
         if activeSource == .repeatingTimer, activeRepeatingFPS == fps { return }
         invalidateSources()
@@ -217,6 +241,23 @@ final class FollowTickScheduler: NSObject {
         }
         activeSource = .repeatingTimer
         activeRepeatingFPS = fps
+    }
+
+    private func armMovingWatchdog() {
+        movingWatchdog?.invalidate()
+        movingWatchdog = makeTimer(Self.movingWatchdogInterval, false) { [weak self] in
+            self?.movingWatchdogFired()
+        }
+    }
+
+    /// watchdog 到期仍无下一拍：display link 已静默死亡（panel 可见但系统不驱动回调，
+    /// 或窗口生命周期事件后失效）。降级 repeating Timer 保住 moving 节拍，
+    /// 避免唯一节拍源饿死（生产 P0：拖动宠物后底座完全不动）。
+    private func movingWatchdogFired() {
+        movingWatchdog = nil
+        guard !stopped, activeSource == .displayLink else { return }
+        movingLinkDegraded = true
+        startRepeatingFallbackTimer()
     }
 
     private func scheduleStableTick(firstAnchor: TimeInterval?, retryAfter: TimeInterval?) {
@@ -244,6 +285,8 @@ final class FollowTickScheduler: NSObject {
         timer = nil
         displayLink?.invalidate()
         displayLink = nil
+        movingWatchdog?.invalidate()
+        movingWatchdog = nil
         activeSource = .none
         activeRepeatingFPS = nil
     }
