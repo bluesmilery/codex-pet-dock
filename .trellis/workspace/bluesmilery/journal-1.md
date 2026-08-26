@@ -329,3 +329,24 @@ Dedicated merge session: feature/perf-startup-idle-cpu (16 commits) merged into 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 14: v0.4.0 history scrub: rewrite instead of follow-up commits
+
+**Date**: 2026-08-26
+**Task**: v0.4.0 history scrub: rewrite instead of follow-up commits
+**Branch**: `dev`
+
+### Summary
+
+User identified that follow-up scrub commits leave leaks in ancestor trees (28 commits on remote main contained local paths; net-diff scanning cannot catch them). Executed history rewrite per v0.2.0 precedent: backup tag + external bundle, filter-branch placeholder substitution on a7639db..main (28 commits), per-commit tree scan all clean, final-tree diff limited to placeholder lines (product code untouched, zip asset still valid), force-with-lease push, tag repointed via API (release re-published after tag recreation flipped it to draft), stale branches/worktree cleaned. Release doc rewritten: section 3 per-commit tree scanning, section 4 leak remediation = history rewrite never follow-up commits, seven-step procedure recorded.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0dc2df4c02fd520c8de53d9e6fc814397ab11ccf` | (see git log) |
+
+### Status
+
+[OK] **Completed**
