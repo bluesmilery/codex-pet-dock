@@ -90,8 +90,12 @@ enum PetTracker {
     // MARK: - 可注入的运行时源（测试替换；默认调系统 API）
 
     /// 全局窗口枚举源。默认调 `CGWindowListCopyWindowInfo`；测试可注入 mock + 计数。
+    /// 枚举选项用 `.optionOnScreenOnly`（R6 瘦身）：所有下游消费者都只消费
+    /// isOnscreen 窗口——selectPet 先 `filter(\.isOnscreen)`，obstaclesNear 前置
+    /// 要求 `c.isOnscreen`，气泡像素探测只吃 obstaclesNear 输出——offscreen 窗口
+    /// 全是白算。实测全量 `[]` 枚举 8.6ms/602 窗，onscreenOnly 1.26ms/56 窗（约 7 倍）。
     static var infosProvider: () -> [[String: Any]]? = {
-        CGWindowListCopyWindowInfo([], kCGNullWindowID) as? [[String: Any]]
+        CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
     }
     /// codex 主进程 PID 源。默认查 `NSRunningApplication`；测试可注入 mock + 计数。
     static var runningAppsProvider: () -> [Int32] = {
@@ -229,6 +233,8 @@ enum PetTracker {
     /// Electron 应用的窗口可能挂在 helper/renderer PID 上（非主 PID），故同时用 ownerName 兜底。
     /// **单次 `CGWindowListCopyWindowInfo` 枚举**：两通道共享 `infosProvider()` 结果，
     /// moving 态高频轮询时从每 tick 两次枚举降为一次。
+    /// `infosProvider` 默认 `.optionOnScreenOnly`：本函数的全部下游（selectPet /
+    /// obstaclesNear / 气泡探测）都只消费 isOnscreen 窗口，offscreen 枚举纯属白算。
     static func unionCandidates() -> [WinCandidate] {
         guard let infos = infosProvider() else { return [] }
         let byPID = enumerate(pids: codexPIDs(), from: infos)

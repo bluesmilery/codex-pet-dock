@@ -25,6 +25,11 @@
   docs), reroutes T-sch6c through the production `Follower.decide`
   material-change path, and syncs this evidence file. Conclusions below apply
   only to the tree frozen from this round.
+- r3 was frozen as `f66ba58`. R6 round (this work tree, on top of `f66ba58`,
+  not yet frozen): per the user's field feedback the 0.2s stable-backoff floor
+  is withdrawn (constant 0.1s again) and window enumeration switches to
+  `.optionOnScreenOnly`; see the R6 section below. Conclusions in the
+  stable-backoff section above are superseded by R6.
 
 ## Baseline and gates
 
@@ -74,7 +79,7 @@ read from this work tree. No conclusion depends on chat history.
   `T-sch5c3` — real `NSPanel` + real `CADisplayLink` + real runloop `Timer`;
   `orderOut` provides the deterministic silent-link reproduction.
 
-### 本轮 stable 渐进退避 AC 与证据（方案 B，用户已批准）
+### 本轮 stable 渐进退避 AC 与证据（方案 B，用户已批准；已被 R6 撤销）
 
 Contract: stationary <1s keeps the 0.1s interval (identical to the previous
 behavior, preserving "just stopped and moves again" sensitivity); stationary
@@ -102,6 +107,46 @@ enumeration drops from 10Hz to 5Hz (a 0.2s floor). With bubbles present the prob
 heartbeat itself is unchanged. Real-machine stationary CPU sampling remains QA
 work (headless suites cannot claim it).
 
+## R6 撤销 stable 退避 + onscreenOnly 枚举瘦身（当前轮）
+
+### R6 决策链（用户实测反馈驱动）
+
+- 用户实测：0.2s 退避封底的最坏起步检测延迟（静止 ≥1s 后开始拖动，底座最长
+  ~0.2s 才起跟）体验不可接受，要求回到 0.1s。
+- 主管实测定位正解：`PetTracker.infosProvider` 用 `[]` 选项枚举全部 602 窗口
+  （8.6ms），但 `selectPet` 内部 `filter(\.isOnscreen)`、`obstaclesNear` 前置
+  `c.isOnscreen`，气泡探测又只消费 obstaclesNear 输出——offscreen 窗口全是
+  白算；`.optionOnScreenOnly` 实测 1.26ms/56 窗口（约 7 倍便宜）。
+- 结论：枚举变便宜后 0.2s 退避不再必要，直接撤销，回到恒定
+  `Follower.stableInterval = 0.1s`；上一节的 S1–S4 契约整体作废。
+
+### R6 AC 与证据映射
+
+| AC | Trigger / disturbance | Production consumer / chain | Final owner / assertion | Evidence |
+| --- | --- | --- | --- | --- |
+| R6-A1 识别链不消费 offscreen | 全量形状 mock infos 混入 offscreen 宠物形窗口（kCGWindowIsOnscreen=false，经 infosProvider 注入） | `unionCandidates`（PID+ownerName 通道）→ `selectPet` → `filter(\.isOnscreen)` | offscreen 宠物形窗口不被选中（selected=nil）；该安全网在换选项前的基线运行即绿 | `T-enum5` |
+| R6-A2 避让链不消费 offscreen | offscreen 气泡形窗口（宠物正下方、几何合规）+ 同形状 onscreen 阳性对照 | `unionCandidates` → `selectPet` → `obstaclesNear`（`c.isOnscreen` 前置）→ `bubbleProbe.probe`（只吃 obstaclesNear 输出） | offscreen 气泡不进障碍集；onscreen 同形状被纳入（证明排除确由 isOnscreen 前置造成，非几何巧合） | `T-enum5b` |
+| R6-A3 onscreenOnly 形状解析 | 含 kCGWindowIsOnscreen=true 的全字段 dict | `enumerate(pids:from:)` → `parse` → `WinCandidate` | wid/ownerPID/ownerName/title/layer/alpha/isOnscreen/sharingState/bounds 全字段 round-trip 正确 | `T-enum6` |
+| R6-B1 stable cadence 恒 0.1s | 真实 runloop Timer 连续采样跨过静止 1s 界（旧退避切换点两侧） | `FollowTickScheduler.scheduleStableTick` → one-shot Timer → coalescer → tick | tick gaps 恒 [0.05, 0.15]，无 <1s/≥1s 分层；F24-F26（退避映射）已删除 | `T-sch6a` |
+| R6-B2 起步延迟回归护栏 | 静止 ≥1s 后注入宠物 bounds 扰动（模拟开始拖动，拖动期间逐拍持续位移） | 真实 `Follower.decide`（与 main.swift 同构的 anchor/changedAt wiring）→ `.moving` → scheduler repeating 源 | 扰动→首条 moving 拍 ≤0.15s 且 moving 拍回 60Hz fallback 节拍；stable 间隔再被拉长（如 0.2s 封底）时该断言红 | `T-sch6c` |
+| R6-B3 probe retry 仍取更早 | probe pendingRetryAt hint 0.05s 与 stable 恒 0.1s 共存 | `scheduleStableTick` 的 `min(deadline - now, retryAfter)` | one-shot 取更早的 0.05s（min 语义保留） | `T-sch6d` |
+
+### R6 涉及文件与 provenance
+
+- 生产：`PetTracker.swift`（infosProvider 选项 + 两处注释）、`Follower.swift`
+  （删除 stableBackoffThreshold / stableSettledInterval /
+  stableProbeInterval(forStationaryDuration:)）、`FollowTickPlan.swift`（删除
+  stableIntervalHint 参数与消费）、`main.swift`（删除 wiring）、`DockPanel.swift`
+  （仅注释回 0.1s 口径）。
+- 测试：`tests/main.swift` — T-enum5/5b/6 新增（安全网，基线即绿后才换生产
+  选项）；F24-F26 删除；T-sch6 系列重写（sch6b 退避断言删除，sch6a/c/d 改恒
+  0.1s 契约）；672 行注释同步。
+- 文档：双语 README、`docs/architecture/dock-obstacle-avoidance.md`、
+  `docs/verification/dev-candidate.md` 回恒 0.1s 口径并新增 onscreenOnly 说明。
+- Provenance：用户延迟反馈（0.2s 不可接受）与枚举实测数字（8.6ms/602 →
+  1.26ms/56）来自主管 2026-08-26 派发简报；语义安全网在换选项前的基线运行
+  （本 worktree，UI 406 passed / 0 failed）先确认全绿，之后才切换生产枚举选项。
+
 ## Manual / device QA gaps
 
 These cannot be truthfully claimed by the headless suites and remain for user
@@ -126,4 +171,6 @@ To be filled only from the final work-tree commands:
 
 - `swift build -c release`: PASS, 0 warnings.
 - `make test PYTHON=<conda-base-python>`: PASS.
-- UI: 407 passed / 0 failed. Data: 137 passed / 0 failed. Shell: 99 passed / 0 failed.
+- R6 round (this tree): UI 406 passed / 0 failed (F24-F26 删除 -3、T-enum5/5b/6
+  新增 +3、T-sch6b 删除 -1). Data: 137 passed / 0 failed. Shell: 99 passed / 0
+  failed. docs-check / test-docs / test-privacy 均随 `make test` 通过。

@@ -26,16 +26,6 @@ enum Follower {
     static let stableInterval: TimeInterval = 0.1       // 静止降频且 0.1s 内探测移动
     static let hiddenInterval: TimeInterval = 1.0       // 隐藏检测重现
     static let stationaryDuration: TimeInterval = 4.0 / 60.0
-    static let stableBackoffThreshold: TimeInterval = 1.0  // 静止满 1s 后进入退避封底
-    static let stableSettledInterval: TimeInterval = 0.2   // 退避封底间隔 5Hz（仍快于 hidden 检测）
-
-    /// stable 态渐进退避：静止时长 <1s 保持 0.1s 间隔（与历史行为一致，保住"刚停下
-    /// 又动"的检测灵敏度）；≥1s 后间隔降为 0.2s 封底（CGWindowList 全量枚举是静止
-    /// CPU 主源，久置静止无需 10Hz；最坏起步检测延迟 0.2s，恰达用户批准上限）。
-    /// duration 须与 decide 的 now 同源（单调时钟秒数）。
-    static func stableProbeInterval(forStationaryDuration duration: TimeInterval) -> TimeInterval {
-        duration < stableBackoffThreshold ? stableInterval : stableSettledInterval
-    }
 
     /// 纯函数：`now` 与 `lastMaterialChangeAt` 均为同一单调时钟的秒数。
     /// stable 以连续静止时长判定，不受 60/120Hz 或可变刷新 callback 次数影响。

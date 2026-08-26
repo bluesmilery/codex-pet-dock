@@ -112,7 +112,8 @@ let enBase = fail, enPass = pass
 
 // 构造 mock infos：主进程 PID=11111 的窗口 + helper PID=22222 但 ownerName 含 Codex 的窗口
 func infoDict(_ wid: UInt32, _ pid: Int32, _ owner: String, _ title: String,
-              _ layer: Int, _ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> [String: Any] {
+              _ layer: Int, _ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat,
+              onscreen: Bool = true) -> [String: Any] {
     return [
         (kCGWindowNumber as String): NSNumber(value: wid),
         (kCGWindowOwnerPID as String): NSNumber(value: pid),
@@ -120,7 +121,7 @@ func infoDict(_ wid: UInt32, _ pid: Int32, _ owner: String, _ title: String,
         (kCGWindowName as String): title,
         (kCGWindowLayer as String): NSNumber(value: layer),
         (kCGWindowAlpha as String): NSNumber(value: 1.0),
-        (kCGWindowIsOnscreen as String): true,
+        (kCGWindowIsOnscreen as String): onscreen,
         (kCGWindowBounds as String): ["X": x, "Y": y, "Width": w, "Height": h] as [String: Any],
     ]
 }
@@ -145,6 +146,65 @@ _ = PetTracker.enumerate(pids: [11111])
 _ = PetTracker.enumerateByOwnerName(["Codex"])
 // wrapper 各调一次 infosProvider（诊断模式路径，运行模式用 unionCandidates 共享）
 check("T-enum2 wrapper 各调 infosProvider(共 2 次)", infosCallCount == 2, "count=\(infosCallCount)")
+PetTracker.infosProvider = savedInfosProvider
+
+// T-enum5: onscreenOnly 枚举瘦身的语义安全网（R6 改动 A）。全量形状的 mock infos
+// 混入 offscreen 窗口（kCGWindowIsOnscreen=false，模拟 .optionOnScreenOnly 之前
+// CGWindowListCopyWindowInfo([]) 会返回的数据）：下游 selectPet 不得选中 offscreen
+// 宠物形窗口——证明换选项后（offscreen 窗口不再出现在数据里）识别语义不变。
+PetTracker.infosProvider = { [
+    infoDict(40, 11111, "ChatGPT", "ChatGPT", 0, 0, 0, 1728, 1050),
+    infoDict(41, 11111, "ChatGPT", "Codex Pet Mascot Effect", 2, 100, 100, 172, 179, onscreen: false),
+] }
+let enum5Union = PetTracker.unionCandidates()
+let enum5Sel = PetTracker.selectPet(candidates: enum5Union, lastWID: nil)
+check("T-enum5 selectPet不选中offscreen宠物形窗口",
+      enum5Union.contains { $0.wid == 41 } && enum5Sel.selected == nil,
+      "selected=\(String(describing: enum5Sel.selected?.wid)) reason=\(enum5Sel.reason)")
+
+// T-enum5b: 同一安全网的避让半边：offscreen 气泡形窗口（宠物正下方、几何完全合规）
+// 不得进入 obstaclesNear；同形状窗口 onscreen 时必须被纳入（阳性对照，证明排除
+// 确由 isOnscreen 前置造成，而非几何巧合）。
+func enum5bRun(bubbleOnscreen: Bool) -> (mascotWid: UInt32?, obstacleWids: [UInt32]) {
+    PetTracker.infosProvider = { [
+        infoDict(43, 11111, "ChatGPT", "Codex Pet Mascot Effect", 2, 100, 100, 172, 179),
+        infoDict(44, 11111, "ChatGPT", "Chat", 3, 100, 300, 172, 120, onscreen: bubbleOnscreen),
+    ] }
+    let union = PetTracker.unionCandidates()
+    let sel = PetTracker.selectPet(candidates: union, lastWID: nil)
+    guard let mascot = sel.selected else { return (nil, []) }
+    let obs = PetTracker.obstaclesNear(mascot: mascot, candidates: union)
+    return (mascot.wid, obs.map { $0.wid })
+}
+let enum5bOffscreen = enum5bRun(bubbleOnscreen: false)
+let enum5bOnscreen = enum5bRun(bubbleOnscreen: true)
+check("T-enum5b obstaclesNear不含offscreen气泡(阳性对照含onscreen同形状)",
+      enum5bOffscreen.mascotWid == 43 && enum5bOffscreen.obstacleWids.isEmpty
+        && enum5bOnscreen.mascotWid == 43 && enum5bOnscreen.obstacleWids == [44],
+      "offscreen=\(enum5bOffscreen) onscreen=\(enum5bOnscreen)")
+
+// T-enum6: WinCandidate 解析在 onscreenOnly 数据形状下字段正确
+// （kCGWindowIsOnscreen=true 映射 isOnscreen，全字段 round-trip）。
+let enum6Info: [String: Any] = [
+    (kCGWindowNumber as String): NSNumber(value: 50),
+    (kCGWindowOwnerPID as String): NSNumber(value: 11111),
+    (kCGWindowOwnerName as String): "ChatGPT",
+    (kCGWindowName as String): "Codex Pet Mascot Effect",
+    (kCGWindowLayer as String): NSNumber(value: 2),
+    (kCGWindowAlpha as String): NSNumber(value: 0.75),
+    (kCGWindowIsOnscreen as String): true,
+    (kCGWindowSharingState as String): NSNumber(value: 1),
+    (kCGWindowBounds as String): ["X": 12.5, "Y": 34.5, "Width": 172, "Height": 179] as [String: Any],
+]
+let enum6Parsed = PetTracker.enumerate(pids: [11111], from: [enum6Info])
+let e6 = enum6Parsed.first
+check("T-enum6 onscreenOnly形状解析字段正确",
+      enum6Parsed.count == 1 && e6?.wid == 50 && e6?.ownerPID == 11111
+        && e6?.ownerName == "ChatGPT" && e6?.title == "Codex Pet Mascot Effect"
+        && e6?.layer == 2 && e6?.alpha == 0.75 && e6?.isOnscreen == true
+        && e6?.sharingState == 1
+        && e6?.bounds == CGRect(x: 12.5, y: 34.5, width: 172, height: 179),
+      "parsed=\(String(describing: e6?.detailed()))")
 PetTracker.infosProvider = savedInfosProvider
 
 // T-enum3: codexPIDs 1s TTL 缓存（连续调用命中缓存，不重复查 NSRunningApplication）
@@ -348,19 +408,6 @@ check("F22 120Hz连续0.5px移动不误入stable",
       staysMovingDuringCumulativeSubthresholdMotion(times: cumulative120Times))
 check("F23 不规则cadence连续0.5px移动不误入stable",
       staysMovingDuringCumulativeSubthresholdMotion(times: cumulativeIrregularTimes))
-
-// F24-F26: stable 态渐进退避映射。静止 <1s 保持 0.1s（现状灵敏度不变），
-// ≥1s 降为 0.2s 封底（CGWindowList 全量枚举是静止 CPU 主源）；边界 1.0s 归入退避。
-check("F24 stable退避：静止0.9s(<1s)→保持0.1s",
-      Follower.stableProbeInterval(forStationaryDuration: 0.9) == 0.1,
-      "interval=\(Follower.stableProbeInterval(forStationaryDuration: 0.9))")
-check("F25 stable退避：静止1.5s(≥1s)→0.2s封底且仍快于hidden",
-      Follower.stableProbeInterval(forStationaryDuration: 1.5) == 0.2
-        && Follower.stableSettledInterval < Follower.hiddenInterval,
-      "interval=\(Follower.stableProbeInterval(forStationaryDuration: 1.5))")
-check("F26 stable退避边界：恰1.0s→0.2s",
-      Follower.stableProbeInterval(forStationaryDuration: 1.0) == 0.2,
-      "interval=\(Follower.stableProbeInterval(forStationaryDuration: 1.0))")
 
 print("\n[Follower] \(pass - fPass) passed, \(fail - fBase) failed")
 
@@ -671,8 +718,8 @@ print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) faile
 // T-avo1/2/3 在 5fbe237 上 3 failed 已记录）。新语义（movementChanged 驱动分类）：宠物窗口
 // 实质移动 → 32ms movement 插值；静止时内容/障碍/锚目标变化 → 200ms ease-in-out
 // avoidance segment，动画期间由 DockPanel 自有 display link（macOS13/不可用 → 60Hz
-// repeating Timer fallback）以显示节拍渲染（stable follow tick 静止第 1 秒 0.1s、之后
-// 0.2s 封底，只靠 tick 采样每段仅 ~1-2 点呈台阶）；无屏/换屏/隐藏/越界等安全路径仍立即 snap。
+// repeating Timer fallback）以显示节拍渲染（stable follow tick 恒 0.1s，只靠 tick 采样
+// 每段仅 ~1-2 点呈台阶）；无屏/换屏/隐藏/越界等安全路径仍立即 snap。
 let avoBase = fail, avoPass = pass
 
 /// 可注入合成屏（NSScreen 是系统只读集合；headless 无 WindowServer 时 screens 为空）。
@@ -2260,14 +2307,16 @@ check("T-sch5c3 再入moving节拍恢复",
 sch5Scheduler.stop()
 guiDock.hideIfNeeded()
 
-// T-sch6: stable 态渐进退避（真实 runloop Timer）。生产 wiring：interval hint 由
-// lastMaterialChangeAt 推静止时长 → Follower.stableProbeInterval。静止 <1s 保持 0.1s
-// （刚停下又动的灵敏度与现状一致）；静止 ≥1s 后 one-shot 间隔退避为 0.2s 封底；
-// 扰动后经生产 decide 链恢复 moving 节拍（T-sch6c）；probe hint 仍取更早者（T-sch6d）。
+// T-sch6: stable cadence 恒 0.1s（真实 runloop Timer，无退避）。R6 决策：用户实测
+// 0.2s 退避封底的起步延迟体验不可接受，且窗口枚举已改 .optionOnScreenOnly 瘦身
+// （8.6ms/602 窗 → 1.26ms/56 窗），静止 CPU 不再需要以起步延迟换功耗。
+// (a) 静止 <1s 与 ≥1s 两个区间的 tick gaps 恒 [0.05, 0.15]；(c) material-change
+// 恢复护栏穿过真实 Follower.decide（扰动→首条 moving 拍 ≤0.15s，防未来再引入
+// 退避）；(d) probe retry hint 仍取更早者（min 语义不破坏）。
 var sch6Ticks = 0
 var sch6TickTimes: [TimeInterval] = []
-var sch6StationarySince = ProcessInfo.processInfo.systemUptime
 let sch6Now = { ProcessInfo.processInfo.systemUptime }
+let sch6Start = sch6Now()
 let sch6Scheduler = FollowTickScheduler(
     runTick: {
         sch6Ticks += 1
@@ -2276,40 +2325,25 @@ let sch6Scheduler = FollowTickScheduler(
     },
     makeDisplayLink: { _, _ in nil },
     canUseDisplayLink: { false },
-    maximumFramesPerSecond: { 60 },
-    stableIntervalHint: {
-        Follower.stableProbeInterval(forStationaryDuration: sch6Now() - sch6StationarySince)
-    }
+    maximumFramesPerSecond: { 60 }
 )
 sch6Scheduler.start()
 sch6Scheduler.requestWake()
-_ = waitPumpingMain { sch6Ticks >= 4 }
-let sch6FastWindowEnd = sch6StationarySince + 1.0
-let sch6FastGaps = zip(sch6TickTimes.dropFirst(), sch6TickTimes)
-    .filter { $0.0 < sch6FastWindowEnd }
-    .map { $0.0 - $0.1 }
-check("T-sch6a 静止<1s保持0.1s节拍",
-      sch6FastGaps.count >= 3 && sch6FastGaps.allSatisfy { $0 >= 0.09 && $0 <= 0.25 },
-      "gaps=\(sch6FastGaps.map { String(format: "%.3f", $0) })")
-
-_ = waitPumpingMain({ sch6Now() - sch6StationarySince >= 1.15 }, timeout: 3.0)
-let sch6BackoffBase = sch6Ticks
-_ = waitPumpingMain({ sch6Ticks >= sch6BackoffBase + 3 }, timeout: 4.0)
-let sch6SlowTimes = sch6TickTimes.suffix(3)
-let sch6SlowGaps = zip(sch6SlowTimes.dropFirst(), sch6SlowTimes).map { $0.0 - $0.1 }
-check("T-sch6b 静止≥1s退避到0.2s封底",
-      sch6SlowGaps.count == 2 && sch6SlowGaps.allSatisfy { $0 >= 0.15 && $0 <= 0.3 },
-      "gaps=\(sch6SlowGaps.map { String(format: "%.3f", $0) })")
-
+// 采样窗口跨过静止 1s 界（旧退避的切换点），两侧 gaps 必须同处 [0.05, 0.15]。
+_ = waitPumpingMain({ sch6Now() - sch6Start >= 1.35 }, timeout: 4.0)
 sch6Scheduler.stop()
+let sch6Gaps = zip(sch6TickTimes.dropFirst(), sch6TickTimes).map { $0.0 - $0.1 }
+check("T-sch6a stable cadence恒0.1s(跨静止1s界gaps[0.05,0.15])",
+      sch6Gaps.count >= 8 && sch6Gaps.allSatisfy { $0 >= 0.05 && $0 <= 0.15 },
+      "gaps=\(sch6Gaps.map { String(format: "%.3f", $0) })")
 
 // T-sch6c: material-change 恢复必须穿过生产决策链（真实 Follower.decide + 真实
 // runloop Timer）。与 main.swift 同构：tick 内 decide 更新 stationaryAnchor/
-// lastMaterialChangeAt，interval hint 由 lastMaterialChangeAt 推当前静止时长。
-// 先静止 ≥1s 进入 0.2s 封底，再在一拍结束后注入宠物 bounds 扰动（模拟开始拖动，
-// 拖动期间逐拍持续位移）：下一拍最迟 = 封底间隔，decide 必须判 moving，scheduler
-// 立即切回 moving repeating 节拍。封底间隔改坏到 0.5s 时，扰动到首条 moving 拍
-// 的耗时同样退化为 ~0.5s → 本断言红（P0 回归护栏）。
+// lastMaterialChangeAt。先静止 ≥1s（当前恒 0.1s；若未来有人再加退避，此处恰为
+// 退避激活区），再在一拍结束后注入宠物 bounds 扰动（模拟开始拖动，拖动期间逐拍
+// 持续位移）：下一拍最迟 = stable 间隔 0.1s，decide 必须判 moving，scheduler 立即
+// 切回 moving repeating 节拍。stable 间隔再被拉长（如 0.2s 封底）时，扰动到首条
+// moving 拍的耗时随之超过 0.15s → 本断言红（起步延迟回归护栏）。
 var sch6cTicks = 0
 var sch6cPet = CGRect(x: 100, y: 100, width: 172, height: 179)
 var sch6cAnchor: CGRect?
@@ -2337,11 +2371,7 @@ let sch6cScheduler = FollowTickScheduler(
     },
     makeDisplayLink: { _, _ in nil },
     canUseDisplayLink: { false },
-    maximumFramesPerSecond: { 60 },
-    stableIntervalHint: {
-        guard let changedAt = sch6cChangedAt else { return nil }
-        return Follower.stableProbeInterval(forStationaryDuration: sch6cNow() - changedAt)
-    }
+    maximumFramesPerSecond: { 60 }
 )
 sch6cScheduler.start()
 sch6cScheduler.requestWake()
@@ -2357,8 +2387,8 @@ _ = waitPumpingMain({ sch6cFirstMovingAt != nil }, timeout: 2.0)
 let sch6cRecovery = (sch6cFirstMovingAt ?? .infinity) - (sch6cDisturbanceAt ?? 0)
 _ = waitPumpingMain({ sch6cMovingTimes.count >= 3 }, timeout: 1.0)
 let sch6cMovingGaps = zip(sch6cMovingTimes.dropFirst(), sch6cMovingTimes).map { $0.0 - $0.1 }
-check("T-sch6c 生产decide链:扰动后≤0.2s封底内恢复moving",
-      sch6cRecovery >= 0 && sch6cRecovery <= 0.3
+check("T-sch6c 生产decide链:扰动后≤0.15s内恢复moving",
+      sch6cRecovery >= 0 && sch6cRecovery <= 0.15
         && sch6cMovingTimes.count >= 3
         && sch6cMovingGaps.allSatisfy { $0 >= 0.005 && $0 <= 0.05 }
         && sch6cScheduler.isRepeatingTimerActive,
@@ -2367,7 +2397,7 @@ check("T-sch6c 生产decide链:扰动后≤0.2s封底内恢复moving",
         + "repeating=\(sch6cScheduler.isRepeatingTimerActive)")
 sch6cScheduler.stop()
 
-// T-sch6d: 退避间隔与 probe pendingRetryAt hint 仍取更早者（min 语义不破坏）。
+// T-sch6d: probe pendingRetryAt hint 与 stable 恒 0.1s 间隔仍取更早者（min 语义不破坏）。
 var sch6dTicks = 0
 var sch6dTimers: [TestFollowTickTimer] = []
 var sch6dClock: TimeInterval = 0
@@ -2381,7 +2411,6 @@ let sch6dScheduler = FollowTickScheduler(
     maximumFramesPerSecond: { 60 },
     monotonicNow: { sch6dClock },
     stableDelayHint: { 0.05 },
-    stableIntervalHint: { 0.2 },
     makeTimer: { interval, repeats, callback in
         let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
         sch6dTimers.append(timer)
@@ -2392,7 +2421,7 @@ sch6dScheduler.start()
 sch6dScheduler.requestWake()
 _ = waitPumpingMain { sch6dTicks == 1 }
 let sch6dStableTimer = sch6dTimers.last!
-check("T-sch6d probe retry hint仍优先于退避间隔",
+check("T-sch6d probe retry hint(0.05s)仍早于stable恒0.1s间隔",
       !sch6dStableTimer.repeats && abs(sch6dStableTimer.interval - 0.05) < 0.000_001,
       "interval=\(sch6dStableTimer.interval) repeats=\(sch6dStableTimer.repeats)")
 sch6dScheduler.stop()

@@ -321,8 +321,8 @@ final class DockPanel: NSObject {
         ) {
             evidence.recordDockDyBucket(bucket)
         }
-        // avoidance 动画渲染源生命周期：stable follow tick 静止第 1 秒 0.1s、之后 0.2s
-        // 封底，仅靠 tick 采样每段只有约 1-2 个采样点（台阶感）；在途 avoidance 段期间
+        // avoidance 动画渲染源生命周期：stable follow tick 恒 0.1s，仅靠 tick 采样每段
+        // 只有约 1-2 个采样点（台阶感）；在途 avoidance 段期间
         // 由 DockPanel 自有 display link（macOS 13 / link 不可用时 60Hz Timer fallback）渲染。
         // movement/snap/隐藏/换屏路径不保留该源：movement 段由 follow scheduler 的 moving
         // 渲染节拍接管，先 terminate 避免与 placeBelow 的每拍 setFrame 双写打架。
