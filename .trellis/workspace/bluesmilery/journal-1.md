@@ -308,3 +308,24 @@ Research round sampled remaining steady CPU: SCShareableContent full-window list
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: v0.4.0 release: merge, gates, privacy scrub, publish
+
+**Date**: 2026-08-26
+**Task**: v0.4.0 release: merge, gates, privacy scrub, publish
+**Branch**: `codex/perf-startup-idle-cpu`
+
+### Summary
+
+Dedicated merge session: feature/perf-startup-idle-cpu (16 commits) merged into dev with no-ff (single add/add conflict on task.json resolved to feature side); merged gates re-run green (406/139/99, 0 warnings); scrubbed 4 local interpreter paths from evidence docs; bumped 0.4.0; release candidate archived 2026-08-26-183000-release-v0.4.0-3db4476, stable-signed, bundle clean of local paths; main fast-forwarded and pushed via hook-compliant single-ref push; v0.4.0 tag created via GitHub API release; asset SHA-256 verified byte-identical (4b9c8a5d...).
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3db44765f268dda13f43b32db94453c081214c47` | (see git log) |
+
+### Status
+
+[OK] **Completed**
