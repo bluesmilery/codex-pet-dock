@@ -118,6 +118,10 @@ final class FollowTickScheduler: NSObject {
     private var coalescer: FollowTickCoalescer!
     private var timer: FollowTickTimer?
     private var displayLink: FollowDisplayLink?
+    private var movingWatchdog: FollowTickTimer?
+    /// 本 moving episode 内 display link 已被 watchdog 判死：降级 repeating Timer 后
+    /// 不再重建 link，避免逐拍 create/invalidate churn；离开 moving（stable/hidden）复位。
+    private var movingLinkDegraded = false
     private var activeSource: ActiveSource = .none
     private var activeRepeatingFPS: Int?
     private var stopped = false
@@ -147,6 +151,10 @@ final class FollowTickScheduler: NSObject {
         return { gate.requestWake() }
     }
 
+    /// 测试观测钩子：当前节拍源类型（不参与调度决策）。
+    var isDisplayLinkActive: Bool { activeSource == .displayLink }
+    var isRepeatingTimerActive: Bool { activeSource == .repeatingTimer }
+
     func requestWake() { coalescer.requestWake() }
 
     func start() {
@@ -167,6 +175,12 @@ final class FollowTickScheduler: NSObject {
         return min(screenMaximum, 120)
     }
 
+    /// moving display link 饿死保护：健康 60Hz link 每 ~16.7ms 一拍并逐拍重布 watchdog，
+    /// 永不触发；超过该窗口无任何 tick（link 因窗口 orderOut / 屏参数变化 / 系统侧失效
+    /// 而静默死亡）则降级 repeating Timer。仅 moving + display link 期间存在，stable/hidden
+    /// 与静止路径零开销（保持空闲 0% CPU 成果）。
+    static let movingWatchdogInterval: TimeInterval = 0.25
+
     private func performTick() {
         precondition(Thread.isMainThread)
         guard !stopped else { return }
@@ -185,8 +199,10 @@ final class FollowTickScheduler: NSObject {
         case .moving:
             startMovingSourceIfNeeded()
         case .stable:
+            movingLinkDegraded = false
             scheduleStableTick(firstAnchor: tickStartedAt, retryAfter: stableRetryAfter)
         case .hidden:
+            movingLinkDegraded = false
             scheduleOneShot(after: Follower.hiddenInterval)
         }
     }
@@ -198,17 +214,25 @@ final class FollowTickScheduler: NSObject {
         } else {
             wantsDisplayLink = false
         }
-        if activeSource == .displayLink && wantsDisplayLink { return }
+        if activeSource == .displayLink && wantsDisplayLink {
+            armMovingWatchdog()
+            return
+        }
 
-        if #available(macOS 14.0, *), wantsDisplayLink,
+        if #available(macOS 14.0, *), wantsDisplayLink, !movingLinkDegraded,
            let link = makeDisplayLink(self, #selector(displayLinkDidFire(_:))) {
             invalidateSources()
             link.add(to: .main, forMode: .common)
             displayLink = link
             activeSource = .displayLink
+            armMovingWatchdog()
             return
         }
 
+        startRepeatingFallbackTimer()
+    }
+
+    private func startRepeatingFallbackTimer() {
         let fps = Self.fallbackFramesPerSecond(screenMaximum: maximumFramesPerSecond())
         if activeSource == .repeatingTimer, activeRepeatingFPS == fps { return }
         invalidateSources()
@@ -219,9 +243,29 @@ final class FollowTickScheduler: NSObject {
         activeRepeatingFPS = fps
     }
 
+    private func armMovingWatchdog() {
+        movingWatchdog?.invalidate()
+        movingWatchdog = makeTimer(Self.movingWatchdogInterval, false) { [weak self] in
+            self?.movingWatchdogFired()
+        }
+    }
+
+    /// watchdog 到期仍无下一拍：display link 已静默死亡（panel 可见但系统不驱动回调，
+    /// 或窗口生命周期事件后失效）。降级 repeating Timer 保住 moving 节拍，
+    /// 避免唯一节拍源饿死（生产 P0：拖动宠物后底座完全不动）。
+    private func movingWatchdogFired() {
+        movingWatchdog = nil
+        guard !stopped, activeSource == .displayLink else { return }
+        movingLinkDegraded = true
+        startRepeatingFallbackTimer()
+    }
+
     private func scheduleStableTick(firstAnchor: TimeInterval?, retryAfter: TimeInterval?) {
         let now = monotonicNow()
-        let deadline = (firstAnchor ?? now) + Follower.stableInterval
+        // stable 探测间隔恒 0.1s（R6：0.2s 退避封底的起步延迟用户实测不可接受，已撤销；
+        // 枚举 onscreenOnly 瘦身后无需以延迟换功耗）。probe pendingRetryAt 取更早者。
+        let interval = Follower.stableInterval
+        let deadline = (firstAnchor ?? now) + interval
         let delay = min(deadline - now, retryAfter ?? .greatestFiniteMagnitude)
         guard delay > 0 else {
             invalidateSources()
@@ -244,6 +288,8 @@ final class FollowTickScheduler: NSObject {
         timer = nil
         displayLink?.invalidate()
         displayLink = nil
+        movingWatchdog?.invalidate()
+        movingWatchdog = nil
         activeSource = .none
         activeRepeatingFPS = nil
     }
@@ -372,6 +418,11 @@ struct FollowTickPlan: Equatable {
 
 /// 跟随 tick 编排纯决策。
 enum FollowTickPlanner {
+    /// 首个宠物可见上升沿后的数据刷新延迟，避免与启动/首帧竞争 CPU。
+    static func initialDataRefreshDelay(hasCompletedFirstRefresh: Bool) -> TimeInterval {
+        hasCompletedFirstRefresh ? 0 : 5
+    }
+
     /// 纯函数：根据快照决策编排动作。
     /// - 数据探测仅跟随宠物可见性（与用户是否隐藏 UI 解耦）。
     /// - UI 可见 = 宠物可见 && 用户可见；用户隐藏只关 UI，仍跟踪宠物。

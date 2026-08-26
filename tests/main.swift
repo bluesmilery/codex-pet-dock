@@ -112,7 +112,8 @@ let enBase = fail, enPass = pass
 
 // 构造 mock infos：主进程 PID=11111 的窗口 + helper PID=22222 但 ownerName 含 Codex 的窗口
 func infoDict(_ wid: UInt32, _ pid: Int32, _ owner: String, _ title: String,
-              _ layer: Int, _ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> [String: Any] {
+              _ layer: Int, _ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat,
+              onscreen: Bool = true) -> [String: Any] {
     return [
         (kCGWindowNumber as String): NSNumber(value: wid),
         (kCGWindowOwnerPID as String): NSNumber(value: pid),
@@ -120,7 +121,7 @@ func infoDict(_ wid: UInt32, _ pid: Int32, _ owner: String, _ title: String,
         (kCGWindowName as String): title,
         (kCGWindowLayer as String): NSNumber(value: layer),
         (kCGWindowAlpha as String): NSNumber(value: 1.0),
-        (kCGWindowIsOnscreen as String): true,
+        (kCGWindowIsOnscreen as String): onscreen,
         (kCGWindowBounds as String): ["X": x, "Y": y, "Width": w, "Height": h] as [String: Any],
     ]
 }
@@ -145,6 +146,65 @@ _ = PetTracker.enumerate(pids: [11111])
 _ = PetTracker.enumerateByOwnerName(["Codex"])
 // wrapper 各调一次 infosProvider（诊断模式路径，运行模式用 unionCandidates 共享）
 check("T-enum2 wrapper 各调 infosProvider(共 2 次)", infosCallCount == 2, "count=\(infosCallCount)")
+PetTracker.infosProvider = savedInfosProvider
+
+// T-enum5: onscreenOnly 枚举瘦身的语义安全网（R6 改动 A）。全量形状的 mock infos
+// 混入 offscreen 窗口（kCGWindowIsOnscreen=false，模拟 .optionOnScreenOnly 之前
+// CGWindowListCopyWindowInfo([]) 会返回的数据）：下游 selectPet 不得选中 offscreen
+// 宠物形窗口——证明换选项后（offscreen 窗口不再出现在数据里）识别语义不变。
+PetTracker.infosProvider = { [
+    infoDict(40, 11111, "ChatGPT", "ChatGPT", 0, 0, 0, 1728, 1050),
+    infoDict(41, 11111, "ChatGPT", "Codex Pet Mascot Effect", 2, 100, 100, 172, 179, onscreen: false),
+] }
+let enum5Union = PetTracker.unionCandidates()
+let enum5Sel = PetTracker.selectPet(candidates: enum5Union, lastWID: nil)
+check("T-enum5 selectPet不选中offscreen宠物形窗口",
+      enum5Union.contains { $0.wid == 41 } && enum5Sel.selected == nil,
+      "selected=\(String(describing: enum5Sel.selected?.wid)) reason=\(enum5Sel.reason)")
+
+// T-enum5b: 同一安全网的避让半边：offscreen 气泡形窗口（宠物正下方、几何完全合规）
+// 不得进入 obstaclesNear；同形状窗口 onscreen 时必须被纳入（阳性对照，证明排除
+// 确由 isOnscreen 前置造成，而非几何巧合）。
+func enum5bRun(bubbleOnscreen: Bool) -> (mascotWid: UInt32?, obstacleWids: [UInt32]) {
+    PetTracker.infosProvider = { [
+        infoDict(43, 11111, "ChatGPT", "Codex Pet Mascot Effect", 2, 100, 100, 172, 179),
+        infoDict(44, 11111, "ChatGPT", "Chat", 3, 100, 300, 172, 120, onscreen: bubbleOnscreen),
+    ] }
+    let union = PetTracker.unionCandidates()
+    let sel = PetTracker.selectPet(candidates: union, lastWID: nil)
+    guard let mascot = sel.selected else { return (nil, []) }
+    let obs = PetTracker.obstaclesNear(mascot: mascot, candidates: union)
+    return (mascot.wid, obs.map { $0.wid })
+}
+let enum5bOffscreen = enum5bRun(bubbleOnscreen: false)
+let enum5bOnscreen = enum5bRun(bubbleOnscreen: true)
+check("T-enum5b obstaclesNear不含offscreen气泡(阳性对照含onscreen同形状)",
+      enum5bOffscreen.mascotWid == 43 && enum5bOffscreen.obstacleWids.isEmpty
+        && enum5bOnscreen.mascotWid == 43 && enum5bOnscreen.obstacleWids == [44],
+      "offscreen=\(enum5bOffscreen) onscreen=\(enum5bOnscreen)")
+
+// T-enum6: WinCandidate 解析在 onscreenOnly 数据形状下字段正确
+// （kCGWindowIsOnscreen=true 映射 isOnscreen，全字段 round-trip）。
+let enum6Info: [String: Any] = [
+    (kCGWindowNumber as String): NSNumber(value: 50),
+    (kCGWindowOwnerPID as String): NSNumber(value: 11111),
+    (kCGWindowOwnerName as String): "ChatGPT",
+    (kCGWindowName as String): "Codex Pet Mascot Effect",
+    (kCGWindowLayer as String): NSNumber(value: 2),
+    (kCGWindowAlpha as String): NSNumber(value: 0.75),
+    (kCGWindowIsOnscreen as String): true,
+    (kCGWindowSharingState as String): NSNumber(value: 1),
+    (kCGWindowBounds as String): ["X": 12.5, "Y": 34.5, "Width": 172, "Height": 179] as [String: Any],
+]
+let enum6Parsed = PetTracker.enumerate(pids: [11111], from: [enum6Info])
+let e6 = enum6Parsed.first
+check("T-enum6 onscreenOnly形状解析字段正确",
+      enum6Parsed.count == 1 && e6?.wid == 50 && e6?.ownerPID == 11111
+        && e6?.ownerName == "ChatGPT" && e6?.title == "Codex Pet Mascot Effect"
+        && e6?.layer == 2 && e6?.alpha == 0.75 && e6?.isOnscreen == true
+        && e6?.sharingState == 1
+        && e6?.bounds == CGRect(x: 12.5, y: 34.5, width: 172, height: 179),
+      "parsed=\(String(describing: e6?.detailed()))")
 PetTracker.infosProvider = savedInfosProvider
 
 // T-enum3: codexPIDs 1s TTL 缓存（连续调用命中缓存，不重复查 NSRunningApplication）
@@ -658,8 +718,8 @@ print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) faile
 // T-avo1/2/3 在 5fbe237 上 3 failed 已记录）。新语义（movementChanged 驱动分类）：宠物窗口
 // 实质移动 → 32ms movement 插值；静止时内容/障碍/锚目标变化 → 200ms ease-in-out
 // avoidance segment，动画期间由 DockPanel 自有 display link（macOS13/不可用 → 60Hz
-// repeating Timer fallback）以显示节拍渲染（stable follow tick 仅 0.1s cadence，只靠 tick
-// 采样每段仅 ~2 点呈台阶）；无屏/换屏/隐藏/越界等安全路径仍立即 snap。
+// repeating Timer fallback）以显示节拍渲染（stable follow tick 恒 0.1s，只靠 tick 采样
+// 每段仅 ~1-2 点呈台阶）；无屏/换屏/隐藏/越界等安全路径仍立即 snap。
 let avoBase = fail, avoPass = pass
 
 /// 可注入合成屏（NSScreen 是系统只读集合；headless 无 WindowServer 时 screens 为空）。
@@ -1530,6 +1590,76 @@ check("T-bv11 reset→cached空(inFlight不变)", probe.lock.withLock { $0.cache
 probe.lock.withLock { $0.inFlight = false }
 check("T-bv12 wid不在当前候选集→hidden(当前帧失效)", probe.visibility(for: CGWindowID(99)) == .hidden, "")
 
+// T-bv13 (v6): 窗口身份稳定时使用 1s 心跳；身份变化立即恢复 0.1s 快速节奏。
+// factory/capture 计数证明同一轮候选共享一个 capturer，ScreenCaptureKit 清单枚举只发生一次。
+do {
+    let stableClock = OSAllocatedUnfairLock(initialState: TimeInterval(4_000))
+    let factoryCalls = OSAllocatedUnfairLock(initialState: 0)
+    let captureCalls = OSAllocatedUnfairLock(initialState: 0)
+    let makeCapturer: BubbleCapturerFactory = {
+        factoryCalls.withLock { $0 += 1 }
+        return { _ in
+            captureCalls.withLock { $0 += 1 }
+            return .stats(expandedS)
+        }
+    }
+    let stableBounds = CGRect(x: 0, y: 580, width: 345, height: 64)
+    let stableCandidate = mkw(101, layer: 3, stableBounds, title: "Codex Bubble")
+    let stableProbe = BubbleVisibilityProbe(
+        monotonicNow: { stableClock.withLock { $0 } }, canCapture: { true }, makeCapturer: makeCapturer)
+
+    stableProbe.probe(candidates: [stableCandidate])
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+    stableClock.withLock { $0 = 4_000.5 }
+    stableProbe.probe(candidates: [stableCandidate])
+    stableClock.withLock { $0 = 4_001 }
+    stableProbe.probe(candidates: [stableCandidate])
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+    check("T-bv13a 稳定身份0.5s不捕获、1.0s捕获",
+          factoryCalls.withLock { $0 } == 2 && captureCalls.withLock { $0 } == 2,
+          "factory=\(factoryCalls.withLock { $0 }) captures=\(captureCalls.withLock { $0 })")
+
+    stableClock.withLock { $0 = 4_001.05 }
+    let identityChangedCandidate = mkw(
+        101, layer: 3, stableBounds.offsetBy(dx: 2, dy: 0),
+        title: "Codex Bubble Changed", alpha: 0.99)
+    stableProbe.probe(candidates: [identityChangedCandidate])
+    let gatedCalls = (factoryCalls.withLock { $0 }, captureCalls.withLock { $0 })
+    stableClock.withLock { $0 = 4_001.101 }
+    stableProbe.probe(candidates: [identityChangedCandidate])
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+    check("T-bv13b 身份变化后0.1s内恢复快速捕获",
+          gatedCalls.0 == 2 && gatedCalls.1 == 2
+                && factoryCalls.withLock { $0 } == 3
+                && captureCalls.withLock { $0 } == 3,
+          "gated=\(gatedCalls.0)/\(gatedCalls.1) "
+              + "factory=\(factoryCalls.withLock { $0 }) captures=\(captureCalls.withLock { $0 })")
+}
+
+do {
+    let sharedTime: TimeInterval = 4_100
+    let sharedFactoryCalls = OSAllocatedUnfairLock(initialState: 0)
+    let sharedCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+    let sharedMakeCapturer: BubbleCapturerFactory = {
+        sharedFactoryCalls.withLock { $0 += 1 }
+        return { _ in
+            sharedCaptureCalls.withLock { $0 += 1 }
+            return .stats(expandedS)
+        }
+    }
+    let sharedProbe = BubbleVisibilityProbe(
+        monotonicNow: { sharedTime }, canCapture: { true }, makeCapturer: sharedMakeCapturer)
+    sharedProbe.probe(candidates: [
+        mkw(102, layer: 3, CGRect(x: 0, y: 580, width: 345, height: 64)),
+        mkw(103, layer: 3, CGRect(x: 20, y: 580, width: 345, height: 64))
+    ])
+    _ = waitPumpingMain { !sharedProbe.lock.withLock { $0.inFlight } }
+    check("T-bv13c 一轮N候选仅调用一次capturer工厂",
+          sharedFactoryCalls.withLock { $0 } == 1
+                && sharedCaptureCalls.withLock { $0 } == 2,
+          "factory=\(sharedFactoryCalls.withLock { $0 }) captures=\(sharedCaptureCalls.withLock { $0 })")
+}
+
 // 异步集成（fake capturer + RunLoop pump）：pending capture 完成 → cached 更新
 var fakeTime: TimeInterval = 2000
 let fakeHidden: BubbleCapturer = { _ in .stats(noiseS) }
@@ -2094,6 +2224,208 @@ if #available(macOS 14.0, *) {
     check("T-sch3c macOS14 display link生命周期（当前系统跳过）", true)
 }
 
+// T-sch5: moving 态 display link 饿死回归（真实 NSPanel + 真实 CADisplayLink + 真实 runloop Timer）。
+// 生产冻结配置：moving + panel 可见 + window-bound display link 永久沉默 + 无兜底节拍源。
+// 不注入 fake：makeDisplayLink/canUseDisplayLink 走真实 DockPanel（生产 wiring）。
+// 显示服务器不驱动本进程 vsync 时（如本测试环境），恰好构成该冻结配置的确定性复现；
+// 能驱动 vsync 的环境中，(b) 的 orderOut 仍保证 link 静默 → 同样确定性复现。
+let guiDock = DockPanel()
+guiDock.showIfNeeded()
+var sch5State: FollowState = .moving
+var sch5Ticks = 0
+var sch5TickTimes: [TimeInterval] = []
+let sch5Now = { ProcessInfo.processInfo.systemUptime }
+let sch5Scheduler = FollowTickScheduler(
+    runTick: {
+        sch5Ticks += 1
+        sch5TickTimes.append(sch5Now())
+        return sch5State
+    },
+    makeDisplayLink: { target, selector in
+        guard #available(macOS 14.0, *) else { return nil }
+        return guiDock.makeDisplayLink(target: target, selector: selector)
+    },
+    canUseDisplayLink: { guiDock.isDisplayLinkEligible },
+    maximumFramesPerSecond: { guiDock.maximumFramesPerSecond }
+)
+sch5Scheduler.start()
+sch5Scheduler.requestWake()
+_ = waitPumpingMain { sch5Ticks >= 1 }
+
+// (a0) 首个 moving tick 后：panel 可见 → 生产 wiring 必须选择 window-bound display link。
+var sch5LinkExpected = false
+if #available(macOS 14.0, *) { sch5LinkExpected = true }
+check("T-sch5a0 moving可见panel选择display link",
+      sch5Scheduler.isDisplayLinkActive == sch5LinkExpected,
+      "isDisplayLinkActive=\(sch5Scheduler.isDisplayLinkActive)")
+
+// (a) moving 态可见 panel：follow tick 不得饿死（link 驱动，或 link 沉默时 watchdog 兜底）。
+let sch5BaseA = sch5Ticks
+_ = waitPumpingMain({ sch5Ticks >= sch5BaseA + 2 }, timeout: 1.0)
+check("T-sch5a moving可见panel节拍持续",
+      sch5Ticks >= sch5BaseA + 2,
+      "ticksDelta=\(sch5Ticks - sch5BaseA)")
+
+// (b) tick 间隙 panel 被 orderOut（模拟 placeBelow 越界隐藏等窗口生命周期事件）：
+// link 静默且 scheduler 无 reconfigure 机会 → 当前唯一节拍源消失。moving tick 仍必须继续。
+let sch5BaseB = sch5Ticks
+guiDock.hideIfNeeded()
+let sch5RecoveredHidden = waitPumpingMain({ sch5Ticks >= sch5BaseB + 2 }, timeout: 1.0)
+check("T-sch5b orderOut后moving tick不饿死",
+      sch5RecoveredHidden,
+      "ticksDelta=\(sch5Ticks - sch5BaseB)")
+check("T-sch5b2 饿死保护降级repeating Timer",
+      sch5Scheduler.isRepeatingTimerActive,
+      "isRepeatingTimerActive=\(sch5Scheduler.isRepeatingTimerActive)")
+
+// (c) panel 恢复显示：moving 节拍持续；转 stable 后恢复 0.1s one-shot cadence；
+// 再入 moving 重新选择节拍源（不因上一 episode 的降级 latch 永久锁死 Timer）。
+let sch5BaseC = sch5Ticks
+guiDock.showIfNeeded()
+_ = waitPumpingMain({ sch5Ticks >= sch5BaseC + 2 }, timeout: 1.0)
+check("T-sch5c panel恢复显示后moving节拍持续",
+      sch5Ticks >= sch5BaseC + 2,
+      "ticksDelta=\(sch5Ticks - sch5BaseC)")
+
+sch5State = .stable
+let sch5StableStart = sch5Ticks
+_ = waitPumpingMain({ sch5Ticks >= sch5StableStart + 3 }, timeout: 1.0)
+let sch5StableGap = sch5TickTimes.count >= 2
+    ? sch5TickTimes[sch5TickTimes.count - 1] - sch5TickTimes[sch5TickTimes.count - 2]
+    : 0
+check("T-sch5c2 stable恢复0.1s cadence",
+      sch5Ticks >= sch5StableStart + 3 && sch5StableGap >= 0.09 && sch5StableGap <= 0.5,
+      "ticksDelta=\(sch5Ticks - sch5StableStart) lastGap=\(String(format: "%.3f", sch5StableGap))")
+
+sch5State = .moving
+let sch5BaseD = sch5Ticks
+_ = waitPumpingMain({ sch5Ticks >= sch5BaseD + 2 }, timeout: 1.0)
+check("T-sch5c3 再入moving节拍恢复",
+      sch5Ticks >= sch5BaseD + 2,
+      "ticksDelta=\(sch5Ticks - sch5BaseD)")
+
+sch5Scheduler.stop()
+guiDock.hideIfNeeded()
+
+// T-sch6: stable cadence 恒 0.1s（真实 runloop Timer，无退避）。R6 决策：用户实测
+// 0.2s 退避封底的起步延迟体验不可接受，且窗口枚举已改 .optionOnScreenOnly 瘦身
+// （8.6ms/602 窗 → 1.26ms/56 窗），静止 CPU 不再需要以起步延迟换功耗。
+// (a) 静止 <1s 与 ≥1s 两个区间的 tick gaps 恒 [0.05, 0.15]；(c) material-change
+// 恢复护栏穿过真实 Follower.decide（扰动→首条 moving 拍 ≤0.15s，防未来再引入
+// 退避）；(d) probe retry hint 仍取更早者（min 语义不破坏）。
+var sch6Ticks = 0
+var sch6TickTimes: [TimeInterval] = []
+let sch6Now = { ProcessInfo.processInfo.systemUptime }
+let sch6Start = sch6Now()
+let sch6Scheduler = FollowTickScheduler(
+    runTick: {
+        sch6Ticks += 1
+        sch6TickTimes.append(sch6Now())
+        return .stable
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 }
+)
+sch6Scheduler.start()
+sch6Scheduler.requestWake()
+// 采样窗口跨过静止 1s 界（旧退避的切换点），两侧 gaps 必须同处 [0.05, 0.15]。
+_ = waitPumpingMain({ sch6Now() - sch6Start >= 1.35 }, timeout: 4.0)
+sch6Scheduler.stop()
+let sch6Gaps = zip(sch6TickTimes.dropFirst(), sch6TickTimes).map { $0.0 - $0.1 }
+check("T-sch6a stable cadence恒0.1s(跨静止1s界gaps[0.05,0.15])",
+      sch6Gaps.count >= 8 && sch6Gaps.allSatisfy { $0 >= 0.05 && $0 <= 0.15 },
+      "gaps=\(sch6Gaps.map { String(format: "%.3f", $0) })")
+
+// T-sch6c: material-change 恢复必须穿过生产决策链（真实 Follower.decide + 真实
+// runloop Timer）。与 main.swift 同构：tick 内 decide 更新 stationaryAnchor/
+// lastMaterialChangeAt。先静止 ≥1s（当前恒 0.1s；若未来有人再加退避，此处恰为
+// 退避激活区），再在一拍结束后注入宠物 bounds 扰动（模拟开始拖动，拖动期间逐拍
+// 持续位移）：下一拍最迟 = stable 间隔 0.1s，decide 必须判 moving，scheduler 立即
+// 切回 moving repeating 节拍。stable 间隔再被拉长（如 0.2s 封底）时，扰动到首条
+// moving 拍的耗时随之超过 0.15s → 本断言红（起步延迟回归护栏）。
+var sch6cTicks = 0
+var sch6cPet = CGRect(x: 100, y: 100, width: 172, height: 179)
+var sch6cAnchor: CGRect?
+var sch6cChangedAt: TimeInterval?
+var sch6cDisturbanceAt: TimeInterval?
+var sch6cFirstMovingAt: TimeInterval?
+var sch6cMovingTimes: [TimeInterval] = []
+let sch6cNow = { ProcessInfo.processInfo.systemUptime }
+let sch6cScheduler = FollowTickScheduler(
+    runTick: {
+        sch6cTicks += 1
+        let t = sch6cNow()
+        if sch6cDisturbanceAt != nil {
+            sch6cPet = sch6cPet.offsetBy(dx: 2, dy: 0)   // 拖动中逐拍持续实质位移
+        }
+        let d = Follower.decide(pet: sch6cPet, stationaryAnchor: sch6cAnchor,
+                                lastMaterialChangeAt: sch6cChangedAt, now: t)
+        sch6cAnchor = d.stationaryAnchor
+        sch6cChangedAt = d.lastMaterialChangeAt
+        if sch6cDisturbanceAt != nil && d.state == .moving {
+            if sch6cFirstMovingAt == nil { sch6cFirstMovingAt = t }
+            sch6cMovingTimes.append(t)
+        }
+        return d.state
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 }
+)
+sch6cScheduler.start()
+sch6cScheduler.requestWake()
+_ = waitPumpingMain({
+    guard let changedAt = sch6cChangedAt else { return false }
+    return sch6cNow() - changedAt >= 1.15
+}, timeout: 3.0)
+let sch6cBase = sch6cTicks
+_ = waitPumpingMain { sch6cTicks >= sch6cBase + 1 }
+sch6cDisturbanceAt = sch6cNow()
+sch6cPet = sch6cPet.offsetBy(dx: 50, dy: 0)   // 远超容差的实质移动：模拟开始拖动
+_ = waitPumpingMain({ sch6cFirstMovingAt != nil }, timeout: 2.0)
+let sch6cRecovery = (sch6cFirstMovingAt ?? .infinity) - (sch6cDisturbanceAt ?? 0)
+_ = waitPumpingMain({ sch6cMovingTimes.count >= 3 }, timeout: 1.0)
+let sch6cMovingGaps = zip(sch6cMovingTimes.dropFirst(), sch6cMovingTimes).map { $0.0 - $0.1 }
+check("T-sch6c 生产decide链:扰动后≤0.15s内恢复moving",
+      sch6cRecovery >= 0 && sch6cRecovery <= 0.15
+        && sch6cMovingTimes.count >= 3
+        && sch6cMovingGaps.allSatisfy { $0 >= 0.005 && $0 <= 0.05 }
+        && sch6cScheduler.isRepeatingTimerActive,
+      "recovery=\(String(format: "%.3f", sch6cRecovery)) "
+        + "gaps=\(sch6cMovingGaps.map { String(format: "%.3f", $0) }) "
+        + "repeating=\(sch6cScheduler.isRepeatingTimerActive)")
+sch6cScheduler.stop()
+
+// T-sch6d: probe pendingRetryAt hint 与 stable 恒 0.1s 间隔仍取更早者（min 语义不破坏）。
+var sch6dTicks = 0
+var sch6dTimers: [TestFollowTickTimer] = []
+var sch6dClock: TimeInterval = 0
+let sch6dScheduler = FollowTickScheduler(
+    runTick: {
+        sch6dTicks += 1
+        return sch6dTicks == 1 ? .stable : .hidden
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { sch6dClock },
+    stableDelayHint: { 0.05 },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        sch6dTimers.append(timer)
+        return timer
+    }
+)
+sch6dScheduler.start()
+sch6dScheduler.requestWake()
+_ = waitPumpingMain { sch6dTicks == 1 }
+let sch6dStableTimer = sch6dTimers.last!
+check("T-sch6d probe retry hint(0.05s)仍早于stable恒0.1s间隔",
+      !sch6dStableTimer.repeats && abs(sch6dStableTimer.interval - 0.05) < 0.000_001,
+      "interval=\(sch6dStableTimer.interval) repeats=\(sch6dStableTimer.repeats)")
+sch6dScheduler.stop()
+
 // T-sch4: stable scheduler 与生产 FollowLayoutPass/probe 必须共享同一可控时间线。
 // tick 起点与实际 probe 之间存在工作偏移时，due miss 只能等待剩余 probe cadence，
 // 不能重新等待完整 stable interval；in-flight 仍保持 single-flight 且不新增 backlog。
@@ -2120,8 +2452,8 @@ func productionProbeCadence(
     var ticks = 0
     let captureCalls = OSAllocatedUnfairLock(initialState: 0)
     let releaseFirstCapture = OSAllocatedUnfairLock(initialState: false)
+    let bubbleAlpha = OSAllocatedUnfairLock(initialState: 1.0)
     let mascot = mkw(603, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
-    let bubble = mkw(601, layer: 3, bubbleForCollapse)
     let capturer: BubbleCapturer = { _ in
         let call = captureCalls.withLock { count -> Int in
             count += 1
@@ -2145,6 +2477,10 @@ func productionProbeCadence(
                 return value
             }
             probeAttempts.append(probeTime)
+            let bubble = bubbleAlpha.withLock { alpha -> WinCandidate in
+                alpha = alpha >= 1 ? 0.99 : alpha + 0.01
+                return mkw(601, layer: 3, bubbleForCollapse, alpha: alpha)
+            }
             _ = FollowLayoutPass.placeDock(
                 mascot: mascot,
                 candidates: [mascot, bubble],
@@ -2296,6 +2632,68 @@ check("T-sch4e reset/空候选/权限false均不残留retry hint",
       hintAfterReset == nil && hintAfterEmpty == nil && hintAfterPermissionLoss == nil,
       "reset=\(String(describing: hintAfterReset)) empty=\(String(describing: hintAfterEmpty)) "
         + "permission=\(String(describing: hintAfterPermissionLoss))")
+
+do {
+    let stableClock = OSAllocatedUnfairLock(initialState: TimeInterval(14_000))
+    let stableCaptureCalls = OSAllocatedUnfairLock(initialState: 0)
+    let stableCandidate = mkw(801, layer: 3, bubbleForCollapse, title: "Codex Bubble")
+    var stableTicks = 0
+    var pendingRetryInsideTick: TimeInterval?
+    var heartbeatPendingInsideTick: TimeInterval?
+    var stableTimers: [TestFollowTickTimer] = []
+    var stableProbe: BubbleVisibilityProbe!
+    let stableScheduler = FollowTickScheduler(
+        runTick: {
+            stableTicks += 1
+            stableProbe.probe(candidates: [stableCandidate])
+            pendingRetryInsideTick = stableProbe.lock.withLock { $0.pendingRetryAt }
+            if stableTicks == 2 {
+                heartbeatPendingInsideTick = pendingRetryInsideTick
+            }
+            return .stable
+        },
+        makeDisplayLink: { _, _ in nil },
+        canUseDisplayLink: { false },
+        maximumFramesPerSecond: { 60 },
+        monotonicNow: { stableClock.withLock { $0 } },
+        stableDelayHint: { stableProbe.takePendingRetryDelay() },
+        makeTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            stableTimers.append(timer)
+            return timer
+        }
+    )
+    stableProbe = BubbleVisibilityProbe(
+        monotonicNow: { stableClock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _ in
+            stableCaptureCalls.withLock { $0 += 1 }
+            return .stats(expandedS)
+        })
+    stableScheduler.start()
+    stableScheduler.requestWake()
+    _ = waitPumpingMain { stableTicks == 1 }
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+
+    stableClock.withLock { $0 = 14_000.95 }
+    let stableTickTimer = stableTimers.last { !$0.invalidated }!
+    stableTickTimer.fire()
+    _ = waitPumpingMain { stableTicks == 2 }
+    let retryTimer = stableTimers.last!
+
+    stableClock.withLock { $0 = 14_001 }
+    retryTimer.fire()
+    _ = waitPumpingMain { stableTicks == 3 }
+    _ = waitPumpingMain { !stableProbe.lock.withLock { $0.inFlight } }
+    check("T-sch4g 固定identity心跳hint→scheduler安排1.0s界one-shot",
+          heartbeatPendingInsideTick == 14_001
+                && !retryTimer.repeats
+                && abs(retryTimer.interval - 0.05) < 0.000_001
+                && stableCaptureCalls.withLock { $0 } == 2,
+          "pending=\(String(describing: heartbeatPendingInsideTick)) "
+              + "interval=\(retryTimer.interval) calls=\(stableCaptureCalls.withLock { $0 })")
+    stableScheduler.stop()
+}
 
 // T-sch4f (v5 source guard): cadence 生产文件不得引入墙上时间输入。
 // break-loop 4 结论：局部 wall fake 未被 scheduler/probe 消费，不能证明墙钟独立性；
@@ -3357,7 +3755,7 @@ check("T-bv41c RED 同WID身份变化使旧in-flight结果失效",
 // 真正身份变化（WID 集合或任一非 bounds 身份字段）维持现行 generation 递增 + 清空 + 保守
 // visible。写入校验保持现行严格语义：完成回调仍要求 generation 与 knownCandidates 完全
 // 一致，bounds 平移期间启动的旧捕获结果一律丢弃，绝不写入新几何；粘性只影响 cache 保留。
-// 权衡：拖动期间展开/收起的真实状态变化最迟在拖动结束后的下一次捕获收敛（≤0.2s），见
+    // 权衡：拖动期间展开/收起的真实状态变化最迟在拖动结束后的稳定心跳捕获（≤1s）收敛，见
 // docs/architecture/dock-obstacle-avoidance.md「拖动期间的粘性可见性」。
 var dragTime: TimeInterval = 16_500
 let dragOutcome = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(noiseS))
@@ -3415,7 +3813,7 @@ check("T-bv43c 拖动期间visible同样保持（粘性对称）",
 // 一次权威 targetMissing 仍判 hidden，与 T-bv39f 语义一致。
 _ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
 dragOutcome.withLock { $0 = .targetMissing }
-dragTime += 0.11
+dragTime += 1.01
 dragProbe.probe(candidates: [mkw(531, layer: 3, dragHiddenRun.finalBounds)])
 _ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
 check("T-bv43d 纯几何拖动保留成功观察资格→targetMissing权威hidden",
@@ -3424,7 +3822,7 @@ check("T-bv43d 纯几何拖动保留成功观察资格→targetMissing权威hidd
 // 拖动结束后正常捕获刷新：hidden→visible 状态变化必须写回并唤醒一次布局。
 dragOutcome.withLock { $0 = .stats(expandedS) }
 let wakesBeforeRefresh = dragWakes.withLock { $0 }
-dragTime += 0.11
+dragTime += 1.01
 dragProbe.probe(candidates: [mkw(531, layer: 3, dragHiddenRun.finalBounds)])
 _ = waitPumpingMain { !dragProbe.lock.withLock { $0.inFlight } }
 check("T-bv43f 拖动结束后捕获刷新hidden→visible并唤醒一次",
@@ -3451,7 +3849,7 @@ let inflightEntered1 = waitPumpingMain {
 inflightGate.release()
 _ = waitPumpingMain { !inflightProbe.lock.withLock { $0.inFlight } }
 let inflightPreHidden = inflightProbe.visibility(for: inflightStable.wid) == .hidden
-dragTime += 0.11
+dragTime += 1.01
 let inflightMoved = CGRect(x: dragStart.origin.x + 7, y: dragStart.origin.y + 5,
                            width: dragStart.width, height: dragStart.height)
 inflightProbe.probe(candidates: [mkw(537, layer: 3, inflightMoved)])
@@ -3621,7 +4019,7 @@ check("T-bv44b RED 拖动期间dock保持无障碍基础位(隐藏气泡不推�
         + "frame=\(bv44Dock.frame) expected=\(bv44BaseFrame())")
 
 bv44Outcome.withLock { $0 = .stats(expandedS) }
-bv44Time += 0.11
+bv44Time += 1.01
 bv44Scheduler.requestWake()
 let bv44RefreshTick = bv44Ticks.withLock { $0 } + 1
 _ = waitPumpingMain { bv44Ticks.withLock { $0 } == bv44RefreshTick }
@@ -3779,7 +4177,7 @@ check("T-bv45h 拖动平移期间contentBottom粘性保留→障碍矩形随窗�
       "obstaclesOK=\(bv45DragObstaclesOK)")
 
 // (h) wake 语义保持：只有可见性状态变化唤醒；同一 probe 的内容底变化（visible→visible）
-// 不额外唤醒，由既有 0.1s cadence 的下一次完整 tick 应用。
+    // 不额外唤醒，由既有稳定心跳的下一次完整 tick 应用。
 let bv45Wakes = OSAllocatedUnfairLock(initialState: 0)
 let bv45WakeStats = OSAllocatedUnfairLock<BubbleCaptureOutcome>(initialState: .stats(bv45BarStats))
 let bv45WakeProbe = BubbleVisibilityProbe(
@@ -3790,9 +4188,9 @@ bv45WakeProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
 _ = waitPumpingMain { !bv45WakeProbe.lock.withLock { $0.inFlight } }
 let bv45WakesAfterBar = bv45Wakes.withLock { $0 }
 let bv45BottomAfterBar = bv45WakeProbe.observation(for: CGWindowID(544)).contentBottom
-// 同一 probe：cache 已写入 visible/21，0.1s cadence 后二次捕获内容底 53（visible→visible）
+    // 同一 probe：cache 已写入 visible/21，稳定心跳后二次捕获内容底 53（visible→visible）
 bv45WakeStats.withLock { $0 = .stats(expandedS) }
-bv45Time += 0.11
+bv45Time += 1.01
 bv45WakeProbe.probe(candidates: [mkw(544, layer: 3, bv45Bubble)])
 _ = waitPumpingMain { !bv45WakeProbe.lock.withLock { $0.inFlight } }
 check("T-bv45i 同probe内容底21→53(visible→visible)不wake且观察更新",
@@ -4971,6 +5369,13 @@ check("P9a pv=T dv=T → showUI", FollowTickPlanner.decide(input: FollowTickInpu
 check("P9b pv=T dv=F → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: true, wasPetVisible: false, dockVisible: false)).hideUI)
 check("P9c pv=F dv=T → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: false, wasPetVisible: true, dockVisible: true)).hideUI)
 check("P9d pv=F dv=F → hideUI", FollowTickPlanner.decide(input: FollowTickInput(petVisible: false, wasPetVisible: true, dockVisible: false)).hideUI)
+
+check("P10a 首个petVisible上升沿后的数据刷新延迟5s",
+      FollowTickPlanner.initialDataRefreshDelay(hasCompletedFirstRefresh: false) == 5.0,
+      "delay=\(FollowTickPlanner.initialDataRefreshDelay(hasCompletedFirstRefresh: false))")
+check("P10b 首刷完成后resume恢复立即刷新",
+      FollowTickPlanner.initialDataRefreshDelay(hasCompletedFirstRefresh: true) == 0,
+      "delay=\(FollowTickPlanner.initialDataRefreshDelay(hasCompletedFirstRefresh: true))")
 
 print("\n[FollowTickPlan] \(pass - plPass) passed, \(fail - plBase) failed")
 

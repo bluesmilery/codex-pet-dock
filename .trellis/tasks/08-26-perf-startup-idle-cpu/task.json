@@ -15,12 +15,12 @@
   "branch": "codex/perf-startup-idle-cpu",
   "base_branch": "dev",
   "worktree_path": null,
-  "commit": "e808b52a27c6a778b418a95216b520ec425cab70",
+  "commit": "3eee15895f98174c34459c2df77e954f75da9444",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "R9-R10: SCShareableContent onScreenWindowsOnly per probe round (SC object-construction sample share 6.2%->1.0%), steady CPU ~15% (from 16-18%); remaining SC cost is captureImage pixels at 1Hz heartbeat floor. r10 Review APPROVED. Final overall journey: startup 100%/10+s -> ~13-15%, stationary 28% -> ~15% @0.1s pickup, drag-freeze fixed via watchdog. Candidate 2026-08-26-173500-perf-sc-onscreen running.",
+  "notes": "R6-R8: onscreenOnly enumeration (8.6ms/602 -> 1.26ms/56 windows) with stable backoff reverted to original 0.1s after user feedback; R6-QA caught v3 cache 1.29MB exceeding 1MiB read cap (startup 100% CPU ~28s recurrence) -> 8MiB cap + persist guard (T3h/T3i). Final QA on 3eee158: launch ~13-15% incl first refresh, steady ~13% @ 10Hz pickup latency. Reviews r6/r7/r8 APPROVED. Candidate 2026-08-26-131500-perf-cache-cap-3eee158 running.",
   "meta": {}
 }

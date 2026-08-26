@@ -13,35 +13,76 @@ protocol TokenLogReading {
     mutating func readPoints(from: Date, to: Date) throws -> TokenWindow
 }
 
+protocol TokenLogFileHandle {
+    func seek(toOffset offset: UInt64) throws
+    func read(upToCount count: Int) throws -> Data?
+    func close() throws
+}
+
+extension FileHandle: TokenLogFileHandle {}
+
 /// 解析 `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`。
 ///
 /// 合规边界：只提取每行**顶层 timestamp** 与 **payload.info.last_token_usage.total_tokens**
 /// （单次增量；已验证 Σ last_token_usage.total_tokens = 会话累计，跨会话求和不重复）。
 /// **绝不读取 / 记录 / 输出会话正文**；缓存也只持久化 timestamp + tokens。
 ///
-/// 增量缓存：按「版本化路径摘要 → {size, points}」缓存整文件解析结果。size 不变则复用，变化则重读全文件
-/// （rollout 文件均较小，<5MB）。缓存落盘以跨进程复用，绝不持久化原始路径。
+/// 增量缓存：按「路径摘要 → {size, parsedBytes, points}」缓存解析结果。size 未变直接复用；
+/// append-only 增长时从换行对齐的 parsedBytes 续读，收缩/v2 旧缓存回退全量。缓存落盘以跨进程
+/// 复用，绝不持久化原始路径。
 struct TokenUsageLogReader: TokenLogReading {
-    private static let maxCacheBytes: Int64 = 1_048_576
+    private static let parseChunkSize = 1 << 20
+    /// 磁盘缓存大小护栏（防损坏/防替换的保守上限，不是配额）。v3 缓存的合法增长有界：
+    /// points 只来自仍在扫描窗口内的会话文件，readPoints 开头的淘汰逻辑会把移出窗口的
+    /// 文件条目整体删除，稳态尺寸受窗口跨度约束。实测 207 文件/613MB 日志时缓存约
+    /// 1.3MB，重负载估算 3-4MB；旧上限 1MiB 会把完全合法的缓存整拒，导致每次启动
+    /// 全量重解析（QA P1：~28s 100% CPU）。取 8MiB：覆盖合法稳态余量，同时仍能拦截
+    /// 异常膨胀（损坏/被替换的 cache 文件不被整体读入内存）。
+    private static let maxCacheBytes: Int64 = 8_388_608
 
     let sessionsRoot: URL
     /// 增量缓存落盘位置（nil=仅进程内）。
     let cacheURL: URL?
+    private let openFileHandle: (URL) throws -> TokenLogFileHandle
 
     /// 进程内增量缓存（opaque key → {size, points}）。
     private var memCache: [String: CacheEntry]
 
     /// 仅供测试：累计发生实际文件解析（未命中缓存）的次数，用于验证增量缓存命中。
     private(set) var debugFilesParsed = 0
+    /// 仅供测试：累计从 parsedBytes 续读的文件轮次（不含全量解析）。
+    private(set) var debugIncrementalParses = 0
 
     private struct CacheEntry: Codable {
         let size: Int64
+        /// 恰好消费到最后一个完整换行后的字节偏移；v2 缓存无此字段时解码为 0。
+        let parsedBytes: Int64
         let points: [TokenUsagePoint]
+
+        init(size: Int64, parsedBytes: Int64, points: [TokenUsagePoint]) {
+            self.size = size
+            self.parsedBytes = parsedBytes
+            self.points = points
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            size = try container.decode(Int64.self, forKey: .size)
+            parsedBytes = try container.decodeIfPresent(Int64.self, forKey: .parsedBytes) ?? 0
+            points = try container.decode([TokenUsagePoint].self, forKey: .points)
+        }
     }
 
-    init(sessionsRoot: URL, cacheURL: URL? = nil) {
+    init(
+        sessionsRoot: URL,
+        cacheURL: URL? = nil,
+        openFileHandle: @escaping (URL) throws -> TokenLogFileHandle = {
+            try FileHandle(forReadingFrom: $0)
+        }
+    ) {
         self.sessionsRoot = sessionsRoot
         self.cacheURL = cacheURL
+        self.openFileHandle = openFileHandle
         var loaded: [String: CacheEntry] = [:]
         var cacheNeedsRewrite = false
         if let cacheURL,
@@ -74,13 +115,36 @@ struct TokenUsageLogReader: TokenLogReading {
         for file in files {
             guard let key = Self.cacheKey(for: file, sessionsRoot: sessionsRoot) else { continue }
             let size = ((try? fm.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value ?? -1
-            let points: [TokenUsagePoint]
+            var points: [TokenUsagePoint]
             if size >= 0, let hit = memCache[key], hit.size == size {
-                points = hit.points           // size 未变 → 复用缓存
+                if hit.parsedBytes > 0 {
+                    points = hit.points       // size 未变 → 复用缓存
+                } else if let parsed = parseFile(file, startingAt: 0, through: size) {
+                    // v2 条目无换行游标：首次刷新一次性全量迁移为 v3。
+                    points = parsed.points
+                    debugFilesParsed += 1
+                    memCache[key] = CacheEntry(
+                        size: size, parsedBytes: parsed.parsedBytes, points: points)
+                } else {
+                    points = []
+                    debugFilesParsed += 1
+                }
+            } else if size > 0, let hit = memCache[key],
+                      hit.parsedBytes > 0, hit.parsedBytes <= hit.size, size > hit.size,
+                      let parsed = parseFile(file, startingAt: hit.parsedBytes, through: size) {
+                points = hit.points + parsed.points
+                debugIncrementalParses += 1
+                memCache[key] = CacheEntry(
+                    size: size, parsedBytes: parsed.parsedBytes, points: points)
             } else {
-                points = parseFile(file)
+                if let parsed = parseFile(file, startingAt: 0, through: size) {
+                    points = parsed.points
+                    memCache[key] = CacheEntry(
+                        size: size, parsedBytes: parsed.parsedBytes, points: points)
+                } else {
+                    points = []
+                }
                 debugFilesParsed += 1
-                memCache[key] = CacheEntry(size: size, points: points)
             }
             // 仅纳入窗口内点；该文件贡献了至少一个窗口内点 → 计入唯一会话文件数。
             let inWindow = points.filter { $0.timestamp >= from && $0.timestamp <= to }
@@ -95,6 +159,10 @@ struct TokenUsageLogReader: TokenLogReading {
 
     private func persist() {
         guard let cacheURL, let data = try? JSONEncoder().encode(memCache) else { return }
+        // 编码后超过 maxCacheBytes 时跳过落盘（降级语义）：进程内缓存继续正常服务，
+        // 磁盘保留上一次成功写入的合法缓存——下次启动顶多回落到一次全量解析，
+        // 优于每次刷新都把注定被读门禁拒绝的超限文件写回磁盘（白写 + 启动重演）。
+        guard Int64(data.count) <= Self.maxCacheBytes else { return }
         writeCache(data, to: cacheURL)
     }
 
@@ -221,13 +289,40 @@ struct TokenUsageLogReader: TokenLogReading {
         return files
     }
 
-    private func parseFile(_ url: URL) -> [TokenUsagePoint] {
-        guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { return [] }
-        var pts: [TokenUsagePoint] = []
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            if let p = Self.parseLine(String(line)) { pts.append(p) }
+    /// 按块读取并只消费完整换行；parsedBytes 保持换行对齐，未完成尾行留给下一次增量。
+    private func parseFile(
+        _ url: URL, startingAt offset: Int64, through end: Int64
+    ) -> (points: [TokenUsagePoint], parsedBytes: Int64)? {
+        guard offset >= 0, let handle = try? openFileHandle(url) else { return nil }
+        defer { try? handle.close() }
+        let maximumBytes = Int(max(0, end - offset))
+        try? handle.seek(toOffset: UInt64(offset))
+
+        var points: [TokenUsagePoint] = []
+        var buffer = Data()
+        var totalRead = 0
+        do {
+            while totalRead < maximumBytes {
+                let chunkSize = min(Self.parseChunkSize, maximumBytes - totalRead)
+                guard let chunk = try handle.read(upToCount: chunkSize),
+                      !chunk.isEmpty else { break }
+                totalRead += chunk.count
+                buffer.append(chunk)
+                while let newline = buffer.firstIndex(of: 0x0A) {
+                    let line = buffer[..<newline]
+                    if let point = Self.parseLine(String(decoding: line, as: UTF8.self)) {
+                        points.append(point)
+                    }
+                    buffer.removeSubrange(buffer.startIndex...newline)
+                }
+            }
+        } catch {
+            return nil
         }
-        return pts
+        guard totalRead == maximumBytes else {
+            return nil
+        }
+        return (points, offset + Int64(totalRead - buffer.count))
     }
 
     /// 解析单行，提取 (timestamp, last_token_usage.{total,input,cached,output}_tokens)。

@@ -253,6 +253,305 @@ struct DataTestRunner {
         check("T3c 缓存往返聚合一致", pts2.reduce(Int64(0)) { $0 + $1.tokens } == 710, "")
         section("增量缓存")
 
+        // ---- T3d/T3e/T3f: v3 append-only 尾部增量 / 收缩回退 / v2 迁移 ----
+        do {
+            func tokenLine(timestamp: String, tokens: Int) -> String {
+                "{\"type\":\"event_msg\",\"timestamp\":\"\(timestamp)\","
+                    + "\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":\(tokens)}}}}\n"
+            }
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-token-incremental-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: root)
+            let comps = FixtureCalendar.utc.dateComponents([.year, .month, .day], from: FixtureCalendar.anchorDay)
+            let dayPath = String(format: "%04d/%02d/%02d", comps.year!, comps.month!, comps.day!)
+            let file = root.appendingPathComponent("\(dayPath)/rollout-fixture.jsonl")
+            try! FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+            let completeFirst = tokenLine(timestamp: "2026-08-03T10:00:00.000Z", tokens: 100)
+            let partialPrefix = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-03T10:01:00.000Z\""
+            try! Data((completeFirst + partialPrefix).utf8).write(to: file)
+            var incrementalReader = TokenUsageLogReader(sessionsRoot: root)
+            let first = try! incrementalReader.readPoints(
+                from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            check("T3d1 不完整尾行不产点且首轮全量解析",
+                  first.points.map(\.tokens) == [100]
+                    && incrementalReader.debugFilesParsed == 1
+                    && incrementalReader.debugIncrementalParses == 0,
+                  "tokens=\(first.points.map(\.tokens)) full=\(incrementalReader.debugFilesParsed) "
+                      + "inc=\(String(incrementalReader.debugIncrementalParses))")
+
+            let partialSuffix = ",\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":200}}}}\n"
+                + tokenLine(timestamp: "2026-08-03T10:02:00.000Z", tokens: 300)
+            let appendHandle = try! FileHandle(forWritingTo: file)
+            try! appendHandle.seekToEnd()
+            try! appendHandle.write(contentsOf: Data(partialSuffix.utf8))
+            try! appendHandle.close()
+            let appended = try! incrementalReader.readPoints(
+                from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            check("T3d2 追加后仅解析新增完整行并纳入跨边界行",
+                  appended.points.map(\.tokens) == [100, 200, 300]
+                    && incrementalReader.debugFilesParsed == 1
+                    && incrementalReader.debugIncrementalParses == 1,
+                  "tokens=\(appended.points.map(\.tokens)) full=\(incrementalReader.debugFilesParsed) "
+                      + "inc=\(String(incrementalReader.debugIncrementalParses))")
+
+            try! Data(completeFirst.utf8).write(to: file)
+            let shrunkAboveCursor = try! incrementalReader.readPoints(
+                from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            check("T3e0 收缩后size>=parsedBytes→全量重解析且保留完整旧行",
+                  shrunkAboveCursor.points.map(\.tokens) == [100]
+                    && incrementalReader.debugFilesParsed == 2
+                    && incrementalReader.debugIncrementalParses == 1,
+                  "points=\(shrunkAboveCursor.points.map(\.tokens)) "
+                      + "full=\(incrementalReader.debugFilesParsed) "
+                      + "inc=\(String(incrementalReader.debugIncrementalParses))")
+
+            try! Data(completeFirst.data(using: .utf8)!.prefix(50)).write(to: file)
+            let shrunk = try! incrementalReader.readPoints(
+                from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            check("T3e 文件收缩→回退全量并重置增量游标",
+                  shrunk.points.isEmpty
+                    && incrementalReader.debugFilesParsed == 3
+                    && incrementalReader.debugIncrementalParses == 1,
+                  "points=\(shrunk.points.count) full=\(incrementalReader.debugFilesParsed) "
+                      + "inc=\(String(incrementalReader.debugIncrementalParses))")
+            try? FileManager.default.removeItem(at: root)
+        }
+        section("v3 尾部增量")
+
+        do {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-token-v2-cache-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: root)
+            let comps = FixtureCalendar.utc.dateComponents([.year, .month, .day], from: FixtureCalendar.anchorDay)
+            let dayPath = String(format: "%04d/%02d/%02d", comps.year!, comps.month!, comps.day!)
+            let file = root.appendingPathComponent("\(dayPath)/rollout-fixture.jsonl")
+            try! FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let firstLine = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-03T11:00:00.000Z\","
+                + "\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":100}}}}\n"
+            try! Data(firstLine.utf8).write(to: file)
+            let key = TokenUsageLogReader.cacheKey(for: file, sessionsRoot: root)!
+            let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-token-v2-cache-file-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: cacheRoot)
+            try! FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+            let cacheURL = cacheRoot.appendingPathComponent("cache.json")
+            let size = (try! FileManager.default.attributesOfItem(atPath: file.path)[.size] as! NSNumber).int64Value
+            let oldPoint: [String: Any] = [
+                "timestamp": FixtureCalendar.anchorDay.timeIntervalSince1970,
+                "tokens": 100, "input": 0, "cached": 0, "output": 0
+            ]
+            let v2Cache: [String: Any] = [key: ["size": size, "points": [oldPoint]]]
+            try! JSONSerialization.data(withJSONObject: v2Cache).write(to: cacheURL)
+
+            var migrated = TokenUsageLogReader(sessionsRoot: root, cacheURL: cacheURL)
+            let firstRead = try! migrated.readPoints(
+                from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            let appendHandle = try! FileHandle(forWritingTo: file)
+            try! appendHandle.seekToEnd()
+            try! appendHandle.write(contentsOf: Data(
+                ("{\"type\":\"event_msg\",\"timestamp\":\"2026-08-03T11:01:00.000Z\","
+                    + "\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":200}}}}\n").utf8))
+            try! appendHandle.close()
+            let secondRead = try! migrated.readPoints(
+                from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            check("T3f v2 缓存首次刷新全量迁移，追加后进入v3增量",
+                  firstRead.points.map(\.tokens) == [100]
+                    && secondRead.points.map(\.tokens) == [100, 200]
+                    && migrated.debugFilesParsed == 1
+                    && migrated.debugIncrementalParses == 1,
+                  "first=\(firstRead.points.map(\.tokens)) second=\(secondRead.points.map(\.tokens)) "
+                      + "full=\(migrated.debugFilesParsed) inc=\(String(migrated.debugIncrementalParses))")
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: cacheRoot)
+        }
+        section("v2→v3 迁移")
+
+        // ---- T3h/T3i: 缓存上限护栏（QA P1 回归：>1MB 合法 v3 缓存被 size 门禁整拒 ----
+        // → memCache 空 → 每次启动全量重解析 ~28s 100% CPU；且 persist 无上限检查
+        // 把超限文件写回，启动重演）。种子缓存用与生产 CacheEntry/TokenUsagePoint
+        // 同形状的镜像 Codable + 默认 JSONEncoder 生成，保证磁盘格式与生产编解码一致。
+        do {
+            struct MirrorPoint: Codable {
+                let timestamp: Date
+                let tokens: Int64
+                let input: Int64
+                let cached: Int64
+                let output: Int64
+            }
+            struct MirrorEntry: Codable {
+                let size: Int64
+                let parsedBytes: Int64
+                let points: [MirrorPoint]
+            }
+            func makeFixture(
+                name: String, seedPoints: [MirrorPoint], appendLines: Int
+            ) -> (root: URL, cacheURL: URL, seedData: Data, appendedPointCount: Int) {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "pd-token-cache-cap-\(name)-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true)
+                try? FileManager.default.removeItem(at: root)
+                let comps = FixtureCalendar.utc.dateComponents(
+                    [.year, .month, .day], from: FixtureCalendar.anchorDay)
+                let dayPath = String(format: "%04d/%02d/%02d", comps.year!, comps.month!, comps.day!)
+                let file = root.appendingPathComponent("\(dayPath)/rollout-\(name).jsonl")
+                try! FileManager.default.createDirectory(
+                    at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let firstLine = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-03T11:00:00.000Z\","
+                    + "\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":7}}}}\n"
+                try! Data(firstLine.utf8).write(to: file)
+                // 种子 entry 记录「追加前」的旧 size/parsedBytes；随后才把 append 行
+                // 写入磁盘，使 reader 走 parsedBytes→新 size 的 v3 增量路径。
+                let size = (try! FileManager.default.attributesOfItem(
+                    atPath: file.path)[.size] as! NSNumber).int64Value
+                if appendLines > 0 {
+                    let appended = String(
+                        repeating: "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-03T11:05:00.000Z\","
+                            + "\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":1}}}}\n",
+                        count: appendLines)
+                    let handle = try! FileHandle(forWritingTo: file)
+                    try! handle.seekToEnd()
+                    try! handle.write(contentsOf: Data(appended.utf8))
+                    try! handle.close()
+                }
+                let key = TokenUsageLogReader.cacheKey(for: file, sessionsRoot: root)!
+                let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "pd-token-cache-cap-file-\(name)-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true)
+                try? FileManager.default.removeItem(at: cacheRoot)
+                try! FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+                let cacheURL = cacheRoot.appendingPathComponent("cache.json")
+                let seedData = try! JSONEncoder().encode([
+                    key: MirrorEntry(size: size, parsedBytes: size, points: seedPoints)
+                ])
+                try! seedData.write(to: cacheURL)
+                // readCacheData 要求常规文件 + 属主为本用户 + 低 9 位权限位为 0600。
+                try! FileManager.default.setAttributes(
+                    [.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: cacheURL.path)
+                return (root, cacheURL, seedData, appendLines)
+            }
+            func makeSeedPoints(_ count: Int) -> [MirrorPoint] {
+                (0..<count).map { i in
+                    MirrorPoint(
+                        timestamp: FixtureCalendar.anchorDay.addingTimeInterval(Double(i % 3600)),
+                        tokens: 1, input: 0, cached: 0, output: 0)
+                }
+            }
+            // 每点编码字节按实测采样推导，阈值不依赖具体编码格式的字节猜测。
+            let samplePerPoint = {
+                let sample = try! JSONEncoder().encode(makeSeedPoints(256))
+                return Double(sample.count - 128) / 256.0
+            }()
+
+            // T3h: 合法 v3 缓存超过旧上限 1MiB（+256KiB 余量）必须被接受：
+            // 窗口内多点撑大 entry，size/parsedBytes 与磁盘文件精确一致 → 命中缓存
+            // 不重解析，窗口点全部来自缓存（最终状态 owner = TokenWindow 输出）。
+            let n3h = Int((1_048_576 + 262_144) / samplePerPoint) + 1
+            let fx3h = makeFixture(name: "accept", seedPoints: makeSeedPoints(n3h), appendLines: 0)
+            var r3h = TokenUsageLogReader(sessionsRoot: fx3h.root, cacheURL: fx3h.cacheURL)
+            let w3h = try! r3h.readPoints(from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            check("T3h 合法 v3 缓存 >1MiB 被接受（命中缓存不重解析）",
+                  r3h.debugFilesParsed == 0 && w3h.points.count == n3h
+                    && w3h.sessionFileCount == 1 && fx3h.seedData.count > 1_048_576,
+                  "parsed=\(r3h.debugFilesParsed) points=\(w3h.points.count)/\(n3h) "
+                      + "seedBytes=\(fx3h.seedData.count)")
+            try? FileManager.default.removeItem(at: fx3h.root)
+            try? FileManager.default.removeItem(at: fx3h.cacheURL.deletingLastPathComponent())
+
+            // T3i: persist 防护——种子 ≤8MiB（读门禁接受），增量后编码超 8MiB 时
+            // 跳过落盘：磁盘字节保持种子不变（无白写），进程内缓存继续命中服务。
+            let n3i = Int((8_388_608 - 131_072 - 128) / samplePerPoint)
+            let k3i = Int(262_144 / samplePerPoint) + 1
+            let fx3i = makeFixture(name: "persist", seedPoints: makeSeedPoints(n3i), appendLines: k3i)
+            var r3i = TokenUsageLogReader(sessionsRoot: fx3i.root, cacheURL: fx3i.cacheURL)
+            let w3iFirst = try! r3i.readPoints(from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            let diskAfter = (try? Data(contentsOf: fx3i.cacheURL)) ?? Data()
+            let w3iSecond = try! r3i.readPoints(from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            check("T3i persist 编码超 8MiB 跳过落盘（磁盘不变，进程内缓存继续工作）",
+                  diskAfter == fx3i.seedData
+                    && r3i.debugFilesParsed == 0 && r3i.debugIncrementalParses == 1
+                    && w3iFirst.points.count == n3i + k3i
+                    && w3iSecond.points.count == n3i + k3i,
+                  "disk=\(diskAfter.count)/\(fx3i.seedData.count) "
+                      + "parsed=\(r3i.debugFilesParsed) inc=\(r3i.debugIncrementalParses) "
+                      + "pts=\(w3iFirst.points.count)/\(n3i + k3i) seedBytes=\(fx3i.seedData.count)")
+            try? FileManager.default.removeItem(at: fx3i.root)
+            try? FileManager.default.removeItem(at: fx3i.cacheURL.deletingLastPathComponent())
+        }
+        section("缓存上限/persist 防护")
+
+        do {
+            final class ShortReadFileHandle: TokenLogFileHandle {
+                private let data: Data
+                private var didRead = false
+
+                init(data: Data) { self.data = data }
+
+                func seek(toOffset offset: UInt64) {}
+                func read(upToCount count: Int) -> Data? {
+                    guard !didRead else { return nil }
+                    didRead = true
+                    return data.prefix(count)
+                }
+                func close() {}
+            }
+
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-token-short-read-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: root)
+            let comps = FixtureCalendar.utc.dateComponents(
+                [.year, .month, .day], from: FixtureCalendar.anchorDay)
+            let dayPath = String(format: "%04d/%02d/%02d", comps.year!, comps.month!, comps.day!)
+            let file = root.appendingPathComponent("\(dayPath)/rollout-fixture.jsonl")
+            try! FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let firstLine = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-03T12:00:00.000Z\","
+                + "\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":100}}}}\n"
+            let firstData = Data(firstLine.utf8)
+            try! firstData.write(to: file)
+            let key = TokenUsageLogReader.cacheKey(for: file, sessionsRoot: root)!
+            let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "pd-token-short-read-cache-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.removeItem(at: cacheRoot)
+            try! FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+            let cacheURL = cacheRoot.appendingPathComponent("cache.json")
+            var fileOpens = 0
+            var reader = TokenUsageLogReader(sessionsRoot: root, cacheURL: cacheURL) { [file] _ in
+                fileOpens += 1
+                if fileOpens == 2 {
+                    try! firstData.write(to: file)
+                }
+                return ShortReadFileHandle(data: firstData)
+            }
+            _ = try! reader.readPoints(from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+
+            let appendedLine = firstLine.replacingOccurrences(of: "\"total_tokens\":100", with: "\"total_tokens\":300")
+                + "  \n"
+            let appendHandle = try! FileHandle(forWritingTo: file)
+            try! appendHandle.seekToEnd()
+            try! appendHandle.write(contentsOf: Data(appendedLine.utf8))
+            try! appendHandle.close()
+            let truncatedSize = Int64(firstData.count)
+            let truncated = try! reader.readPoints(
+                from: FixtureCalendar.winFrom, to: FixtureCalendar.winTo)
+            let cacheObject = try! JSONSerialization.jsonObject(
+                with: Data(contentsOf: cacheURL)) as? [String: [String: Any]]
+            let cachedSize = (cacheObject?[key]?["size"] as? NSNumber)?.int64Value
+            check("T3g 增量读遇到并发截断→不合并旧点且不写回stale size",
+                  truncated.points.isEmpty
+                    && cachedSize == truncatedSize
+                    && reader.debugIncrementalParses == 0
+                    && reader.debugFilesParsed == 2,
+                  "points=\(truncated.points.map(\.tokens)) cached=\(String(describing: cachedSize)) "
+                      + "truncated=\(truncatedSize) full=\(reader.debugFilesParsed) "
+                      + "inc=\(String(reader.debugIncrementalParses)) opens=\(fileOpens)")
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: cacheRoot)
+        }
+        section("并发截断守卫")
+
         // ---- T-cache-privacy: cache URL symlink must not be read ----
         do {
             let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent(

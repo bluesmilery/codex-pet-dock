@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastWID: CGWindowID?
     private var lastMaterialChangeAt: TimeInterval?
     private var dataTimer: Timer?           // 数据刷新（低频：退避间隔）
+    private var hasCompletedFirstRefresh = false
     private var wasPetVisible = false       // 数据 pause/resume 的边沿触发（跟随宠物可见性）
     private var consecutiveEmptyTicks = 0   // 连续无候选 tick 计数（TCC 缺失降级提示用）
     private var screenCapturePermissionGate = ScreenCapturePermissionRequestGate()
@@ -212,13 +213,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 数据刷新：后台抓取两源（不阻塞主线程），完成后按退避间隔重排。
     private func refreshData() {
-        provider.refresh { [weak self] in self?.scheduleDataRefresh() }
+        provider.refresh { [weak self] in
+            guard let self else { return }
+            self.hasCompletedFirstRefresh = true
+            self.scheduleDataRefresh(after: self.nextDataRefreshDelay())
+        }
     }
 
     /// 数据刷新调度：取两源退避间隔较大者（任一失败即拉长；正常均 5min）。加入 .common 模式。
-    private func scheduleDataRefresh() {
+    private func nextDataRefreshDelay() -> TimeInterval {
+        max(provider.weekLeftNextDelay, provider.weekTokensNextDelay)
+    }
+
+    private func scheduleDataRefresh(after interval: TimeInterval) {
         dataTimer?.invalidate()
-        let interval = max(provider.weekLeftNextDelay, provider.weekTokensNextDelay)
         let t = Timer(timeInterval: interval, repeats: false) { [weak self] _ in self?.refreshData() }
         RunLoop.main.add(t, forMode: .common)
         dataTimer = t
@@ -262,7 +270,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 执行数据边沿（petVisible 边沿驱动 pause/resume，与 UI 解耦）。
         if plan.resumeData {
             provider.resume()
-            refreshData()
+            if hasCompletedFirstRefresh {
+                refreshData()
+            } else {
+                scheduleDataRefresh(after: FollowTickPlanner.initialDataRefreshDelay(
+                    hasCompletedFirstRefresh: hasCompletedFirstRefresh))
+            }
         } else if plan.pauseData {
             provider.pause()
             stopDataRefresh()
