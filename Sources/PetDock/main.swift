@@ -59,7 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             canUseDisplayLink: { [dock] in dock.isDisplayLinkEligible },
             maximumFramesPerSecond: { [dock] in dock.maximumFramesPerSecond },
             monotonicNow: followMonotonicNow,
-            stableDelayHint: { [weak self] in self?.bubbleProbe.takePendingRetryDelay() }
+            stableDelayHint: { [weak self] in self?.bubbleProbe.takePendingRetryDelay() },
+            // stable 渐进退避：tick 结束（lastMaterialChangeAt 已更新）后按当前静止时长
+            // 取下一拍探测间隔；<1s 保持 0.1s，≥1s 降为 0.5s 封底。
+            stableIntervalHint: { [weak self] in
+                guard let self, let changedAt = self.lastMaterialChangeAt else { return nil }
+                return Follower.stableProbeInterval(
+                    forStationaryDuration: self.followMonotonicNow() - changedAt)
+            }
         )
     }()
     private lazy var bubbleProbe = BubbleVisibilityProbe(

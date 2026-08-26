@@ -349,6 +349,19 @@ check("F22 120Hz连续0.5px移动不误入stable",
 check("F23 不规则cadence连续0.5px移动不误入stable",
       staysMovingDuringCumulativeSubthresholdMotion(times: cumulativeIrregularTimes))
 
+// F24-F26: stable 态渐进退避映射。静止 <1s 保持 0.1s（现状灵敏度不变），
+// ≥1s 降为 0.5s 封底（CGWindowList 全量枚举是静止 CPU 主源）；边界 1.0s 归入退避。
+check("F24 stable退避：静止0.9s(<1s)→保持0.1s",
+      Follower.stableProbeInterval(forStationaryDuration: 0.9) == 0.1,
+      "interval=\(Follower.stableProbeInterval(forStationaryDuration: 0.9))")
+check("F25 stable退避：静止1.5s(≥1s)→0.5s封底且仍快于hidden",
+      Follower.stableProbeInterval(forStationaryDuration: 1.5) == 0.5
+        && Follower.stableSettledInterval < Follower.hiddenInterval,
+      "interval=\(Follower.stableProbeInterval(forStationaryDuration: 1.5))")
+check("F26 stable退避边界：恰1.0s→0.5s",
+      Follower.stableProbeInterval(forStationaryDuration: 1.0) == 0.5,
+      "interval=\(Follower.stableProbeInterval(forStationaryDuration: 1.0))")
+
 print("\n[Follower] \(pass - fPass) passed, \(fail - fBase) failed")
 
 // ---- Dock 几何 / reset 显示 / placeBelow 宽度（需 NSApplication 初始化 NSPanel/NSView）----
@@ -2157,7 +2170,7 @@ if #available(macOS 14.0, *) {
           lifecycleLinks.count == 2 && lifecycleLinks[1].added
             && fallbackAfterScreenLoss.first?.invalidated == true,
           "links=\(lifecycleLinks.count) fallbackInvalidated=\(fallbackAfterScreenLoss.first?.invalidated ?? false)")
-lifecycleScheduler.stop()
+    lifecycleScheduler.stop()
 } else {
     check("T-sch3a macOS14 display link生命周期（当前系统跳过）", true)
     check("T-sch3b macOS14 display link生命周期（当前系统跳过）", true)
@@ -2246,6 +2259,91 @@ check("T-sch5c3 再入moving节拍恢复",
 
 sch5Scheduler.stop()
 guiDock.hideIfNeeded()
+
+// T-sch6: stable 态渐进退避（真实 runloop Timer）。生产 wiring：interval hint 由
+// lastMaterialChangeAt 推静止时长 → Follower.stableProbeInterval。静止 <1s 保持 0.1s
+// （刚停下又动的灵敏度与现状一致）；静止 ≥1s 后 one-shot 间隔退避为 0.5s 封底；
+// 模拟移动后回到 moving repeating 节拍；probe pendingRetryAt hint 仍取更早者。
+var sch6Ticks = 0
+var sch6TickTimes: [TimeInterval] = []
+var sch6State: FollowState = .stable
+var sch6StationarySince = ProcessInfo.processInfo.systemUptime
+let sch6Now = { ProcessInfo.processInfo.systemUptime }
+let sch6Scheduler = FollowTickScheduler(
+    runTick: {
+        sch6Ticks += 1
+        sch6TickTimes.append(sch6Now())
+        return sch6State
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    stableIntervalHint: {
+        Follower.stableProbeInterval(forStationaryDuration: sch6Now() - sch6StationarySince)
+    }
+)
+sch6Scheduler.start()
+sch6Scheduler.requestWake()
+_ = waitPumpingMain { sch6Ticks >= 4 }
+let sch6FastWindowEnd = sch6StationarySince + 1.0
+let sch6FastGaps = zip(sch6TickTimes.dropFirst(), sch6TickTimes)
+    .filter { $0.0 < sch6FastWindowEnd }
+    .map { $0.0 - $0.1 }
+check("T-sch6a 静止<1s保持0.1s节拍",
+      sch6FastGaps.count >= 3 && sch6FastGaps.allSatisfy { $0 >= 0.09 && $0 <= 0.25 },
+      "gaps=\(sch6FastGaps.map { String(format: "%.3f", $0) })")
+
+_ = waitPumpingMain({ sch6Now() - sch6StationarySince >= 1.15 }, timeout: 3.0)
+let sch6BackoffBase = sch6Ticks
+_ = waitPumpingMain({ sch6Ticks >= sch6BackoffBase + 3 }, timeout: 4.0)
+let sch6SlowTimes = sch6TickTimes.suffix(3)
+let sch6SlowGaps = zip(sch6SlowTimes.dropFirst(), sch6SlowTimes).map { $0.0 - $0.1 }
+check("T-sch6b 静止≥1s退避到0.5s封底",
+      sch6SlowGaps.count == 2 && sch6SlowGaps.allSatisfy { $0 >= 0.4 && $0 <= 0.7 },
+      "gaps=\(sch6SlowGaps.map { String(format: "%.3f", $0) })")
+
+sch6State = .moving
+let sch6MovingBase = sch6Ticks
+_ = waitPumpingMain({ sch6Ticks >= sch6MovingBase + 3 }, timeout: 2.0)
+let sch6MovingTimes = sch6TickTimes.suffix(3)
+let sch6MovingGaps = zip(sch6MovingTimes.dropFirst(), sch6MovingTimes).map { $0.0 - $0.1 }
+check("T-sch6c 模拟移动后恢复moving节拍",
+      sch6MovingGaps.allSatisfy { $0 >= 0.005 && $0 <= 0.05 }
+        && sch6Scheduler.isRepeatingTimerActive,
+      "gaps=\(sch6MovingGaps.map { String(format: "%.3f", $0) }) "
+        + "repeating=\(sch6Scheduler.isRepeatingTimerActive)")
+
+sch6Scheduler.stop()
+
+// T-sch6d: 退避间隔与 probe pendingRetryAt hint 仍取更早者（min 语义不破坏）。
+var sch6dTicks = 0
+var sch6dTimers: [TestFollowTickTimer] = []
+var sch6dClock: TimeInterval = 0
+let sch6dScheduler = FollowTickScheduler(
+    runTick: {
+        sch6dTicks += 1
+        return sch6dTicks == 1 ? .stable : .hidden
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    monotonicNow: { sch6dClock },
+    stableDelayHint: { 0.05 },
+    stableIntervalHint: { 0.5 },
+    makeTimer: { interval, repeats, callback in
+        let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+        sch6dTimers.append(timer)
+        return timer
+    }
+)
+sch6dScheduler.start()
+sch6dScheduler.requestWake()
+_ = waitPumpingMain { sch6dTicks == 1 }
+let sch6dStableTimer = sch6dTimers.last!
+check("T-sch6d probe retry hint仍优先于退避间隔",
+      !sch6dStableTimer.repeats && abs(sch6dStableTimer.interval - 0.05) < 0.000_001,
+      "interval=\(sch6dStableTimer.interval) repeats=\(sch6dStableTimer.repeats)")
+sch6dScheduler.stop()
 
 // T-sch4: stable scheduler 与生产 FollowLayoutPass/probe 必须共享同一可控时间线。
 // tick 起点与实际 probe 之间存在工作偏移时，due miss 只能等待剩余 probe cadence，

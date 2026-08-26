@@ -114,6 +114,7 @@ final class FollowTickScheduler: NSObject {
     private let maximumFramesPerSecond: () -> Int
     private let monotonicNow: () -> TimeInterval
     private let stableDelayHint: () -> TimeInterval?
+    private let stableIntervalHint: () -> TimeInterval?
     private let makeTimer: TimerFactory
     private var coalescer: FollowTickCoalescer!
     private var timer: FollowTickTimer?
@@ -133,6 +134,7 @@ final class FollowTickScheduler: NSObject {
         maximumFramesPerSecond: @escaping () -> Int,
         monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         stableDelayHint: @escaping () -> TimeInterval? = { nil },
+        stableIntervalHint: @escaping () -> TimeInterval? = { nil },
         makeTimer: @escaping TimerFactory = FollowTickScheduler.makeRunLoopTimer
     ) {
         self.runTick = runTick
@@ -141,6 +143,7 @@ final class FollowTickScheduler: NSObject {
         self.maximumFramesPerSecond = maximumFramesPerSecond
         self.monotonicNow = monotonicNow
         self.stableDelayHint = stableDelayHint
+        self.stableIntervalHint = stableIntervalHint
         self.makeTimer = makeTimer
         super.init()
         self.coalescer = FollowTickCoalescer { [weak self] in self?.performTick() }
@@ -262,7 +265,10 @@ final class FollowTickScheduler: NSObject {
 
     private func scheduleStableTick(firstAnchor: TimeInterval?, retryAfter: TimeInterval?) {
         let now = monotonicNow()
-        let deadline = (firstAnchor ?? now) + Follower.stableInterval
+        // stable 渐进退避：下一拍间隔是当前静止时长的函数（生产由 lastMaterialChangeAt
+        // 推得）；未接 hint 的消费者保持既有 0.1s 语义。probe pendingRetryAt 仍取更早者。
+        let interval = stableIntervalHint() ?? Follower.stableInterval
+        let deadline = (firstAnchor ?? now) + interval
         let delay = min(deadline - now, retryAfter ?? .greatestFiniteMagnitude)
         guard delay > 0 else {
             invalidateSources()
