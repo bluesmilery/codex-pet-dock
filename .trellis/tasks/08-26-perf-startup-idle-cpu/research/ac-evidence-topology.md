@@ -5,10 +5,7 @@
 - Approved baseline: `a7639db` (clean baseline; no implementation files changed).
 - Approved planning commit: `9e7b68a`.
 - First implementation candidate: `b85f11051527e823ae754d80403b9b448444e26f`.
-- Review-fix round: work tree on top of `b85f110`, without a new commit (this
-  implementation agent is forbidden from committing). The supervisor must freeze
-  and review the resulting tree as a new complete SHA; conclusions below apply
-  only to that frozen tree.
+- Review-fix round: frozen as `8dc8f48` (delta below, on top of `b85f110`).
 - Review-fix delta:
   - `TokenUsageLogReader` rejects a short incremental/full read and, after a
     failed fallback parse, leaves the previous cache entry unchanged instead of
@@ -16,6 +13,18 @@
   - Added deterministic short-read fixture injection, the `size >= parsedBytes`
     shrink case, and the fixed-identity scheduler one-shot test.
   - Updated the three bubble-probe cadence contracts in user/architecture docs.
+- Moving-watchdog round (review r2 P0 drag-freeze): frozen as `58e2ce3`. That
+  round also cleared two review P2s: the missing P0 drag-freeze section below
+  and the `lifecycleScheduler.stop()` indentation noise in `tests/main.swift`.
+- Stable-backoff round (approved plan B): frozen as `b51ab9e`. It introduced
+  the stationary backoff with a 0.5s floor, which came from a spec typo in the
+  supervisor task brief (the user-approved floor is 0.2s); review r3 returned
+  NOT APPROVED for that reason.
+- Review-fix round r3 (this work tree, on top of `b51ab9e`, not yet frozen):
+  corrects the floor to the user-approved 0.2s (F24-F26, T-sch6b, comments and
+  docs), reroutes T-sch6c through the production `Follower.decide`
+  material-change path, and syncs this evidence file. Conclusions below apply
+  only to the tree frozen from this round.
 
 ## Baseline and gates
 
@@ -47,6 +56,52 @@ read from this work tree. No conclusion depends on chat history.
 | C1 startup first-refresh delay | Pure plan inputs flip `petVisible`; static production wiring uses the resulting plan on `AppDelegate.tick` | First resume edge → `provider.resume()` → one-shot `dataTimer` at 5s → `refreshData()` → provider completion sets `hasCompletedFirstRefresh`; pause edge → `stopDataRefresh()`; later resume calls `refreshData()` immediately | Strategy returns 5 before and 0 after first completion; timer/provider state is the final scheduling owner; UI snapshot owner updates only after provider callback | `P10a`, `P10b`; production wiring in `Sources/PetDock/main.swift`; manual launch-log gap below |
 | D quality gates | Build all production sources; run docs, privacy, UI, data, and shell suites | Swift compiler, executable test binaries, docs/privacy Python gates | Release output has zero warnings; every suite exits 0 and reports zero failures | `swift build -c release`; `make test PYTHON=<conda-base-python>` |
 
+## P0 拖动冻结：根因链、修复映射与 stable 退避 AC
+
+### P0 根因链与修复映射
+
+- Root cause chain: since `f62bfd9` (coalesced display-synced dock updates),
+  the moving state's only beat source is the window-bound `NSWindow.displayLink`
+  (macOS 14+) with no fallback timer. After a screen sleep/wake the link dies
+  silently — the panel stays visible, the system stops driving the callback,
+  and the scheduler gets no reconfigure opportunity — so the only moving beat
+  source starves and the dock freezes while dragging.
+- Fix mapping: `58e2ce3` adds the 0.25s moving watchdog. A healthy display link
+  re-arms it every beat and it never fires; if no tick arrives within the
+  window, the scheduler degrades to a repeating Timer and latches the
+  degradation for the rest of the moving episode (no create/invalidate churn).
+- Evidence: `T-sch5a0`/`T-sch5a`/`T-sch5b`/`T-sch5b2`/`T-sch5c`/`T-sch5c2`/
+  `T-sch5c3` — real `NSPanel` + real `CADisplayLink` + real runloop `Timer`;
+  `orderOut` provides the deterministic silent-link reproduction.
+
+### 本轮 stable 渐进退避 AC 与证据（方案 B，用户已批准）
+
+Contract: stationary <1s keeps the 0.1s interval (identical to the previous
+behavior, preserving "just stopped and moves again" sensitivity); stationary
+>=1s backs off to a 0.2s floor (5Hz; worst-case start-detection delay 0.2s,
+exactly the user-approved +0.1s over the status quo); any material change
+still transitions to the moving cadence (display link / fallback path
+unchanged).
+
+| AC | Trigger / disturbance | Production consumer / chain | Final owner / assertion | Evidence |
+| --- | --- | --- | --- | --- |
+| S1 backoff pure mapping | Stationary durations 0.9s / 1.5s / boundary 1.0s | `Follower.stableProbeInterval` (pure function, same monotonic clock domain as `decide`) | 0.9s→0.1s; 1.5s→0.2s; boundary 1.0s→0.2s; 0.2s floor still probes faster than hidden 1.0s | `F24`, `F25`, `F26`; `make test-ui` |
+| S2 scheduler wiring (real runloop Timer) | Production-shaped interval hint (stationary duration from the material-change timestamp → pure mapping) consumed by `FollowTickScheduler.scheduleStableTick` | one-shot `Timer` factory → coalescer → follow tick | Ticks stay ≈0.1s apart while stationary <1s; after ≥1s the actual tick gaps fall in [0.15, 0.3]s | `T-sch6a`, `T-sch6b`; `make test-ui` |
+| S3 material-change recovery through the production decision chain | After backoff is active, a >tolerance pet-bounds disturbance is injected right after a stable tick and keeps drifting each tick (simulated drag) | `runTick` calls the real `Follower.decide` with test-held `stationaryAnchor`/`lastMaterialChangeAt` (same shape as the `main.swift` wiring) → `.moving` → scheduler moving source (display link / repeating fallback, unchanged) | The first moving tick lands within the 0.2s floor plus tolerance (asserted <=0.3s; breaking the floor back to 0.5s turns this assertion red), then moving beats return to the 60Hz fallback cadence with a repeating source active | `T-sch6c`; `make test-ui` |
+| S4 probe retry hint still wins | `stableIntervalHint=0.2` coexists with a probe `pendingRetryAt` hint of 0.05s | `scheduleStableTick` keeps `min(deadline - now, retryAfter)` | The one-shot takes the earlier probe retry (0.05s), preserving the "take the earlier" contract | `T-sch6d`; `make test-ui` |
+
+Production wiring (`Sources/PetDock/main.swift`, `followScheduler` initializer):
+after the tick completes and `lastMaterialChangeAt` is updated, the hint derives
+the current stationary duration on the same monotonic clock and applies the pure
+mapping. Consumers without the hint (all pre-existing T-sch suites) keep the
+0.1s semantics, which is why `T-sch1*`, `T-sch4*`, and `T-sch5c2` pass unchanged.
+
+Expected stationary-CPU effect: once stationary ≥1s, the full `CGWindowList`
+enumeration drops from 10Hz to 5Hz (a 0.2s floor). With bubbles present the probe
+`pendingRetryAt` can still pull individual ticks earlier, and the 1s capture
+heartbeat itself is unchanged. Real-machine stationary CPU sampling remains QA
+work (headless suites cannot claim it).
+
 ## Manual / device QA gaps
 
 These cannot be truthfully claimed by the headless suites and remain for user
@@ -71,4 +126,4 @@ To be filled only from the final work-tree commands:
 
 - `swift build -c release`: PASS, 0 warnings.
 - `make test PYTHON=<conda-base-python>`: PASS.
-- UI: 393 passed / 0 failed. Data: 137 passed / 0 failed. Shell: 99 passed / 0 failed.
+- UI: 407 passed / 0 failed. Data: 137 passed / 0 failed. Shell: 99 passed / 0 failed.

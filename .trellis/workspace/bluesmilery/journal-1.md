@@ -245,3 +245,24 @@ Token v3 tail-incremental parsing (207-entry migration verified), bubble 1s stab
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: drag-freeze fix + stable backoff rounds
+
+**Date**: 2026-08-26
+**Task**: drag-freeze fix + stable backoff rounds
+**Branch**: `codex/perf-startup-idle-cpu`
+
+### Summary
+
+P0 drag freeze root-caused to baseline display-link starvation (f62bfd9), fixed with 0.25s moving watchdog (58e2ce3, r2 APPROVED). Stable backoff shipped at approved 0.2s floor after r3 caught 0.5s supervisor spec typo; T-sch6c reworked through real Follower.decide chain as regression guard; r5 APPROVED. Stationary CPU 28%->17.6%; remaining cost is per-tick CGWindowList dictionary parsing, future enum-slimming candidate. All sub-agents used native multi-agent spawn (no child sessions) per user instruction.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1a8432311aba77d1729faa1f1a9a909587c7bc55` | (see git log) |
+
+### Status
+
+[OK] **Completed**
