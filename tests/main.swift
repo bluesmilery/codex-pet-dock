@@ -350,16 +350,16 @@ check("F23 不规则cadence连续0.5px移动不误入stable",
       staysMovingDuringCumulativeSubthresholdMotion(times: cumulativeIrregularTimes))
 
 // F24-F26: stable 态渐进退避映射。静止 <1s 保持 0.1s（现状灵敏度不变），
-// ≥1s 降为 0.5s 封底（CGWindowList 全量枚举是静止 CPU 主源）；边界 1.0s 归入退避。
+// ≥1s 降为 0.2s 封底（CGWindowList 全量枚举是静止 CPU 主源）；边界 1.0s 归入退避。
 check("F24 stable退避：静止0.9s(<1s)→保持0.1s",
       Follower.stableProbeInterval(forStationaryDuration: 0.9) == 0.1,
       "interval=\(Follower.stableProbeInterval(forStationaryDuration: 0.9))")
-check("F25 stable退避：静止1.5s(≥1s)→0.5s封底且仍快于hidden",
-      Follower.stableProbeInterval(forStationaryDuration: 1.5) == 0.5
+check("F25 stable退避：静止1.5s(≥1s)→0.2s封底且仍快于hidden",
+      Follower.stableProbeInterval(forStationaryDuration: 1.5) == 0.2
         && Follower.stableSettledInterval < Follower.hiddenInterval,
       "interval=\(Follower.stableProbeInterval(forStationaryDuration: 1.5))")
-check("F26 stable退避边界：恰1.0s→0.5s",
-      Follower.stableProbeInterval(forStationaryDuration: 1.0) == 0.5,
+check("F26 stable退避边界：恰1.0s→0.2s",
+      Follower.stableProbeInterval(forStationaryDuration: 1.0) == 0.2,
       "interval=\(Follower.stableProbeInterval(forStationaryDuration: 1.0))")
 
 print("\n[Follower] \(pass - fPass) passed, \(fail - fBase) failed")
@@ -2262,18 +2262,17 @@ guiDock.hideIfNeeded()
 
 // T-sch6: stable 态渐进退避（真实 runloop Timer）。生产 wiring：interval hint 由
 // lastMaterialChangeAt 推静止时长 → Follower.stableProbeInterval。静止 <1s 保持 0.1s
-// （刚停下又动的灵敏度与现状一致）；静止 ≥1s 后 one-shot 间隔退避为 0.5s 封底；
-// 模拟移动后回到 moving repeating 节拍；probe pendingRetryAt hint 仍取更早者。
+// （刚停下又动的灵敏度与现状一致）；静止 ≥1s 后 one-shot 间隔退避为 0.2s 封底；
+// 扰动后经生产 decide 链恢复 moving 节拍（T-sch6c）；probe hint 仍取更早者（T-sch6d）。
 var sch6Ticks = 0
 var sch6TickTimes: [TimeInterval] = []
-var sch6State: FollowState = .stable
 var sch6StationarySince = ProcessInfo.processInfo.systemUptime
 let sch6Now = { ProcessInfo.processInfo.systemUptime }
 let sch6Scheduler = FollowTickScheduler(
     runTick: {
         sch6Ticks += 1
         sch6TickTimes.append(sch6Now())
-        return sch6State
+        return .stable
     },
     makeDisplayLink: { _, _ in nil },
     canUseDisplayLink: { false },
@@ -2298,22 +2297,75 @@ let sch6BackoffBase = sch6Ticks
 _ = waitPumpingMain({ sch6Ticks >= sch6BackoffBase + 3 }, timeout: 4.0)
 let sch6SlowTimes = sch6TickTimes.suffix(3)
 let sch6SlowGaps = zip(sch6SlowTimes.dropFirst(), sch6SlowTimes).map { $0.0 - $0.1 }
-check("T-sch6b 静止≥1s退避到0.5s封底",
-      sch6SlowGaps.count == 2 && sch6SlowGaps.allSatisfy { $0 >= 0.4 && $0 <= 0.7 },
+check("T-sch6b 静止≥1s退避到0.2s封底",
+      sch6SlowGaps.count == 2 && sch6SlowGaps.allSatisfy { $0 >= 0.15 && $0 <= 0.3 },
       "gaps=\(sch6SlowGaps.map { String(format: "%.3f", $0) })")
 
-sch6State = .moving
-let sch6MovingBase = sch6Ticks
-_ = waitPumpingMain({ sch6Ticks >= sch6MovingBase + 3 }, timeout: 2.0)
-let sch6MovingTimes = sch6TickTimes.suffix(3)
-let sch6MovingGaps = zip(sch6MovingTimes.dropFirst(), sch6MovingTimes).map { $0.0 - $0.1 }
-check("T-sch6c 模拟移动后恢复moving节拍",
-      sch6MovingGaps.allSatisfy { $0 >= 0.005 && $0 <= 0.05 }
-        && sch6Scheduler.isRepeatingTimerActive,
-      "gaps=\(sch6MovingGaps.map { String(format: "%.3f", $0) }) "
-        + "repeating=\(sch6Scheduler.isRepeatingTimerActive)")
-
 sch6Scheduler.stop()
+
+// T-sch6c: material-change 恢复必须穿过生产决策链（真实 Follower.decide + 真实
+// runloop Timer）。与 main.swift 同构：tick 内 decide 更新 stationaryAnchor/
+// lastMaterialChangeAt，interval hint 由 lastMaterialChangeAt 推当前静止时长。
+// 先静止 ≥1s 进入 0.2s 封底，再在一拍结束后注入宠物 bounds 扰动（模拟开始拖动，
+// 拖动期间逐拍持续位移）：下一拍最迟 = 封底间隔，decide 必须判 moving，scheduler
+// 立即切回 moving repeating 节拍。封底间隔改坏到 0.5s 时，扰动到首条 moving 拍
+// 的耗时同样退化为 ~0.5s → 本断言红（P0 回归护栏）。
+var sch6cTicks = 0
+var sch6cPet = CGRect(x: 100, y: 100, width: 172, height: 179)
+var sch6cAnchor: CGRect?
+var sch6cChangedAt: TimeInterval?
+var sch6cDisturbanceAt: TimeInterval?
+var sch6cFirstMovingAt: TimeInterval?
+var sch6cMovingTimes: [TimeInterval] = []
+let sch6cNow = { ProcessInfo.processInfo.systemUptime }
+let sch6cScheduler = FollowTickScheduler(
+    runTick: {
+        sch6cTicks += 1
+        let t = sch6cNow()
+        if sch6cDisturbanceAt != nil {
+            sch6cPet = sch6cPet.offsetBy(dx: 2, dy: 0)   // 拖动中逐拍持续实质位移
+        }
+        let d = Follower.decide(pet: sch6cPet, stationaryAnchor: sch6cAnchor,
+                                lastMaterialChangeAt: sch6cChangedAt, now: t)
+        sch6cAnchor = d.stationaryAnchor
+        sch6cChangedAt = d.lastMaterialChangeAt
+        if sch6cDisturbanceAt != nil && d.state == .moving {
+            if sch6cFirstMovingAt == nil { sch6cFirstMovingAt = t }
+            sch6cMovingTimes.append(t)
+        }
+        return d.state
+    },
+    makeDisplayLink: { _, _ in nil },
+    canUseDisplayLink: { false },
+    maximumFramesPerSecond: { 60 },
+    stableIntervalHint: {
+        guard let changedAt = sch6cChangedAt else { return nil }
+        return Follower.stableProbeInterval(forStationaryDuration: sch6cNow() - changedAt)
+    }
+)
+sch6cScheduler.start()
+sch6cScheduler.requestWake()
+_ = waitPumpingMain({
+    guard let changedAt = sch6cChangedAt else { return false }
+    return sch6cNow() - changedAt >= 1.15
+}, timeout: 3.0)
+let sch6cBase = sch6cTicks
+_ = waitPumpingMain { sch6cTicks >= sch6cBase + 1 }
+sch6cDisturbanceAt = sch6cNow()
+sch6cPet = sch6cPet.offsetBy(dx: 50, dy: 0)   // 远超容差的实质移动：模拟开始拖动
+_ = waitPumpingMain({ sch6cFirstMovingAt != nil }, timeout: 2.0)
+let sch6cRecovery = (sch6cFirstMovingAt ?? .infinity) - (sch6cDisturbanceAt ?? 0)
+_ = waitPumpingMain({ sch6cMovingTimes.count >= 3 }, timeout: 1.0)
+let sch6cMovingGaps = zip(sch6cMovingTimes.dropFirst(), sch6cMovingTimes).map { $0.0 - $0.1 }
+check("T-sch6c 生产decide链:扰动后≤0.2s封底内恢复moving",
+      sch6cRecovery >= 0 && sch6cRecovery <= 0.3
+        && sch6cMovingTimes.count >= 3
+        && sch6cMovingGaps.allSatisfy { $0 >= 0.005 && $0 <= 0.05 }
+        && sch6cScheduler.isRepeatingTimerActive,
+      "recovery=\(String(format: "%.3f", sch6cRecovery)) "
+        + "gaps=\(sch6cMovingGaps.map { String(format: "%.3f", $0) }) "
+        + "repeating=\(sch6cScheduler.isRepeatingTimerActive)")
+sch6cScheduler.stop()
 
 // T-sch6d: 退避间隔与 probe pendingRetryAt hint 仍取更早者（min 语义不破坏）。
 var sch6dTicks = 0
@@ -2329,7 +2381,7 @@ let sch6dScheduler = FollowTickScheduler(
     maximumFramesPerSecond: { 60 },
     monotonicNow: { sch6dClock },
     stableDelayHint: { 0.05 },
-    stableIntervalHint: { 0.5 },
+    stableIntervalHint: { 0.2 },
     makeTimer: { interval, repeats, callback in
         let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
         sch6dTimers.append(timer)
