@@ -266,3 +266,24 @@ P0 drag freeze root-caused to baseline display-link starvation (f62bfd9), fixed 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: onscreen enumeration + cache cap rounds R6-R8
+
+**Date**: 2026-08-26
+**Task**: onscreen enumeration + cache cap rounds R6-R8
+**Branch**: `codex/perf-startup-idle-cpu`
+
+### Summary
+
+User rejected 0.2s backoff latency; reverted to 0.1s and slimmed enumeration to optionOnScreenOnly (8.6ms/602 to 1.26ms/56, offscreen windows proven unconsumed via T-enum safety nets). QA then caught v3 cache 1.29MB exceeding the 1MiB read cap reproducing the original 28s 100% startup; raised cap to 8MiB with persist guard (T3h/T3i). Final QA: launch 13-15% incl first refresh, steady ~13% at 10Hz. r6/r7/r8 APPROVED; feature parked at 3eee158.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3eee15895f98174c34459c2df77e954f75da9444` | (see git log) |
+
+### Status
+
+[OK] **Completed**

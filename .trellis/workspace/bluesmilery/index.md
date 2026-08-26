@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
+- **Total Sessions**: 11
 - **Last Active**: 2026-08-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~268 | Active |
+| `journal-1.md` | ~289 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-08-26 | onscreen enumeration + cache cap rounds R6-R8 | `3eee15895f98174c34459c2df77e954f75da9444` | `codex/perf-startup-idle-cpu` |
 | 10 | 2026-08-26 | drag-freeze fix + stable backoff rounds | `1a8432311aba77d1729faa1f1a9a909587c7bc55` | `codex/perf-startup-idle-cpu` |
 | 9 | 2026-08-26 | perf-startup-idle-cpu L2 delivery | `8dc8f48ed67fdd391964b34178c47111417c625d` | `codex/perf-startup-idle-cpu` |
 | 8 | 2026-08-21 | 完成底座统计与详情卡视觉优化 | `bc3c52f`, `f547229`, `ff098a4`, `22fad6d`, `835588f`, `f81d27e`, `66750f4`, `9556ba0`, `2db5466` | `dev` |
