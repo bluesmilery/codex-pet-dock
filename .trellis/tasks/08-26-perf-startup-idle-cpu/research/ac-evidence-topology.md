@@ -30,6 +30,9 @@
   is withdrawn (constant 0.1s again) and window enumeration switches to
   `.optionOnScreenOnly`; see the R6 section below. Conclusions in the
   stable-backoff section above are superseded by R6.
+- R6-QA fix round (same work tree, on top of the R6 changes, not yet frozen):
+  startup 100% CPU regression traced to the 1 MiB cache-size gate rejecting a
+  legitimately grown v3 cache; see the R6-QA section below.
 
 ## Baseline and gates
 
@@ -147,6 +150,40 @@ work (headless suites cannot claim it).
   1.26ms/56）来自主管 2026-08-26 派发简报；语义安全网在换选项前的基线运行
   （本 worktree，UI 406 passed / 0 failed）先确认全绿，之后才切换生产枚举选项。
 
+## R6-QA 启动 100% CPU 回归（token cache 尺寸门禁）
+
+### QA 实测与根因链
+
+- QA 实测（用户原始症状"启动 100% CPU"复发）：`token-cache.json` 实际
+  1,345,292 字节，超过 `maxCacheBytes = 1_048_576`（旧值）；首刷全量重解析
+  207 文件 / 613MB 日志约 28 秒，采样 window1-2 内每 10s 窗口约 10s CPU（单核
+  打满），期间零 follow-tick 日志。
+- 根因链：`readCacheData` 的 `size <= maxCacheBytes` 门禁把超限缓存整体拒绝
+  → `memCache` 空 → 每次启动都全量重解析；且 `persist()` 写盘无大小检查，
+  首刷后把 >1MiB 的缓存原样写回 → 文件持续超限 → 每次启动重演。
+- 尺寸定性：v3 `points` 积累是**合法增长**——`readPoints` 开头的淘汰逻辑会把
+  移出扫描窗口的文件条目整体删除，稳态尺寸受窗口跨度约束（实测 1.3MB；重负载
+  估算 3-4MB）。旧 1MiB 上限把合法稳态当异常拒掉。
+
+### 修复与 AC 映射
+
+| AC | Trigger / disturbance | Production consumer / chain | Final owner / assertion | Evidence |
+| --- | --- | --- | --- | --- |
+| QA1 合法超 1MiB 缓存被接受 | 程序化生成 19,709 点的合法 v3 缓存（1,320,616 字节，size/parsedBytes 与磁盘文件一致，JSON 与生产编码同构）经 cacheURL 注入 | `readCacheData` 尺寸门禁 → init 解码 → `readPoints` size 命中 → 复用缓存 points | `debugFilesParsed == 0` 且 19,709 点全部从缓存进入 `TokenWindow` 输出（红：旧门禁下 parsed=1、points=1） | `T3h` |
+| QA2 persist 超限跳过落盘 | 种子 8,319,101 字节（≤8MiB 门禁），磁盘文件追加 3,942 行触发 v3 增量 → 编码 8.58MB > 8MiB | `readPoints` 增量解析 → `persist()` 编码超限 guard → 跳过 `writeCache` | 磁盘字节保持种子不变（8,319,101 == 8,319,101）；进程内缓存继续命中（第二次 readPoints 同输出，parsed=0、inc=1）（红：旧实现把 264,300 字节重解析缓存写回） | `T3i` |
+
+### 修复内容与 provenance
+
+- `maxCacheBytes` 1_048_576 → 8_388_608：定位为防损坏护栏而非配额，注释说明
+  合法增长有界的原因（窗口淘汰 + 实测 1.3MB / 重负载估算 3-4MB）。
+- `persist()` 增加编码后超限跳过落盘的 guard，降级语义：进程内缓存继续工作，
+  磁盘保留上一次合法写入，下次启动顶多一次全量解析，不再白写注定被拒的文件。
+- 种子缓存由测试侧镜像 Codable（与生产 `CacheEntry`/`TokenUsagePoint` 同形状）
+  + 默认 `JSONEncoder` 生成，保证磁盘格式与生产编解码一致；红→绿均在本
+  worktree 实跑（红：`T3h`/`T3i` FAIL 2 条；绿：0 FAIL，节内 2 passed）。
+- 尺寸/耗时数字（1,345,292 bytes、28s、~10s/10s 窗口、207 文件/613MB）来自主管
+  2026-08-26 QA 简报；本修复轮未重采样真机 CPU（headless 无法覆盖，QA 复测项）。
+
 ## Manual / device QA gaps
 
 These cannot be truthfully claimed by the headless suites and remain for user
@@ -171,6 +208,7 @@ To be filled only from the final work-tree commands:
 
 - `swift build -c release`: PASS, 0 warnings.
 - `make test PYTHON=<conda-base-python>`: PASS.
-- R6 round (this tree): UI 406 passed / 0 failed (F24-F26 删除 -3、T-enum5/5b/6
-  新增 +3、T-sch6b 删除 -1). Data: 137 passed / 0 failed. Shell: 99 passed / 0
-  failed. docs-check / test-docs / test-privacy 均随 `make test` 通过。
+- R6 round: UI 406 / Data 137 / Shell 99. R6-QA round (this tree): UI 406
+  passed / 0 failed. Data: 139 passed / 0 failed（+2：T3h/T3i）。Shell: 99
+  passed / 0 failed。全量日志 `FAIL` 计数 0；docs-check / test-docs /
+  test-privacy 均随 `make test` 通过。

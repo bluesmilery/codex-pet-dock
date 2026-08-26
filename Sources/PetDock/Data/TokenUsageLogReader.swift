@@ -32,7 +32,13 @@ extension FileHandle: TokenLogFileHandle {}
 /// 复用，绝不持久化原始路径。
 struct TokenUsageLogReader: TokenLogReading {
     private static let parseChunkSize = 1 << 20
-    private static let maxCacheBytes: Int64 = 1_048_576
+    /// 磁盘缓存大小护栏（防损坏/防替换的保守上限，不是配额）。v3 缓存的合法增长有界：
+    /// points 只来自仍在扫描窗口内的会话文件，readPoints 开头的淘汰逻辑会把移出窗口的
+    /// 文件条目整体删除，稳态尺寸受窗口跨度约束。实测 207 文件/613MB 日志时缓存约
+    /// 1.3MB，重负载估算 3-4MB；旧上限 1MiB 会把完全合法的缓存整拒，导致每次启动
+    /// 全量重解析（QA P1：~28s 100% CPU）。取 8MiB：覆盖合法稳态余量，同时仍能拦截
+    /// 异常膨胀（损坏/被替换的 cache 文件不被整体读入内存）。
+    private static let maxCacheBytes: Int64 = 8_388_608
 
     let sessionsRoot: URL
     /// 增量缓存落盘位置（nil=仅进程内）。
@@ -153,6 +159,10 @@ struct TokenUsageLogReader: TokenLogReading {
 
     private func persist() {
         guard let cacheURL, let data = try? JSONEncoder().encode(memCache) else { return }
+        // 编码后超过 maxCacheBytes 时跳过落盘（降级语义）：进程内缓存继续正常服务，
+        // 磁盘保留上一次成功写入的合法缓存——下次启动顶多回落到一次全量解析，
+        // 优于每次刷新都把注定被读门禁拒绝的超限文件写回磁盘（白写 + 启动重演）。
+        guard Int64(data.count) <= Self.maxCacheBytes else { return }
         writeCache(data, to: cacheURL)
     }
 
