@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
-- **Last Active**: 2026-08-26
+- **Total Sessions**: 16
+- **Last Active**: 2026-08-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~373 | Active |
+| `journal-1.md` | ~407 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-08-27 | Park CS live-layer anchor on feature/cs-live-layer-anchor | `85d83529fbc76ff1da4f2dfa9f690a1c4b3a709c` | `feature/cs-live-layer-anchor` |
 | 15 | 2026-08-26 | English-only commit messages: rule + full-history rewrite | `e6f5e80401f1115b69105447f41f53d23a36a5b6` | `dev` |
 | 14 | 2026-08-26 | v0.4.0 history scrub: rewrite instead of follow-up commits | `0dc2df4c02fd520c8de53d9e6fc814397ab11ccf` | `dev` |
 | 13 | 2026-08-26 | v0.4.0 release: merge, gates, privacy scrub, publish | `3db44765f268dda13f43b32db94453c081214c47` | `codex/perf-startup-idle-cpu` |

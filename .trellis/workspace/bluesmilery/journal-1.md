@@ -371,3 +371,37 @@ User set a new rule: commit messages must be English-only, and asked history to 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 16: Park CS live-layer anchor on feature/cs-live-layer-anchor
+
+**Date**: 2026-08-27
+**Task**: Park CS live-layer anchor on feature/cs-live-layer-anchor
+**Branch**: `feature/cs-live-layer-anchor`
+
+### Summary
+
+Accepted live-layer CS dock anchor with idle-CPU follow-up; parked 85d8352 on feature/cs-live-layer-anchor after Review P0/P1/P2=0 and real-device GO. Not merged to dev.
+
+### Main Changes
+
+- Select live CS via Mascot consistency window; reference channel captures Mascot only at 1Hz when stable
+- Keep DockPanel/Follower smoothness and idle cadence; do not double-capture CS
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `85d83529fbc76ff1da4f2dfa9f690a1c4b3a709c` | (see git log) |
+
+### Testing
+
+- [OK] UI 5x414/0; release 0 warning; real-device AC5/AC6 GO on archived 85d8352 app
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Dedicated integration session: serial merge feature/cs-live-layer-anchor into local dev
