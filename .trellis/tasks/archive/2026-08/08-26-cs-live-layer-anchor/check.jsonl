@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/macos/quality-guidelines.md", "reason": "Self-check list: evidence topology, consumer/composition/owner contracts, zero-warning gates"}
+{"file": ".trellis/spec/macos/privacy-guidelines.md", "reason": "Self-check list: pixel stats privacy and on-disk boundary"}

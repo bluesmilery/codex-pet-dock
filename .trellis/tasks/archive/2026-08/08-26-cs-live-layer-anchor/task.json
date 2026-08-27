@@ -1,0 +1,28 @@
+{
+  "id": "cs-live-layer-anchor",
+  "name": "cs-live-layer-anchor",
+  "title": "Fix dock anchor regression from stale composition surface layers",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "PetTracker.swift FollowTickPlan.swift BubbleVisibility.swift Tests/main.swift docs/verification",
+  "package": null,
+  "priority": "P2",
+  "creator": "bluesmilery",
+  "assignee": "bluesmilery",
+  "createdAt": "2026-08-26",
+  "completedAt": "2026-08-27",
+  "branch": "codex/cs-live-layer-anchor",
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "worktree_path": "<repo>-worktrees/cs-live-layer-anchor"
+  }
+}
