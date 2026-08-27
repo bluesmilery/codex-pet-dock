@@ -2551,15 +2551,9 @@ func productionProbeCadence(
             releaseFirstCapture.withLock { $0 = true }
         }
     }
-    var referenceDone = false
-    for _ in 0..<200 {
-        let doneNow = probe.lock.withLock { !$0.referenceInFlight }
-        if doneNow { referenceDone = true; break }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.005))
-    }
-    _ = referenceDone
-    _ = waitProbeChannelsIdle(probe)
-    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+    // Do not pump waitProbeChannelsIdle here: in-flight T-sch4d samples the
+    // remaining timer immediately after tick 2. Extra RunLoop pumping lets the
+    // reference-channel completion rewrite that timer (0.09 -> ~0.01).
     let activeIntervals = timers.filter { !$0.invalidated }.map { $0.interval }
     scheduler.stop()
     return ProductionProbeCadenceResult(
@@ -4301,7 +4295,8 @@ func csRunTwoTickLayout(
     probe: BubbleVisibilityProbe,
     dock: DockPanel,
     obstacleCounts: OSAllocatedUnfairLock<[Int]>,
-    candidates: [WinCandidate]
+    candidates: [WinCandidate],
+    holdFirstCapture: OSAllocatedUnfairLock<Bool>? = nil
 ) -> Bool {
     func place() -> Bool {
         FollowLayoutPass.placeDock(
@@ -4316,6 +4311,7 @@ func csRunTwoTickLayout(
             })
     }
     _ = place()
+    holdFirstCapture?.withLock { $0 = true }
     let completed = waitProbeChannelsIdle(probe)
     _ = place()
     return completed
@@ -4382,8 +4378,12 @@ check("T-cs6b ACT噪声点观察=hidden;Composition代表=visible(宠物像素)"
 // 通道引入过度避让。首 tick 无观察数据 → 回退窗口底锚 388 且跳过（计数 0）；次 tick
 // stats visible 内容 bbox 进入障碍集（计数 1）但锚定内容底、无垂直重叠。
 csTime = 24_000
+let csSurfOnlyRelease = OSAllocatedUnfairLock(initialState: false)
 let csSurfOnlyCap: BubbleCapturer = { _ in
-    .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362))
+    while !csSurfOnlyRelease.withLock({ $0 }) {
+        try? await Task.sleep(nanoseconds: 2_000_000)
+    }
+    return .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 362))
 }
 let csSurfOnlyProbe = BubbleVisibilityProbe(
     monotonicNow: { csTime }, canCapture: { true }, capturer: csSurfOnlyCap)
@@ -4391,7 +4391,8 @@ let csSurfOnlyDock = DockPanel()
 let csSurfOnlyCounts = OSAllocatedUnfairLock(initialState: [Int]())
 let csSurfOnlyOK = csRunTwoTickLayout(
     probe: csSurfOnlyProbe, dock: csSurfOnlyDock,
-    obstacleCounts: csSurfOnlyCounts, candidates: [csMascot] + csSurfaces)
+    obstacleCounts: csSurfOnlyCounts, candidates: [csMascot] + csSurfaces,
+    holdFirstCapture: csSurfOnlyRelease)
 check("T-cs7 收起态仅Composition(内容底abs360)→无垂直重叠→dock内容底基础位362",
       csSurfOnlyOK && dockFrameNear(csSurfOnlyDock.frame, csAppKitFrame(y: 362))
         && csSurfOnlyCounts.withLock { $0 } == [0, 1],

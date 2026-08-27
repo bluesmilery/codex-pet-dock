@@ -98,3 +98,17 @@
 | R3 | 412 passed / 0 failed, exit 0 |
 | R4 | 412 passed / 0 failed, exit 0 |
 | R5 | 412 passed / 0 failed, exit 0 |
+
+Round-3 independent Reviewer re-ran the same SHA 5 times and observed 3×412/0 + T-sch4d + T-cs7 residual races. Follow-up test-only patch (this commit):
+- T-cs7 / `csRunTwoTickLayout` now latches the first capturer like T-cs11 so tick-1 cannot observe cache.
+- `productionProbeCadence` no longer pumps `waitProbeChannelsIdle` before sampling the remaining timer (T-sch4d in-flight remaining-interval assertion).
+
+Stability on this HEAD (binary /tmp/petdock-uitests-flake6):
+
+| 轮次 | 结果 |
+| --- | --- |
+| R1 | 412 passed / 0 failed, exit 0 |
+| R2 | 412 passed / 0 failed, exit 0 |
+| R3 | 412 passed / 0 failed, exit 0 |
+| R4 | 412 passed / 0 failed, exit 0 |
+| R5 | 412 passed / 0 failed, exit 0 |
