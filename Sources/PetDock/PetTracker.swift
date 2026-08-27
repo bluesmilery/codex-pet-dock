@@ -257,17 +257,16 @@ enum PetTracker {
     /// 前两类为**动态几何窗**，第三类依赖宿主实测稳定标题：共用前置（同 owner / onscreen / alpha>0 / layer>=3 / 非主窗 / 水平投影与 pet 重叠）。
     /// 排除 Mascot 自身与 main(layer0)。**不改变 selectPet 的合理回退**（障碍仅用于几何避让）。
     ///
-    /// Composition Surface 通道按**标题**去重（跨 bounds）：candidates 输入顺序即
-    /// CGWindowList 的前到后顺序，首个命中的实例保留为唯一代表，其余 CS 实例不论
-    /// bounds 全部跳过。CS 是宿主的重复合成层，仅最前层内容对用户可见；后层可能包含
-    /// 宿主布局切换后的残影（desktopIndependentWindow 捕获窗口自身内容、感知不到前层
-    /// 遮挡），把它当障碍会在气泡位于宠物上方时把 dock 推到幽灵卡片下方（2026-08-24
-    /// 现场：多 bounds CS 并存，后层 86px 幽灵内容使 dock 多让 ~31px 出现大片空白）。
+    /// Composition Surface 通道按**标题**命中（跨 bounds）：全部命中实例经签名去重后
+    /// 保留为代表候选集——同一签名（owner/title/layer/bounds 完全相同）的重复实例按
+    /// 输入顺序取首个；不同签名的实例全部保留，由 FollowLayoutPass 的活层代表选择
+    /// （Mascot 脚底一致性窗口 + 最小 csBottomAbs）裁决唯一布局锚代表。2026-08-26 现场：
+    /// 死层残影排在活层前面，"列表首层=活层"假设失效；仅像素几何一致性可区分死/活层。
     static func obstaclesNear(mascot: WinCandidate, candidates: [WinCandidate]) -> [WinCandidate] {
         guard !mascot.ownerName.isEmpty else { return [] }
         let pet = mascot.bounds
         let petMaxY = pet.maxY
-        var compositionSurfaceRep: WinCandidate?
+        var compositionSurfaceCandidates: [WinCandidate] = []
         var geometricObstacles: [WinCandidate] = []
         for c in candidates {
             // 共用前置：同 owner / 在屏 / 可见 / 浮层 / 非主窗 / 排除 mascot 自身 / 水平投影与 pet 重叠
@@ -278,18 +277,17 @@ enum PetTracker {
                   c.bounds.origin.x < pet.maxX, c.bounds.origin.x + c.bounds.width > pet.minX
             else { continue }
             if isCompositionSurfaceObstacle(c, petMaxY: petMaxY) {
-                // 标题级去重：仅保留输入顺序（前到后）首个 CS 实例，被遮挡的后层残影
-                // 不产生障碍/锚/像素捕获（见函数头注释）。
-                if compositionSurfaceRep == nil { compositionSurfaceRep = c }
+                // 标题命中 + 签名去重（跨 bounds 保留不同签名实例）：唯一布局锚代表
+                // 由 FollowLayoutPass 的活层一致性窗口裁决（见函数头注释）。
+                compositionSurfaceCandidates.append(c)
             } else if isBubbleObstacle(c, petMaxY: petMaxY) || isControlObstacle(c, petMaxY: petMaxY) {
                 geometricObstacles.append(c)
             }
         }
         var obstacles = deduplicatedObstacles(geometricObstacles)
-        if let rep = compositionSurfaceRep { obstacles.append(rep) }
-        // wid 升序仅是输出稳定性排序，不参与 CS 代表选择——代表已在上方循环按原始
-        // candidates 顺序（前到后）选定，若在排序后的列表上取首位会选中 wid 最小的
-        // 最深层残影（现场前层 wid 反而更大）。
+        obstacles += deduplicatedObstacles(compositionSurfaceCandidates)
+        // wid 升序仅是输出稳定性排序，不参与 CS 代表选择——活层代表由
+        // FollowLayoutPass 按 Mascot 脚底一致性窗口在候选集内裁决。
         return obstacles.sorted { $0.wid < $1.wid }
     }
 
@@ -321,8 +319,8 @@ enum PetTracker {
     /// (owner,title,layer,bounds) 实例。wid 升序取首个代表，避免重复像素捕获。
     /// 去重发生在 obstaclesNear 输出边界，保证布局障碍集与 BubbleVisibilityProbe 候选集
     /// 一致——代表以外的实例不会因无 cache 回退保守 visible 的整窗 bounds 避让。
-    /// Composition Surface 通道不经过此处：它按标题跨 bounds 去重并取列表顺序首位
-    ///（前到后最可见层），见 obstaclesNear。
+    /// Composition Surface 通道同样经过此处（签名 = owner/title/layer/bounds）：
+    /// 同签名重复实例去重，不同签名实例保留给活层代表选择（见 obstaclesNear）。
     private static func deduplicatedObstacles(_ obstacles: [WinCandidate]) -> [WinCandidate] {
         struct Signature: Hashable {
             let ownerName: String

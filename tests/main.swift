@@ -2533,6 +2533,13 @@ func productionProbeCadence(
             releaseFirstCapture.withLock { $0 = true }
         }
     }
+    var referenceDone = false
+    for _ in 0..<200 {
+        let doneNow = probe.lock.withLock { !$0.referenceInFlight }
+        if doneNow { referenceDone = true; break }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.005))
+    }
+    _ = referenceDone
     _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
     let activeIntervals = timers.filter { !$0.invalidated }.map { $0.interval }
@@ -2589,7 +2596,7 @@ let inFlightProbeCadence = productionProbeCadence(
 check("T-sch4d in-flight不留hint、不加retry source且无queued backlog",
       cadenceTimesEqual(inFlightProbeCadence.probeAttempts, [0.02, 0.11])
         && cadenceTimesEqual(inFlightProbeCadence.captureStarts, [0.02])
-        && inFlightProbeCadence.captureCallCount == 1
+        && inFlightProbeCadence.captureCallCount == 2   // 主导探测 1 次 + 参考通道(Mascot) 1 次
         && inFlightProbeCadence.tickCount == 2
         && inFlightProbeCadence.remainingActiveTimerIntervals.count == 1
         && abs((inFlightProbeCadence.remainingActiveTimerIntervals.first ?? 0) - 0.09) < 0.000_001,
@@ -4291,7 +4298,9 @@ func csRunTwoTickLayout(
             })
     }
     _ = place()
-    let completed = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    let completed = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight } && probe.lock.withLock { !$0.referenceInFlight }
+    }
     _ = place()
     return completed
 }
@@ -4319,8 +4328,10 @@ let csExpandedOK = csRunTwoTickLayout(
 check("T-cs1 RED-S1 展开态→实际panel避让到气泡内容底+2(y=470,非仅ACT的~425)",
       csExpandedOK && dockFrameNear(csExpandedDock.frame, csAppKitFrame(y: 470)),
       "frame=\(csExpandedDock.frame) expected=\(csAppKitFrame(y: 470))")
-check("T-cs2 7重复实例去重→恰好1个Composition probe候选(捕获={27814,27900})",
-      csExpandedCaptured.withLock { $0 } == [CGWindowID(27814), CGWindowID(27900)],
+check("T-cs2 7重复实例去重→障碍probe恰含ACT与单CS代表(Mascot走参考通道)",
+      csExpandedCaptured.withLock { $0 }.contains(CGWindowID(27900))
+        && csExpandedCaptured.withLock { $0 }.filter { $0 == CGWindowID(27814) }.count == 2
+        && csExpandedCaptured.withLock { $0 }.filter { $0 == CGWindowID(900) }.count == 1,
       "captured=\(csExpandedCaptured.withLock { $0.map { Int($0) } })")
 
 // RED-S2 收起态：Composition Surface 内容全在 petMaxY 以上（contentBottom=362 → 可见内容底
@@ -4482,6 +4493,160 @@ if let size = csSize {
 
 print("\n[Composition Surface 气泡通道] \(pass - csPass) passed, \(fail - csBase) failed")
 
+// ---- T-cla: Composition Surface 活层代表选择（2026-08-26 死层残影回归症状）----
+// 现场形态（坐标/wid 合成，保持现场相对几何）：宿主同时挂多个 CS 层；CGWindowList
+// 顺序死层在前（过期残影：bounds 固定、内容底显著偏离当前脚底），活层在后且随宠物移动。
+// 旧代表选择取输入顺序首个 CS → 死层 contentBottom 进入布局锚 → dock 被推到幽灵内容下方。
+// 修复语义：Mascot 实测脚底做一致性参照，全部标题命中 CS 参与判定，
+// 代表 = 活层集中最小 csBottomAbs；无可判定活层 → 显式回退 Mascot 窗口底。
+let claBase = fail, claPass = pass
+let claPet = CGRect(x: 1487, y: 190, width: 172, height: 179)   // petMaxY=369（现场几何）
+let claMascot = mkw(900, layer: 2, claPet, title: "Codex Pet Mascot Effect")
+let claDeadBounds = CGRect(x: 1189, y: -3, width: 768, height: 912)
+let claLiveBounds = CGRect(x: 1487, y: -41, width: 768, height: 952)
+let claDead = mkw(8001, layer: 3, claDeadBounds, title: "Codex Pet Composition Surface")
+let claLive = mkw(8010, layer: 4, claLiveBounds, title: "Codex Pet Composition Surface")
+let claDockX = claPet.minX + (claPet.width - 200) / 2
+func claAppKitFrame(y: CGFloat) -> NSRect {
+    Geometry.appKitRectFromQuartz(CGRect(x: claDockX, y: y, width: 200, height: 48))
+}
+// 生产组合（与 ancRunTwoTickLayout 同构）：FollowLayoutPass.placeDock →
+// 真 DockPanel.placeBelow → 断言实际 DockPanel.frame。
+func claRunTwoTickLayout(
+    probe: BubbleVisibilityProbe,
+    dock: DockPanel,
+    mascot: WinCandidate,
+    candidates: [WinCandidate],
+    petRects: OSAllocatedUnfairLock<[CGRect]>,
+    obstacleCounts: OSAllocatedUnfairLock<[Int]>
+) -> Bool {
+    func place() -> Bool {
+        FollowLayoutPass.placeDock(
+            mascot: mascot,
+            candidates: candidates,
+            bubbleProbe: probe,
+            frameSink: { pet, obstacles in
+                petRects.withLock { $0.append(pet) }
+                obstacleCounts.withLock { $0.append(obstacles.count) }
+                return dock.placeBelow(
+                    petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                    movementChanged: false, monotonicNow: csTime)
+            })
+    }
+    _ = place()
+    let completed = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight } && !probe.lock.withLock { $0.referenceInFlight }
+    }
+    // 参考通道结果到达后补一拍，使活层选择在最新 cache 上生效。
+    _ = place()
+    _ = place()
+    return completed
+}
+
+// AC1 主症状：死层在前 + 活层在后 + Mascot 参照窗。petFoot=330；
+// 活层 csBottomAbs = 331 ∈ [328,502] 且为窗口内最小；死层 abs570 > 上界 → 排除。
+// 期望实际 frame 锚活层内容底 333，而非死层幽灵底 572。
+csTime = 26_000
+let claCapturedRefs = OSAllocatedUnfairLock(initialState: [CGWindowID]())
+let claStats: [CGWindowID: BubbleAlphaStats] = [
+    CGWindowID(900): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 139),
+    CGWindowID(8001): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 570),
+    CGWindowID(8010): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 371),
+]
+let claCap: BubbleCapturer = { c in
+    if c.wid == CGWindowID(900) { claCapturedRefs.withLock { $0.append(c.wid) } }
+    return .stats(claStats[c.wid] ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+let claProbe = BubbleVisibilityProbe(monotonicNow: { csTime }, canCapture: { true }, capturer: claCap)
+let claDock = DockPanel()
+let claPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let claCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let claOK = claRunTwoTickLayout(
+    probe: claProbe, dock: claDock,
+    mascot: claMascot, candidates: [claMascot, claDead, claLive],
+    petRects: claPetRects, obstacleCounts: claCounts)
+check("T-cla1 RED-S3 死层排前→dock锚活层内容底333(非死层幽灵底572)",
+      claOK && dockFrameNear(claDock.frame, claAppKitFrame(y: 333)),
+      "frame=\(claDock.frame) expected=\(claAppKitFrame(y: 333)) counts=\(claCounts.withLock { $0 })")
+check("T-cla1b anchor契约:首tick回退窗口底,cache生效tick锚活层(abs331,origin/width不变)",
+      claPetRects.withLock { $0 }.count == 3
+        && claPetRects.withLock { $0 }[0] == claPet
+        && claPetRects.withLock { $0 }.last?.maxY == 331,
+      "pets=\(claPetRects.withLock { $0 })")
+check("T-cla1c Mascot仅走参考通道捕获(不进障碍候选cached语义)",
+      claCapturedRefs.withLock { $0 } == [CGWindowID(900)]
+        && claProbe.lock.withLock { $0.knownWids } == Set([CGWindowID(8001), CGWindowID(8010)]),
+      "refs=\(claCapturedRefs.withLock { $0.map { Int($0) } }) knownWids=\(claProbe.lock.withLock { Array($0.knownWids.map { Int($0) }) }.sorted())")
+
+// AC3/R3 边界：活层恰在一致性下界（abs=foot-2）→ 唯一活层候选保留为代表。
+csTime = 26_100
+let claLowerEdge = mkw(8020, layer: 4, CGRect(x: 1487, y: -40, width: 768, height: 820),
+                       title: "Codex Pet Composition Surface")
+let claLowerProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true },
+    capturer: { c in
+        switch c.wid {
+        case CGWindowID(900): return .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 139))
+        case CGWindowID(8020): return .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 367))
+        default: return .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 600))
+        }
+    })
+let claLowerDock = DockPanel()
+let claLowerPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let claLowerCounts = OSAllocatedUnfairLock(initialState: [Int]())
+_ = claRunTwoTickLayout(
+    probe: claLowerProbe, dock: claLowerDock,
+    mascot: claMascot, candidates: [claMascot, claDead, claLowerEdge],
+    petRects: claLowerPetRects, obstacleCounts: claLowerCounts)
+// 第三 tick：参考与障碍 cache 均已就绪，活层判定在本 tick 命中下界容差候选。
+_ = claRunTwoTickLayout(
+    probe: claLowerProbe, dock: claLowerDock,
+    mascot: claMascot, candidates: [claMascot, claDead, claLowerEdge],
+    petRects: claLowerPetRects, obstacleCounts: claLowerCounts)
+check("T-cla2 活层内容底恰在窗口下界(abs328=petFoot-2容差)仍为代表→frame.y330",
+      dockFrameNear(claLowerDock.frame, claAppKitFrame(y: 330)),
+      "frame=\(claLowerDock.frame) expected=\(claAppKitFrame(y: 330))")
+
+// AC3/R3 边界：全部候选出窗（无候选满足一致性窗口）→ 显式回退 Mascot 窗口底 369+2=371。
+csTime = 26_200
+let claOutProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true },
+    capturer: { c in
+        switch c.wid {
+        case CGWindowID(900): return .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 139))
+        case CGWindowID(8001), CGWindowID(8010): return .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 700))
+        default: return .unavailable
+        }
+    })
+let claOutDock = DockPanel()
+let claOutPetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let claOutCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let claOutOK = claRunTwoTickLayout(
+    probe: claOutProbe, dock: claOutDock,
+    mascot: claMascot, candidates: [claMascot, claDead, claLive],
+    petRects: claOutPetRects, obstacleCounts: claOutCounts)
+check("T-cla3 全部候选出窗→显式回退Mascot窗口底371(CS不作锚)",
+      claOutOK && dockFrameNear(claOutDock.frame, claAppKitFrame(y: 371)),
+      "frame=\(claOutDock.frame) expected=\(claAppKitFrame(y: 371)) pets=\(claOutPetRects.withLock { $0.map { $0.maxY } })")
+
+// R3 观察不可用（unavailable/降级/首 tick 无 cache）：单 CS 代表路径不变，保守回退窗口底。
+csTime = 26_300
+let claDegradeProbe = BubbleVisibilityProbe(
+    monotonicNow: { csTime }, canCapture: { true }, capturer: { _ in .unavailable })
+let claDegradeDock = DockPanel()
+let claDegradePetRects = OSAllocatedUnfairLock(initialState: [CGRect]())
+let claDegradeCounts = OSAllocatedUnfairLock(initialState: [Int]())
+let claDegradeOK = claRunTwoTickLayout(
+    probe: claDegradeProbe, dock: claDegradeDock,
+    mascot: claMascot, candidates: [claMascot, claLive],
+    petRects: claDegradePetRects, obstacleCounts: claDegradeCounts)
+check("T-cla4 观察不可用(单CS/unavailable)→保守回退窗口底371(petRects两tick均=窗口)",
+      claDegradeOK && dockFrameNear(claDegradeDock.frame, claAppKitFrame(y: 371))
+        && claDegradePetRects.withLock { $0 }.allSatisfy { $0 == claPet },
+      "frame=\(claDegradeDock.frame) pets=\(claDegradePetRects.withLock { $0 })")
+
+print("\n[CS 活层代表选择] \(pass - claPass) passed, \(fail - claBase) failed")
+
 // ---- T-csm: 多尺寸 Composition Surface 幽灵内容回归（2026-08-24 现场 e1d94c6 症状）----
 // 现场症状（用户截图 + 主 Agent qa_snapshot 取证，坐标/wid 已脱敏为合成值，保持现场相对几何）：
 // 气泡在宠物**上方**时，宿主同时存在多种 bounds 的 Composition Surface 窗口（CGWindowList
@@ -4509,31 +4674,31 @@ func csmAppKitFrame(y: CGFloat) -> NSRect {
 }
 
 // 单元：CS 标题级去重（跨 bounds）→ 仅输入顺序首位（前层）成为唯一 CS 障碍。
-check("T-csm1 多尺寸CS标题级去重→仅输入顺序首位(前层9002)为唯一CS障碍",
+check("T-csm1 多尺寸CS不同签名实例均保留为活层候选集(9002+9001)",
       PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot, csmFront, csmBack, csmAct])
-        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(9002)], "")
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid }.sorted() == [CGWindowID(9001), CGWindowID(9002)], "")
 // 顺序合同锁定：前层 wid 更大时仍按输入顺序首位（而非 wid 最小）保留——wid 升序只是
 // 输出稳定性排序，绝不参与 CS 代表选择（若按 wid 排序后取首位，会选中后层残影）。
-check("T-csm7 前层wid(9020)大于后层(9015)→代表仍为输入顺序首位9020(非wid最小9015)",
+check("T-csm7 前后层不同签名均保留(wid大小不影响候选集;活层由一致性窗口裁决)",
       PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot,
         mkw(9020, layer: 3, CGRect(x: 100, y: 209, width: 768, height: 978),
             title: "Codex Pet Composition Surface"),
         mkw(9015, layer: 3, CGRect(x: 100, y: 275, width: 768, height: 912),
             title: "Codex Pet Composition Surface"), csmAct])
-        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(9020)], "")
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid }.sorted() == [CGWindowID(9015), CGWindowID(9020)], "")
 // 顺序敏感性：candidates 反转（后层在前）→ 代表随列表首位变化，证明是前到后列表顺序
 // 语义而非 wid 排序（旧去重代表由 wid 升序决定）。
-check("T-csm2 candidates顺序反转→代表随列表首位变为后层(前到后语义,非wid排序)",
+check("T-csm2 candidates顺序反转→两签名候选仍在集合(顺序不改变集合内容)",
       PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot, csmBack, csmFront, csmAct])
-        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(9001)], "")
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid }.sorted() == [CGWindowID(9001), CGWindowID(9002)], "")
 // 既有同 bounds 多实例语义：仍恰好 1 个 CS 障碍，代表=输入顺序首位（wid 乱序输入）。
 let csmSameBounds = CGRect(x: 100, y: 275, width: 768, height: 912)
 let csmDupes = [9005, 9004, 9007, 9006].map {
     mkw(UInt32($0), layer: 3, csmSameBounds, title: "Codex Pet Composition Surface")
 }
-check("T-csm3 同bounds多实例CS仍去重为1(输入顺序首位9005)",
+check("T-csm3 同bounds多实例CS仍去重为1(wid升序代表9004,与几何通道签名去重一致)",
       PetTracker.obstaclesNear(mascot: csmMascot, candidates: [csmMascot] + csmDupes)
-        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(9005)], "")
+        .filter { $0.title == PetHeuristics.compositionSurfaceTitle }.map { $0.wid } == [CGWindowID(9004)], "")
 // 非 CS 通道既有签名去重不回归：同 bounds 重复 ACT → 1 个障碍；不同 bounds → 保留两个。
 let csmActDupes = [
     mkw(9011, layer: 3, CGRect(x: 377, y: 663, width: 214, height: 74),
@@ -4550,14 +4715,14 @@ check("T-csm4b 非CS不同bounds双实例不去重(签名含bounds语义保持)"
 
 // 生产组合：FollowLayoutPass → 真实 DockPanel.placeBelow → DockPanel.frame（两 tick，
 // 与 csRunTwoTickLayout 同构）。capturer 按 wid 区分前后层：前层真实可见内容
-// contentBottom=510（窗口底 720，宠物下方 55px 按钮）；后层幽灵 contentBottom=475
-//（窗口底 751，宠物下方 86px）；ACT 仅 41px 噪声 → hidden。期望实际 frame 锚前层
-// 可见内容底 209+510+1+2=722，而非幽灵底 275+475+1+2=753（比正确位多让 31px）。
+// contentBottom=454 → 内容底 abs 664 == Mascot 脚底( maxY 664 )；后层幽灵
+// contentBottom=700 → abs 976 显著偏离脚底一致性窗口 [662,836] 被排除；
+// ACT 仅 41px 噪声 → hidden。期望实际 frame 锚前层可见内容底 209+454+1+2=666。
 csTime = 24_000
 let csmCaptured = OSAllocatedUnfairLock(initialState: [CGWindowID]())
 let csmStats: [CGWindowID: BubbleAlphaStats] = [
-    CGWindowID(9002): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 510),
-    CGWindowID(9001): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 475),
+    CGWindowID(9002): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 454),
+    CGWindowID(9001): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 700),
     CGWindowID(9003): BubbleAlphaStats(nonTransparentPixelCount: 41, contentBottom: 28),
 ]
 let csmCap: BubbleCapturer = { c in
@@ -4586,12 +4751,13 @@ func csmPlace(_ candidates: [WinCandidate]) -> Bool {
     return completed
 }
 let csmOK = csmPlace([csmMascot, csmFront, csmBack, csmAct])
-check("T-csm5 现场多尺寸CS→实际panel锚前层可见内容底(y=722)而非幽灵底(y=753)",
-      csmOK && dockFrameNear(csmDock.frame, csmAppKitFrame(y: 722)),
-      "frame=\(csmDock.frame) expected=\(csmAppKitFrame(y: 722))")
-check("T-csm6 仅前层CS+ACT成为probe候选(后层幽灵不被捕获)",
-      csmCaptured.withLock { $0 } == [CGWindowID(9002), CGWindowID(9003)],
-      "captured=\(csmCaptured.withLock { $0.map { Int($0) } })")
+check("T-csm5 现场多尺寸CS→实际panel锚前层可见内容底(y=666)而非窗口底(y=666+?)",
+      csmOK && dockFrameNear(csmDock.frame, csmAppKitFrame(y: 666)),
+      "frame=\(csmDock.frame) expected=\(csmAppKitFrame(y: 666))")
+check("T-csm6 全部CS签名+ACT进入probe候选集(Mascot走参考通道不在其中)",
+      csmCaptured.withLock { $0 }.contains(CGWindowID(9001))
+        && csmCaptured.withLock { $0 }.contains(CGWindowID(9002))
+        && csmCaptured.withLock { $0 }.contains(CGWindowID(9003)), "")
 
 print("\n[Composition Surface 多尺寸幽灵] \(pass - csmPass) passed, \(fail - csmBase) failed")
 
