@@ -79,3 +79,22 @@
 ## 冻结 SHA
 
 （提交后由 git rev-parse HEAD 填写的 40 位完整 SHA 见提交信息与交付报告；本文档随该提交一并进入候选树。）
+
+## Test flake 根因与谓词修复（P2，round-2）
+
+第二轮 Review 在冻结 SHA 7b133fb 上 5 次复跑 UI 套件，观察到约 1/5 的时序 flake（T-cs7 / T-cs11）。根因是新增独立参考通道后，旧 two-tick helper（cs/anc/csm 及 T-cs11 冷启动）只等待主导 inFlight，参考通道尚未落 cache 时 tick-2 读到回退锚。
+
+修复（测试 only，产品源码相对 7b133fb 字节不变）：
+- 统一 helper waitProbeChannelsIdle：要求主导与参考通道都空闲后再消费 tick-2。
+- T-cs11 用 capturer 门闩保证首 tick 无 cache；T-p1b/T-p1c 用门闩保证重捕获在途、旧 cache 仍生效。
+- T-cla1b / T-anc1b 改为断言 cache 生效后的最终锚（首 tick 回退由 T-cs11 门闩路径覆盖）。不改产品语义或期望数值。
+
+## 稳定性证据（本提交 HEAD，同一二进制 /tmp/petdock-uitests-flake5）
+
+| 轮次 | 结果 |
+| --- | --- |
+| R1 | 412 passed / 0 failed, exit 0 |
+| R2 | 412 passed / 0 failed, exit 0 |
+| R3 | 412 passed / 0 failed, exit 0 |
+| R4 | 412 passed / 0 failed, exit 0 |
+| R5 | 412 passed / 0 failed, exit 0 |

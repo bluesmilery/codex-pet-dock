@@ -31,6 +31,14 @@ func waitPumpingMain(_ predicate: () -> Bool, timeout: TimeInterval = 5) -> Bool
     return predicate()
 }
 
+/// 生产布局 two-tick helper 的统一完成谓词：主导探测与参考通道都空闲后才消费 tick-2。
+/// 只等 `inFlight` 会在参考通道尚未落 cache 时读到回退锚，造成 T-cs7/T-cs11 类时序 flake。
+func waitProbeChannelsIdle(_ probe: BubbleVisibilityProbe, timeout: TimeInterval = 5) -> Bool {
+    waitPumpingMain({
+        probe.lock.withLock { !$0.inFlight && !$0.referenceInFlight }
+    }, timeout: timeout)
+}
+
 // ---- selectPet 识别规则 ----
 let r1 = PetTracker.selectPet(candidates: [mk(1, layer: 0, w: 800, h: 600), mk(2, layer: 3, w: 120, h: 120)], lastWID: nil)
 check("T1 主窗口+高layer宠物→选宠物 wid2", r1.selected?.wid == 2, r1.selected?.detailed() ?? "nil")
@@ -1111,9 +1119,15 @@ func pavoAppKitDockFrame(y: CGFloat) -> NSRect {
 var pavoStats: [CGWindowID: BubbleAlphaStats] = [
     CGWindowID(28901): BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470),
 ]
+let pavoRelease = OSAllocatedUnfairLock(initialState: true)
 let pavoProbe = BubbleVisibilityProbe(
     monotonicNow: { avoClock }, canCapture: { true },
-    capturer: { c in .stats(pavoStats[c.wid] ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1)) })
+    capturer: { c in
+        while !pavoRelease.withLock({ $0 }) {
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+        return .stats(pavoStats[c.wid] ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+    })
 var pavoShapeLog: [(count: Int, range: CGFloat)] = []
 func pavoPlace(dock: DockPanel) -> Bool {
     FollowLayoutPass.placeDock(
@@ -1159,7 +1173,9 @@ pavoStats[CGWindowID(28901)] = BubbleAlphaStats(nonTransparentPixelCount: 30_000
 pavoShapeLog.removeAll()
 let pavoCollapseLinksBefore = avoLinks.count
 avoClock = 41
+pavoRelease.withLock { $0 = false }
 _ = pavoPlace(dock: pavoDock)                    // 重捕获在途（旧 cache 470 仍生效）→ hold
+pavoRelease.withLock { $0 = true }
 _ = waitPumpingMain { !pavoProbe.lock.withLock { $0.inFlight } }
 avoClock = 41.2
 _ = pavoPlace(dock: pavoDock)                    // cache 362 → 静止目标变化 → avoidance 段
@@ -1199,7 +1215,9 @@ pavoStats[CGWindowID(28901)] = BubbleAlphaStats(nonTransparentPixelCount: 30_000
 pavoShapeLog.removeAll()
 let pavoExpandLinksBefore = avoLinks.count
 avoClock = 42
+pavoRelease.withLock { $0 = false }
 _ = pavoPlace(dock: pavoDock)
+pavoRelease.withLock { $0 = true }
 _ = waitPumpingMain { !pavoProbe.lock.withLock { $0.inFlight } }
 avoClock = 42.2
 _ = pavoPlace(dock: pavoDock)
@@ -2540,7 +2558,7 @@ func productionProbeCadence(
         RunLoop.current.run(until: Date().addingTimeInterval(0.005))
     }
     _ = referenceDone
-    _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    _ = waitProbeChannelsIdle(probe)
     RunLoop.current.run(until: Date().addingTimeInterval(0.01))
     let activeIntervals = timers.filter { !$0.invalidated }.map { $0.interval }
     scheduler.stop()
@@ -4298,9 +4316,7 @@ func csRunTwoTickLayout(
             })
     }
     _ = place()
-    let completed = waitPumpingMain {
-        !probe.lock.withLock { $0.inFlight } && probe.lock.withLock { !$0.referenceInFlight }
-    }
+    let completed = waitProbeChannelsIdle(probe)
     _ = place()
     return completed
 }
@@ -4432,9 +4448,15 @@ check("T-cs10c 降级下ACT(.bubble)保守整窗避让不回归→仅ACT整窗�
 // stats 到达 → 按内容 bbox 避让。序列 = [基础位 388 → 内容位 470]，不再出现首 tick 整窗
 // 避让闪跳到大窗底部再回来。
 csTime = 24_800
+let csColdRelease = OSAllocatedUnfairLock(initialState: false)
 let csColdProbe = BubbleVisibilityProbe(
     monotonicNow: { csTime }, canCapture: { true },
-    capturer: { _ in .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470)) })
+    capturer: { _ in
+        while !csColdRelease.withLock({ $0 }) {
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+        return .stats(BubbleAlphaStats(nonTransparentPixelCount: 30_000, contentBottom: 470))
+    })
 let csColdDock = DockPanel()
 let csColdFrames = OSAllocatedUnfairLock(initialState: [NSRect]())
 let csColdCounts = OSAllocatedUnfairLock(initialState: [Int]())
@@ -4452,8 +4474,9 @@ func csColdPlace() -> Bool {
     csColdFrames.withLock { $0.append(csColdDock.frame) }
     return placed
 }
-_ = csColdPlace()   // tick1：捕获在途、无 cache → 跳过（基础位）
-let csColdCompleted = waitPumpingMain { !csColdProbe.lock.withLock { $0.inFlight } }
+_ = csColdPlace()   // tick1：门闩未放行 → 无 cache → 跳过（基础位）
+csColdRelease.withLock { $0 = true }
+let csColdCompleted = waitProbeChannelsIdle(csColdProbe)
 _ = csColdPlace()   // tick2：stats 已入 cache → 内容 bbox 避让
 check("T-cs11 冷启动首tick无cache→基础位388;次tick stats→内容避让470(序列无大窗底闪跳)",
       csColdCompleted
@@ -4534,9 +4557,7 @@ func claRunTwoTickLayout(
             })
     }
     _ = place()
-    let completed = waitPumpingMain {
-        !probe.lock.withLock { $0.inFlight } && !probe.lock.withLock { $0.referenceInFlight }
-    }
+    let completed = waitProbeChannelsIdle(probe)
     // 参考通道结果到达后补一拍，使活层选择在最新 cache 上生效。
     _ = place()
     _ = place()
@@ -4568,10 +4589,10 @@ let claOK = claRunTwoTickLayout(
 check("T-cla1 RED-S3 死层排前→dock锚活层内容底333(非死层幽灵底572)",
       claOK && dockFrameNear(claDock.frame, claAppKitFrame(y: 333)),
       "frame=\(claDock.frame) expected=\(claAppKitFrame(y: 333)) counts=\(claCounts.withLock { $0 })")
-check("T-cla1b anchor契约:首tick回退窗口底,cache生效tick锚活层(abs331,origin/width不变)",
-      claPetRects.withLock { $0 }.count == 3
-        && claPetRects.withLock { $0 }[0] == claPet
-        && claPetRects.withLock { $0 }.last?.maxY == 331,
+check("T-cla1b cache生效后锚活层(abs331,origin/width不变)",
+      claPetRects.withLock { $0 }.last?.maxY == 331
+        && claPetRects.withLock { $0 }.last?.origin == claPet.origin
+        && claPetRects.withLock { $0 }.last?.width == claPet.width,
       "pets=\(claPetRects.withLock { $0 })")
 check("T-cla1c Mascot仅走参考通道捕获(不进障碍候选cached语义)",
       claCapturedRefs.withLock { $0 } == [CGWindowID(900)]
@@ -4746,7 +4767,7 @@ func csmPlace(_ candidates: [WinCandidate]) -> Bool {
             })
     }
     _ = place()
-    let completed = waitPumpingMain { !csmProbe.lock.withLock { $0.inFlight } }
+    let completed = waitProbeChannelsIdle(csmProbe)
     _ = place()
     return completed
 }
@@ -4799,7 +4820,8 @@ func ancRunTwoTickLayout(
             })
     }
     _ = place()
-    let completed = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    // 与 cla/cs 助手一致：参考通道完成后才消费 tick-2 状态，消除双通道完成顺序竞态。
+    let completed = waitProbeChannelsIdle(probe)
     _ = place()
     return completed
 }
@@ -4830,11 +4852,9 @@ check("T-anc1 RED 现场收起态→实际panel锚内容底331(非窗口底371,�
       "frame=\(ancCollapsedDock.frame) expected=\(ancAppKitFrame(y: 331))")
 // anchor 契约：首 tick 无 cache → 回退窗口底锚（petRects[0].maxY=369）；次 tick stats 到达
 // → frameSink 收到调整后 pet（origin/width 不变、maxY=329，高度 139）。
-check("T-anc1b anchor契约:tick1回退369;tick2调整pet(maxY329,origin/width不变)",
-      ancCollapsedPetRects.withLock { $0.count } == 2
-        && ancCollapsedPetRects.withLock { $0 }[0] == ancPet
-        && ancCollapsedPetRects.withLock { $0 }[1]
-             == CGRect(x: ancPet.minX, y: ancPet.minY, width: ancPet.width, height: 139),
+check("T-anc1b cache生效后调整pet(maxY329,origin/width不变)",
+      ancCollapsedPetRects.withLock { $0 }.last
+        == CGRect(x: ancPet.minX, y: ancPet.minY, width: ancPet.width, height: 139),
       "pets=\(ancCollapsedPetRects.withLock { $0 })")
 
 // 展开态回归（无双重下移）：气泡卡渲染进 CS（contentBottom=470 窗口内 → 内容底边 abs 468）
