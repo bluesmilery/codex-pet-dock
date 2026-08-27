@@ -421,10 +421,28 @@ final class BubbleVisibilityProbe: Sendable {
 
     /// FollowLayoutPass 每 tick 同步调用：刷新参考通道当前帧候选（Mascot 参照窗），
     /// 并按独立节拍启动后台参考捕获。参考缓存只服务布局锚活层判定；disabled 时空转。
-    /// 幂等：候选不变、cadence 未到或在途时不重复启动；参考身份变化走
-    /// generation 递增 + 清参考缓存（与障碍通道语义同型、状态完全隔离）。
+    /// 幂等：候选集合与非 bounds 身份快照完全不变且 cadence 未到时，本 tick 只做一次
+    /// 无写入的快速检查并直接返回（无锁写、不启动捕获）；身份变化仍走 generation
+    /// 递增 + 清参考缓存，single-flight 与 stale 拒绝语义不变。
     func updateReferences(_ references: [WinCandidate]) {
+        // 稳态快速路径：WID 集合与非 bounds 身份完全不变且 cadence 未到 → 只读检查后
+        // 直接返回，跳过锁写与捕获启动（单飞/在途时同样无事可做）。语义等价：
+        // unchanged 分支本就不会写状态；任何身份变化/清缓存/启动都仍走下方完整路径。
         guard canCapture() else { return }   // 降级模式参考通道同样空转（与主导探测一致）
+        let steadyStateSkip = lock.withLock { s -> Bool in
+            if s.referenceInFlight || s.referenceKnownWids.isEmpty || s.referenceCacheOutcomes.isEmpty {
+                return false
+            }
+            if references.count != s.referenceKnownWids.count { return false }
+            for candidate in references {
+                guard let known = s.referenceCandidates[candidate.wid],
+                      known.sameWindowIgnoringBounds(BubbleCandidateIdentity(candidate)) else {
+                    return false
+                }
+            }
+            return monotonicNow() - s.lastReferenceCaptureAt < Self.minInterval
+        }
+        if steadyStateSkip { return }
         let refs = references
         let (gen, capturedRefs, shouldStart): (Int, [CGWindowID: BubbleCandidateIdentity], Bool) =
             lock.withLock { s -> (Int, [CGWindowID: BubbleCandidateIdentity], Bool) in

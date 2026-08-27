@@ -72,6 +72,10 @@
 
 隐私声明：本任务像素处理仍仅限内存 alpha 统计（computeAlphaStats 口径未变）；参考通道只传递 outcome 枚举与统计结构（BubbleCaptureOutcome/BubbleAlphaStats），不记录颜色/文字/图像/WID 映射到落盘遥测；RuntimeEvidence 白名单字段零扩展（T-re2a 快照 key 集合断言保持 PASS）；无新增落盘路径。
 
+## 已知瞬态（AC5 真机观察项）
+
+多 CS 层场景下锚定收敛存在设计内的瞬态窗口：参考通道捕获与完成回调之后，布局锚要在下一个 follow tick 才消费新结果，期间 dock 可能短暂停留在 Mascot 窗口底回退位或上一帧代表位置。该瞬态由显式回退测试覆盖（T-cla3/T-cla4、T-cs10 系列），语义为保守回退而非整窗避让；真机 QA（AC5）应把此类短时过渡与死层残影导致的持续压底区分开——前者随即自愈，后者持续存在。
+
 ## 冻结 SHA
 
 （提交后由 git rev-parse HEAD 填写的 40 位完整 SHA 见提交信息与交付报告；本文档随该提交一并进入候选树。）
