@@ -2472,12 +2472,13 @@ func productionProbeCadence(
     let releaseFirstCapture = OSAllocatedUnfairLock(initialState: false)
     let bubbleAlpha = OSAllocatedUnfairLock(initialState: 1.0)
     let mascot = mkw(603, layer: 2, petForCollapse, title: "Codex Pet Mascot Effect")
-    let capturer: BubbleCapturer = { _ in
-        let call = captureCalls.withLock { count -> Int in
-            count += 1
-            return count
-        }
-        if keepFirstCaptureInFlight && call == 1 {
+    let capturer: BubbleCapturer = { c in
+        captureCalls.withLock { $0 += 1 }
+        // Hold the first main-probe (bubble) capture, not whichever channel
+        // happens to enter the shared capturer first. T-sch4d samples the
+        // remaining scheduler timer while the obstacle channel is still in-flight.
+        if keepFirstCaptureInFlight && c.wid != mascot.wid
+            && !releaseFirstCapture.withLock({ $0 }) {
             while !releaseFirstCapture.withLock({ $0 }) {
                 try? await Task.sleep(nanoseconds: 1_000_000)
             }
@@ -2608,7 +2609,7 @@ let inFlightProbeCadence = productionProbeCadence(
 check("T-sch4d in-flight不留hint、不加retry source且无queued backlog",
       cadenceTimesEqual(inFlightProbeCadence.probeAttempts, [0.02, 0.11])
         && cadenceTimesEqual(inFlightProbeCadence.captureStarts, [0.02])
-        && inFlightProbeCadence.captureCallCount == 2   // 主导探测 1 次 + 参考通道(Mascot) 1 次
+        && inFlightProbeCadence.captureCallCount == 2   // 主导探测捕获气泡 1 次 + 参考通道仅捕获 Mascot 1 次
         && inFlightProbeCadence.tickCount == 2
         && inFlightProbeCadence.remainingActiveTimerIntervals.count == 1
         && abs((inFlightProbeCadence.remainingActiveTimerIntervals.first ?? 0) - 0.09) < 0.000_001,
@@ -4340,9 +4341,9 @@ let csExpandedOK = csRunTwoTickLayout(
 check("T-cs1 RED-S1 展开态→实际panel避让到气泡内容底+2(y=470,非仅ACT的~425)",
       csExpandedOK && dockFrameNear(csExpandedDock.frame, csAppKitFrame(y: 470)),
       "frame=\(csExpandedDock.frame) expected=\(csAppKitFrame(y: 470))")
-check("T-cs2 7重复实例去重→障碍probe恰含ACT与单CS代表(Mascot走参考通道)",
+check("T-cs2 7重复实例去重→主导探测捕获ACT+单CS代表;参考通道仅Mascot",
       csExpandedCaptured.withLock { $0 }.contains(CGWindowID(27900))
-        && csExpandedCaptured.withLock { $0 }.filter { $0 == CGWindowID(27814) }.count == 2
+        && csExpandedCaptured.withLock { $0 }.filter { $0 == CGWindowID(27814) }.count == 1
         && csExpandedCaptured.withLock { $0 }.filter { $0 == CGWindowID(900) }.count == 1,
       "captured=\(csExpandedCaptured.withLock { $0.map { Int($0) } })")
 
@@ -4521,7 +4522,7 @@ print("\n[Composition Surface 气泡通道] \(pass - csPass) passed, \(fail - cs
 // 现场形态（坐标/wid 合成，保持现场相对几何）：宿主同时挂多个 CS 层；CGWindowList
 // 顺序死层在前（过期残影：bounds 固定、内容底显著偏离当前脚底），活层在后且随宠物移动。
 // 旧代表选择取输入顺序首个 CS → 死层 contentBottom 进入布局锚 → dock 被推到幽灵内容下方。
-// 修复语义：Mascot 实测脚底做一致性参照，全部标题命中 CS 参与判定，
+// 修复语义：Mascot 实测脚底做一致性参照（仅参考通道），全部标题命中 CS 由主导探测参与判定，
 // 代表 = 活层集中最小 csBottomAbs；无可判定活层 → 显式回退 Mascot 窗口底。
 let claBase = fail, claPass = pass
 let claPet = CGRect(x: 1487, y: 190, width: 172, height: 179)   // petMaxY=369（现场几何）
@@ -4597,8 +4598,9 @@ check("T-cla1b cache生效后锚活层(abs331,origin/width不变)",
       "pets=\(claPetRects.withLock { $0 })")
 check("T-cla1c Mascot仅走参考通道捕获(不进障碍候选cached语义)",
       claCapturedRefs.withLock { $0 } == [CGWindowID(900)]
-        && claProbe.lock.withLock { $0.knownWids } == Set([CGWindowID(8001), CGWindowID(8010)]),
-      "refs=\(claCapturedRefs.withLock { $0.map { Int($0) } }) knownWids=\(claProbe.lock.withLock { Array($0.knownWids.map { Int($0) }) }.sorted())")
+        && claProbe.lock.withLock { $0.knownWids } == Set([CGWindowID(8001), CGWindowID(8010)])
+        && claProbe.lock.withLock { $0.referenceKnownWids } == Set([CGWindowID(900)]),
+      "refs=\(claCapturedRefs.withLock { $0.map { Int($0) } }) knownWids=\(claProbe.lock.withLock { Array($0.knownWids.map { Int($0) }) }.sorted()) refKnown=\(claProbe.lock.withLock { Array($0.referenceKnownWids.map { Int($0) }) }.sorted())")
 
 // AC3/R3 边界：活层恰在一致性下界（abs=foot-2）→ 唯一活层候选保留为代表。
 csTime = 26_100
@@ -4666,6 +4668,81 @@ check("T-cla4 观察不可用(单CS/unavailable)→保守回退窗口底371(petR
       claDegradeOK && dockFrameNear(claDegradeDock.frame, claAppKitFrame(y: 371))
         && claDegradePetRects.withLock { $0 }.allSatisfy { $0 == claPet },
       "frame=\(claDegradeDock.frame) pets=\(claDegradePetRects.withLock { $0 })")
+
+// AC6 体验不回归：稳定身份的多不同签名 CS + Mascot 生产链。参考通道只捕获 Mascot；
+// CS 只出现在主导探测 capturer 列表；identityDirty 清掉后下一次参考捕获间隔 ~1.0s
+// 而非固定 0.1s。断言仍落到真实 DockPanel.frame（活层内容底 333）。
+csTime = 0
+let cla6Clock = OSAllocatedUnfairLock(initialState: TimeInterval(0))
+let cla6Captured = OSAllocatedUnfairLock(initialState: [CGWindowID]())
+var cla6Probe: BubbleVisibilityProbe!
+let cla6Cap: BubbleCapturer = { c in
+    cla6Captured.withLock { $0.append(c.wid) }
+    return .stats(claStats[c.wid]
+        ?? BubbleAlphaStats(nonTransparentPixelCount: 0, contentBottom: -1))
+}
+cla6Probe = BubbleVisibilityProbe(
+    monotonicNow: { cla6Clock.withLock { $0 } }, canCapture: { true }, capturer: cla6Cap)
+let cla6Dock = DockPanel()
+func cla6Place() -> Bool {
+    csTime = cla6Clock.withLock { $0 }
+    return FollowLayoutPass.placeDock(
+        mascot: claMascot,
+        candidates: [claMascot, claDead, claLive],
+        bubbleProbe: cla6Probe,
+        frameSink: { pet, obstacles in
+            cla6Dock.placeBelow(
+                petQuartzRect: pet, avoiding: obstacles, visibleScreen: nil,
+                movementChanged: false, monotonicNow: csTime)
+        })
+}
+_ = cla6Place()
+let cla6FirstIdle = waitProbeChannelsIdle(cla6Probe)
+_ = cla6Place()
+let cla6CapturedAfterFirst = cla6Captured.withLock { $0 }
+let cla6IdentityDirtyAfterFirst = cla6Probe.lock.withLock { $0.identityDirty }
+let cla6KnownAfterFirst = cla6Probe.lock.withLock { $0.knownWids }
+let cla6RefKnownAfterFirst = cla6Probe.lock.withLock { $0.referenceKnownWids }
+let cla6FirstRefAt = cla6Probe.lock.withLock { $0.lastReferenceCaptureAt }
+check("T-cla6a 稳定多CS:参考通道仅Mascot;CS仅主导探测;dock仍锚活层333",
+      cla6FirstIdle
+        && !cla6IdentityDirtyAfterFirst
+        && cla6CapturedAfterFirst.filter { $0 == CGWindowID(900) }.count == 1
+        && cla6CapturedAfterFirst.filter { $0 == CGWindowID(8001) }.count == 1
+        && cla6CapturedAfterFirst.filter { $0 == CGWindowID(8010) }.count == 1
+        && Set(cla6CapturedAfterFirst) == Set([CGWindowID(900), CGWindowID(8001), CGWindowID(8010)])
+        && cla6RefKnownAfterFirst == Set([CGWindowID(900)])
+        && cla6KnownAfterFirst == Set([CGWindowID(8001), CGWindowID(8010)])
+        && dockFrameNear(cla6Dock.frame, claAppKitFrame(y: 333)),
+      "captured=\(cla6CapturedAfterFirst.map { Int($0) }) "
+        + "refKnown=\(cla6RefKnownAfterFirst.map { Int($0) }.sorted()) "
+        + "known=\(cla6KnownAfterFirst.map { Int($0) }.sorted()) "
+        + "dirty=\(cla6IdentityDirtyAfterFirst) frame=\(cla6Dock.frame) "
+        + "expected=\(claAppKitFrame(y: 333))")
+
+cla6Clock.withLock { $0 = cla6FirstRefAt + 0.11 }
+_ = cla6Place()
+let cla6IdleAfter01 = waitProbeChannelsIdle(cla6Probe)
+let cla6RefAtAfter01 = cla6Probe.lock.withLock { $0.lastReferenceCaptureAt }
+let cla6CapturedAfter01 = cla6Captured.withLock { $0 }
+cla6Clock.withLock { $0 = cla6FirstRefAt + 1.0 }
+_ = cla6Place()
+let cla6IdleAfter10 = waitProbeChannelsIdle(cla6Probe)
+let cla6RefAtAfter10 = cla6Probe.lock.withLock { $0.lastReferenceCaptureAt }
+let cla6RefGap = cla6RefAtAfter10 - cla6FirstRefAt
+let cla6CapturedAfter10 = cla6Captured.withLock { $0 }
+check("T-cla6b identityDirty清后参考通道下次捕获间隔~1.0s(非0.1s)且仍仅Mascot",
+      cla6IdleAfter01 && cla6IdleAfter10
+        && cla6FirstRefAt == 0
+        && cla6RefAtAfter01 == cla6FirstRefAt
+        && abs(cla6RefGap - 1.0) < 0.000_001
+        && cla6CapturedAfter01 == cla6CapturedAfterFirst
+        && cla6CapturedAfter10.filter { $0 == CGWindowID(900) }.count == 2
+        && dockFrameNear(cla6Dock.frame, claAppKitFrame(y: 333)),
+      "firstAt=\(cla6FirstRefAt) after01=\(cla6RefAtAfter01) "
+        + "after10=\(cla6RefAtAfter10) gap=\(cla6RefGap) "
+        + "captured01=\(cla6CapturedAfter01.map { Int($0) }) "
+        + "captured10=\(cla6CapturedAfter10.map { Int($0) }) frame=\(cla6Dock.frame)")
 
 print("\n[CS 活层代表选择] \(pass - claPass) passed, \(fail - claBase) failed")
 

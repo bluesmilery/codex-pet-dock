@@ -37,8 +37,8 @@
 - T-csm1/T-csm7/T-csm2：obstaclesNear 不再丢弃不同签名 CS——改为断言两签名实例均在候选集（wid 升序排序不改变集合）。
 - T-csm3：同签名重复实例仍去重为 1，代表现为 deduplicatedObstacles 的 wid 升序首个 9004（旧断言的输入顺序首位 9005 是旧路径副产品；现与几何通道签名去重规则完全一致）。
 - T-csm5：原 fixture 数值隐含"前层即代表"；现显式数值化为活层一致性场景（前层 contentBottom=454→abs664==脚底；后层 contentBottom=700→abs976 出窗被排除），期望锚 666 并 PASS。
-- T-cs2：probe 候选断言从"恰 2 个（CS 代表+ACT）"扩展为"ACT 必在 + CS 恰出现 2 次（主导探测 1 + 参考通道 1）+ Mascot 恰 1 次"，证明参考通道的存在且未混入障碍缓存。
-- T-sch4d：captureCallCount 由 1→2（主导 1 + 参考 1），其余调度断言不变。
+- T-cs2：probe 候选断言现为"ACT 必在 + CS 恰 1 次（仅主导探测）+ Mascot 恰 1 次（仅参考通道）"。CS 不再进入参考通道；详见 AC6。
+- T-sch4d：captureCallCount 仍为 2（主导气泡 1 + 参考 Mascot 1；该 fixture 无 CS），其余调度断言不变。
 
 ## AC3 一致性边界
 
@@ -112,3 +112,32 @@ Stability on this HEAD (binary /tmp/petdock-uitests-flake6):
 | R3 | 412 passed / 0 failed, exit 0 |
 | R4 | 412 passed / 0 failed, exit 0 |
 | R5 | 412 passed / 0 failed, exit 0 |
+
+## AC6 体验不回归：参考通道仅 Mascot，稳定后 1Hz
+
+| 字段 | 内容 |
+| --- | --- |
+| 症状 / AC | AC6：稳定身份多 CS 时不得把 CS 送进参考通道，也不得固定 0.1s 全量扫描；参考节奏与主导探测相同（identityDirty 0.1s / 稳定 1.0s）。DockPanel/Follower 相对 ba8b87f 0-diff。 |
+| 证据类型 | behavior（生产组合）+ static/absence（DockPanel/Follower 0-diff） |
+| 触发 / 注入 | T-cla6：稳定身份死层+活层+Mascot 生产链。fake capturer 记录 WID；单调时钟先停在首次捕获，再 +0.11s、再 +1.0s。frameSink 仍走真实 DockPanel.placeBelow。 |
+| 基线来源 / 结果 | 产品源码冻结在 7bfe9a9（QA SHA 23678f6 为其祖先）+ 仅叠加 T-cla6 测试。`/tmp/petdock-uitests-cla6-red`：T-cla6a FAIL captured=`[8001, 900, 8001, 8010, 8010]` refKnown=`[900, 8001, 8010]`（CS 进入参考通道）；T-cla6b FAIL after01 lastReferenceCaptureAt=0.11（固定 0.1s）。DockPanel.frame 已是活层 333，证明本条不是锚定回归。合计 412 passed / 2 failed。 |
+| 生产消费者 / 路径 | FollowLayoutPass.placeDock → probe(CS) + updateReferences([mascot]) → BubbleVisibilityProbe 双通道 cadence → observation(for: CS) + referenceOutcome(Mascot) → DockPanel.placeBelow。 |
+| 最终所有者 / 断言 | T-cla6a：captured 恰一次 900/8001/8010；referenceKnownWids={900}；knownWids={8001,8010}；实际 DockPanel.frame y=333。T-cla6b：+0.11s 不重捕参考（lastReferenceCaptureAt 仍为 0）；+1.0s 才再捕 Mascot（gap=1.0），CS 不在参考通道。T-cs2：CS 27814 恰 1 次、Mascot 900 恰 1 次、ACT 必在。T-cla1c：refs=[900] 且 referenceKnownWids={900}。T-sch4d captureCallCount 仍为 2（主导气泡 1 + 参考 Mascot 1）。 |
+| 命令 / 结果 | RED：swiftc -warnings-as-errors -DPETDOCK_TESTING … -o /tmp/petdock-uitests-cla6-red && 运行 → T-cla6a/T-cla6b FAIL，总计 412/2。GREEN：同命令 -o /tmp/petdock-uitests-cla6-green → T-cla6a/T-cla6b/T-cs2/T-cla1c/T-sch4d PASS；总计 414 passed / 0 failed。`git diff ba8b87f -- Sources/PetDock/DockPanel.swift Sources/PetDock/Follower.swift` 空。 |
+| 手工缺口 | 真机多 CS 现场的 CPU/平滑手感归 AC5；本条自动覆盖捕获集合与 cadence 合同。 |
+
+语义化改写说明（非弱化）：
+- T-cs2：CS 代表从“主导 1 + 参考 1 = 2 次”改为“主导探测 1 次；参考通道仅 Mascot”。DockPanel.frame 断言（T-cs1/T-cs6/T-anc1/T-cla1）未改数值。
+- T-sch4d：注释改为“主导探测捕获气泡 1 次 + 参考通道仅捕获 Mascot 1 次”；calls=2 数值不变，因为该 fixture 没有 CS。
+
+T-sch4d 稳定性：`keepFirstCaptureInFlight` 必须卡住主导探测的第一次捕获，而不是共享 capturer 的任意第一次调用。否则参考通道 Mascot 先进入 capturer 时，主导通道可能在取样 remaining timer 前完成，把 0.09 改写成 ~0.01（本轮 5 跑中出现 1 次 413/1）。
+
+同一二进制 /tmp/petdock-uitests-cla6-flake5 连续 5 跑：
+
+| 轮次 | 结果 |
+| --- | --- |
+| R1 | 414 passed / 0 failed, exit 0 |
+| R2 | 414 passed / 0 failed, exit 0 |
+| R3 | 414 passed / 0 failed, exit 0 |
+| R4 | 414 passed / 0 failed, exit 0 |
+| R5 | 414 passed / 0 failed, exit 0 |

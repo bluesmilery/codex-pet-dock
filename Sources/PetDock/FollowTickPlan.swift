@@ -329,10 +329,11 @@ enum FollowLayoutPass {
         bubbleProbe.probe(candidates: classified.compactMap { pair in
             pair.1 == .bubble || pair.1 == .compositionSurface ? pair.0 : nil
         })
-        // Mascot 参照窗 + 全部标题命中 CS 走独立参考通道（同一 capturer、独立
-        // 缓存/generation），均不进入障碍候选集 —— 避免 knownWids/复位合同（回归 A）被改写。
+        // Mascot 只走独立参考通道（同一 capturer、独立缓存/generation），不进入
+        // 障碍候选集 —— 避免 knownWids/复位合同（回归 A）被改写。CS 内容底只从
+        // 主导探测 observation(for:) 读取，禁止再送进参考通道二次捕获。
         let csCandidates = classified.filter { $0.1 == .compositionSurface }
-        bubbleProbe.updateReferences([mascot] + csCandidates.map { $0.0 })
+        bubbleProbe.updateReferences([mascot])
         // 活层代表先于避让集构造裁决：非代表 CS 层不产生布局，防止死层幽灵矩形把
         // dock 推离真实内容底；单 CS 实例时该候选即代表。
         var rep: WinCandidate?
@@ -346,9 +347,10 @@ enum FollowLayoutPass {
             struct LiveLayer { let candidate: WinCandidate; let bottomAbs: CGFloat }
             var liveLayers: [LiveLayer] = []
             for (candidate, _) in csCandidates {
-                guard case .stats(let stats) = bubbleProbe.referenceOutcome(for: candidate.wid),
-                      stats.contentBottom >= 0 else { continue }
-                let csBottomAbs = candidate.bounds.minY + CGFloat(stats.contentBottom + 1)
+                let observation = bubbleProbe.observation(for: candidate.wid)
+                guard observation.visibility == .visible,
+                      let contentBottom = observation.contentBottom, contentBottom >= 0 else { continue }
+                let csBottomAbs = candidate.bounds.minY + CGFloat(contentBottom + 1)
                 if csBottomAbs >= petFootAbs - epsilon && csBottomAbs <= petFootAbs + upperBound {
                     liveLayers.append(LiveLayer(candidate: candidate, bottomAbs: csBottomAbs))
                 }

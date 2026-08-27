@@ -167,8 +167,8 @@ final class BubbleVisibilityProbe: Sendable {
         /// 当前候选 WID 对应的完整身份快照；同 WID 但任一非 bounds 身份字段变化会换 generation
         /// （纯 bounds 平移/缩放不换，见 probe 的粘性可见性判定）。
         var knownCandidates: [CGWindowID: BubbleCandidateIdentity] = [:]
-        /// 独立参考通道（Mascot 参照窗 + CS 活层判定）：wid → 最近一次原始 capture
-        /// outcome。只服务 FollowLayoutPass 的布局锚代表选择，不进入障碍候选的
+        /// 独立参考通道（仅 Mascot 参照窗）：wid → 最近一次原始 capture
+        /// outcome。只服务 FollowLayoutPass 的布局锚活层判定，不进入障碍候选的
         /// cached/knownWids 语义，避免 Mascot 参与改写"消失候选 → hidden 复位"
         /// （回归 A）等既有合同；参考侧用 stats 非负 contentBottom 表达"本次成功
         /// 且可判定"，nil 表示未到 / 已失效 / targetMissing / unavailable。
@@ -440,7 +440,8 @@ final class BubbleVisibilityProbe: Sendable {
                     return false
                 }
             }
-            return monotonicNow() - s.lastReferenceCaptureAt < Self.minInterval
+            let interval = s.identityDirty ? Self.minInterval : Self.stableProbeInterval
+            return monotonicNow() - s.lastReferenceCaptureAt < interval
         }
         if steadyStateSkip { return }
         let refs = references
@@ -476,7 +477,7 @@ final class BubbleVisibilityProbe: Sendable {
                 guard !s.referenceInFlight else { return (0, [:], false) }
                 let time = monotonicNow()
                 let elapsed = time - s.lastReferenceCaptureAt
-                let interval = Self.minInterval   // 参考通道固定快速节奏（每 tick 最多一路，参考窗仅 1 个）
+                let interval = s.identityDirty ? Self.minInterval : Self.stableProbeInterval
                 guard elapsed >= interval else { return (0, [:], false) }
                 s.referenceInFlight = true
                 s.lastReferenceCaptureAt = time
@@ -502,7 +503,7 @@ final class BubbleVisibilityProbe: Sendable {
                 return true
             }
             // 参考通道完成不再额外 wake：wake 语义只服务障碍可见性变化，
-            // 参考结果由下一 tick 直接读取（参考窗仅 Mascot 一个，节奏 0.1s）。
+            // 参考结果由下一 tick 直接读取（参考窗仅 Mascot；节奏与主导探测相同）。
         }
     }
 
