@@ -29,6 +29,7 @@
 - 事件驱动 UI 链路若要求唤醒/合并/frame 写回，集成测试必须经过生产 callback、scheduler/coalescer 和实际 frame owner；手工调用 Geometry/helper 只能作为相邻单元测试。
 - 对生产设计明确排除的依赖（例如 cadence 不接受墙钟），使用行为测试加可执行 source/API guard 固化“无该依赖”的契约；不要为了测试注入而向生产增加无业务用途的依赖。
 - async 测试 fixture 必须用 continuation、actor 或其他 async-safe gate 挂起任务；禁止在 async closure 中用 semaphore wait、sleep 窗口或阻塞 cooperative executor 来制造确定性。
+- 向 `BubbleVisibilityProbe`（或同类 probe）新增任何后台捕获通道后，所有消费 tick-N cache 的 two-tick / layout helper 必须等待**全部**通道的 in-flight 标志（当前为 `inFlight` 与 `referenceInFlight`）。只等主导通道会在参考通道尚未落 cache 时读到回退锚，造成 T-cs7/T-cs11 类时序 flake。需要断言“首 tick 无 cache”的路径必须用 capturer 门闩卡住第一拍，不能依赖调度竞态。采样 scheduler 剩余 timer 的测试不得在取样前额外泵双通道等待（会改写 remaining interval）。
 
 ## 验收证据拓扑合同
 
