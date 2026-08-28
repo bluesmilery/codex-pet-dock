@@ -6168,8 +6168,50 @@ do {
     clock.withLock { $0 = 80_004 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp69 新有效观察→bounds更新",
-          probe.locate(container: container) == .bounds(cpRectB), "")
+check("T-cp69 新有效观察→bounds更新",
+      probe.locate(container: container) == .bounds(cpRectB), "")
+}
+
+// ---- C6 QA P0 修复回归：hidden tick 的容器 reset 门控（候选在场不得饿死在途捕获）----
+// 纯 helper：在场 → false（不 reset）；缺席 → true（真正容器消失路径才 reset）。
+check("T-cp70 候选在场→containerProbeReset=false",
+      FollowTickPlanner.containerProbeReset(containerCandidatePresent: true) == false, "")
+check("T-cp71 候选缺席→containerProbeReset=true",
+      FollowTickPlanner.containerProbeReset(containerCandidatePresent: false) == true, "")
+
+// 组合回归：首 locate 在途/empty 的 hidden tick 不 reset → 捕获完成后观察可落地；
+// 对照：候选缺席路径 reset 会真正失效缓存。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(90_000))
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let slowCap: ContainerCapturer = { _, _ in
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        return .stats(cpStatsA)
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: slowCap,
+        onFirstObservation: { wakes.withLock { $0 += 1 } })
+    let container = cpContainer(532)
+    _ = probe.locate(container: container)
+    check("T-cp72 前置:首捕在途→locate empty",
+          probe.lock.withLock { $0.inFlight } && probe.locate(container: container) == .empty, "")
+    // 生产消失分支（修复后接线）：候选在场 → helper false → 不调用 reset。
+    if FollowTickPlanner.containerProbeReset(containerCandidatePresent: true) {
+        probe.reset()
+    }
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp73 候选在场+hidden tick 不 reset→在途捕获落地为观察",
+          probe.locate(container: container) == .bounds(cpRectA), "")
+    check("T-cp74 首观察 wake 恰一次", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
+    // 对照（候选缺席 → helper true → reset）：缓存真正失效，等待重现重捕。
+    if FollowTickPlanner.containerProbeReset(containerCandidatePresent: false) {
+        probe.reset()
+    }
+    clock.withLock { $0 = 90_100 }
+    check("T-cp75 候选缺席 reset→缓存失效(empty)",
+          probe.locate(container: container) == .empty && probe.lock.withLock { $0.cached == nil }, "")
 }
 
 print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")

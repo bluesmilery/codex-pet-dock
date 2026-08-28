@@ -291,7 +291,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 容器回退通道（R2）：主通道无 Mascot 时，选宿主大容器窗并从内存 alpha bbox 合成
         // 宠物矩形。lastWID 保持 nil（sel.selected == nil），Mascot 窗口恢复时主通道直接接管。
         var viaContainerChannel = false
-        if pet == nil, let container = ContainerPetSelector.selectContainer(candidates: wins) {
+        let containerCandidate = ContainerPetSelector.selectContainer(candidates: wins)
+        if pet == nil, let container = containerCandidate {
             if case .bounds(let rect) = containerProbe.locate(container: container) {
                 pet = rect
                 viaContainerChannel = true
@@ -410,7 +411,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             stationaryAnchor = nil
             lastWID = nil
             bubbleProbe.reset()
-            containerProbe.reset()
+            // 容器候选在场时 hidden tick 只表示「捕获在途/未接受」——reset 会作废在途捕获
+            // 使通道饥饿（QA P0）；仅无候选（容器真消失）才 reset（身份churn由 wid-change
+            // generation 语义承担）。
+            if FollowTickPlanner.containerProbeReset(containerCandidatePresent: containerCandidate != nil) {
+                containerProbe.reset()
+            }
         }
         lastMaterialChangeAt = d.lastMaterialChangeAt
 

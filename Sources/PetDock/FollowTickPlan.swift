@@ -452,4 +452,13 @@ enum FollowTickPlanner {
             petDisappeared: !input.petVisible
         )
     }
+
+    /// 容器回退通道在消失分支的 reset 门控（2026-08-28 QA P0 修复）。
+    /// 容器候选在场时，hidden tick 只表示「捕获在途或尚未被接受」——此时 reset 会递增
+    /// generation 并作废每次在途捕获，通道永远无法产出首个观察（饥饿）；WID 重用/宿主
+    /// 重启的身份失效已由 ContainerPetProbe 的 wid-change generation 语义承担。
+    /// 因此仅当本 tick 无可行容器候选（容器真消失）才允许 reset。
+    static func containerProbeReset(containerCandidatePresent: Bool) -> Bool {
+        !containerCandidatePresent
+    }
 }
