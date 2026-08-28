@@ -405,3 +405,36 @@ Accepted live-layer CS dock anchor with idle-CPU follow-up; parked 85d8352 on fe
 ### Next Steps
 
 - Dedicated integration session: serial merge feature/cs-live-layer-anchor into local dev
+
+
+## Session 17: Merge CS live-layer anchor into local dev for release
+
+**Date**: 2026-08-28
+**Task**: Merge CS live-layer anchor into local dev for release
+**Branch**: `dev`
+
+### Summary
+
+no-ff merged feature/cs-live-layer-anchor into local dev. Merge SHA 4061f03 is a new candidate; parked accepted SHA 85d8352 is now a dev ancestor. Release scan/gates still pending on the final tree after this journal.
+
+### Main Changes
+
+- git merge --no-ff feature/cs-live-layer-anchor; no overlapping files, no conflicts
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4061f0311a8eda7a2917c6f96015f6f08265830d` | (see git log) |
+
+### Testing
+
+- [OK] not re-run yet; merge SHA is a new candidate per release.md section 1.3
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Sensitive scan of merge-base..dev, then full gates, then version bump and GitHub Release after user confirmation of tag/push
