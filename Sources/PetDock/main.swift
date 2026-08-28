@@ -110,7 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var containerProbe = ContainerPetProbe(
         monotonicNow: followMonotonicNow,
-        onFirstObservation: { [weak self] in self?.followScheduler.requestWake() })
+        onObservationChanged: { [weak self] in
+            // 先记录脱敏边沿计数，再请求合并唤醒；evidence 关闭时仅剩一次 wake 请求开销。
+            self?.runtimeEvidence?.recordContainerObservationChange()
+            self?.followScheduler.requestWake()
+        })
     private let settings = Settings()
     private var themeStore: ThemeStore?
     private var externalThemes: [ThemeSpec] = []

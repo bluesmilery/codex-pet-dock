@@ -3111,6 +3111,7 @@ let reExpectedKeys: Set<String> = [
     "captureStatsCount", "captureTargetMissingCount", "captureUnavailableCount",
     "visibilityVisibleCount", "visibilityHiddenCount",
     "identityChangeCount", "wakeCallbackCount",
+    "containerObservationChangeCount",
     "containerPlacementShownCount", "containerPlacementHiddenCount",
     "dockDyBaseCount", "dockDyUpTo32Count", "dockDyUpTo64Count", "dockDyAbove64Count",
     "lastDockDyBucket",
@@ -3182,6 +3183,29 @@ check("T-re2i shown/hidden 计数累计",
       (reContSnap2["containerPlacementShownCount"] as? Int) == 3
         && (reContSnap2["containerPlacementHiddenCount"] as? Int) == 1, "")
 try? FileManager.default.removeItem(at: reContRoot)
+
+// T-re2j..2k: container 通道“已接受的观察 rect 边沿”计数。生产只在该回调边沿调用；
+// 每次边沿本身就是新证据，因此 dirty 约定与首个 container placement 样本一致。
+let reObsRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-container-observation-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reObsRoot)
+var reObsNow: TimeInterval = 210_000
+let reObsCollector = makeRuntimeEvidenceRecorderForTesting(
+    candidateSHA: reSHA,
+    outputURL: reObsRoot.appendingPathComponent(runtimeEvidenceOutputFileName),
+    flushNow: { reObsNow })
+reObsCollector.recordContainerObservationChange()
+reObsCollector.recordContainerObservationChange()
+let reObsSnap = reObsCollector.snapshot()
+check("T-re2j container observation change 计数正确",
+      (reObsSnap["containerObservationChangeCount"] as? Int) == 2, "")
+reObsNow = 210_001
+check("T-re2k observation change 边沿 dirty→flush 落盘", reObsCollector.flush(), "")
+let reObsWritten = try! JSONSerialization.jsonObject(
+    with: Data(contentsOf: reObsRoot.appendingPathComponent(runtimeEvidenceOutputFileName))) as! [String: Any]
+check("T-re2l 落盘内容含 observation change 计数",
+      (reObsWritten["containerObservationChangeCount"] as? Int) == 2, "")
+try? FileManager.default.removeItem(at: reObsRoot)
 
 // T-re4: symlink fail-closed —— 外部链接目标绝不接收诊断内容
 let reEvilTarget = reRoot.appendingPathComponent("evil-target.json")
@@ -5858,7 +5882,7 @@ check("T-cp18 捕获尺寸非法→nil",
       ContainerPetChannel.mapToPetRect(stats: cpStatsA, captureWidth: 0, captureHeight: 400,
                                        containerBounds: cpBounds) == nil, "")
 
-// ---- C4 ContainerPetProbe（fake capturer + fake clock：首观察/节奏/单飞/代际/unavailable/wake）----
+// ---- C4 ContainerPetProbe（fake capturer + fake clock：观察边沿/节奏/单飞/代际/unavailable/wake）----
 do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(10_000))
     let calls = OSAllocatedUnfairLock(initialState: 0)
@@ -5871,23 +5895,23 @@ do {
             calls.withLock { $0 += 1 }
             return outcomeBox.withLock { $0 }
         },
-        onFirstObservation: { wakes.withLock { $0 += 1 } })
+        onObservationChanged: { wakes.withLock { $0 += 1 } })
     let container = cpContainer(520)
     check("T-cp20 首次locate→empty(尚未观察)", probe.locate(container: container) == .empty, "")
     check("T-cp20b 首次locate→调度后台捕获(inFlight)", probe.lock.withLock { $0.inFlight }, "")
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
     check("T-cp21 首次捕获完成→bounds(当前containerBounds映射)",
           probe.locate(container: container) == .bounds(cpRectA), "")
-    check("T-cp22 首个有效观察触发 onFirstObservation 恰一次",
+check("T-cp22 首个有效观察（none→bounds）触发 onObservationChanged 恰一次",
           wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
-    clock.withLock { $0 = 10_000.5 }
+    clock.withLock { $0 = 10_000.32 }
     _ = probe.locate(container: container)
-    check("T-cp23 stable 0.5s→不捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_001 }
+    check("T-cp23 stable 0.32s→不捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_000.34 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp24 stable 1.0s→捕获(1Hz 心跳)", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
-    check("T-cp24b 同 bbox 再观察→不重复 wake", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
+    check("T-cp24 stable 0.33s 节奏→捕获(3Hz 心跳)", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+    check("T-cp24b 同 rect 再观察→不重复 wake", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
 
     // bbox 变化 → 0.1s 快速节奏保持 movingHoldDuration，随后回到 stable 1s。
     clock.withLock { $0 = 10_002 }
@@ -5903,7 +5927,7 @@ do {
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
     check("T-cp27 快速节奏 0.1s→捕获", calls.withLock { $0 } == 4, "calls=\(calls.withLock { $0 })")
-    check("T-cp28 快速节奏期间无 bbox 变化→不重复 wake", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
+    check("T-cp28 快速节奏期间 rect 变化→恰好一次 wake", wakes.withLock { $0 } == 2, "wakes=\(wakes.withLock { $0 })")
     clock.withLock { $0 = 10_002.2 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
@@ -5918,12 +5942,12 @@ do {
     check("T-cp31 保持期内 10_003.5→第7捕", calls.withLock { $0 } == 7, "calls=\(calls.withLock { $0 })")
     clock.withLock { $0 = 10_004.0 }
     _ = probe.locate(container: container)
-    check("T-cp32 保持期结束(10_004)→回到 stable，0.5s 不捕获",
+    check("T-cp32 保持期结束→回到 stable，0.32s 不捕获",
           calls.withLock { $0 } == 7, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_004.5 }
+    clock.withLock { $0 = 10_003.84 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp33 保持期结束 1.0s→捕获(stable 恢复)", calls.withLock { $0 } == 8, "calls=\(calls.withLock { $0 })")
+    check("T-cp33 保持期结束 0.33s 节奏→捕获(stable 恢复)", calls.withLock { $0 } == 8, "calls=\(calls.withLock { $0 })")
 }
 
 // single-flight：在途捕获不重复
@@ -6047,7 +6071,7 @@ do {
     check("T-cp55 重新观察→bounds", probe.locate(container: container) == .bounds(cpRectA), "")
 }
 
-// onFirstObservation 每个 disappearance episode 恰一次（reset / wid 变化开启新 episode）
+// onObservationChanged baseline 在 reset / wid 变化后重新武装（none→rect 再次边沿）
 do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(60_000))
     let wakes = OSAllocatedUnfairLock(initialState: 0)
@@ -6055,12 +6079,12 @@ do {
         monotonicNow: { clock.withLock { $0 } },
         canCapture: { true },
         capturer: { _, _ in .stats(cpStatsA) },
-        onFirstObservation: { wakes.withLock { $0 += 1 } })
+        onObservationChanged: { wakes.withLock { $0 += 1 } })
     let containerA = cpContainer(528)
     let containerB = cpContainer(529)
     _ = probe.locate(container: containerA)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp56 首次观察→wake 1次", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
+check("T-cp56 首次观察→wake 1次", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
     clock.withLock { $0 = 60_100 }
     _ = probe.locate(container: containerA)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
@@ -6192,7 +6216,7 @@ do {
         monotonicNow: { clock.withLock { $0 } },
         canCapture: { true },
         capturer: slowCap,
-        onFirstObservation: { wakes.withLock { $0 += 1 } })
+        onObservationChanged: { wakes.withLock { $0 += 1 } })
     let container = cpContainer(532)
     _ = probe.locate(container: container)
     check("T-cp72 前置:首捕在途→locate empty",
@@ -6210,8 +6234,83 @@ do {
         probe.reset()
     }
     clock.withLock { $0 = 90_100 }
-    check("T-cp75 候选缺席 reset→缓存失效(empty)",
+check("T-cp75 候选缺席 reset→缓存失效(empty)",
           probe.locate(container: container) == .empty && probe.lock.withLock { $0.cached == nil }, "")
+}
+
+// ---- C7 AC7：accepted observation rect 边沿语义，且每个边沿只请求一次 coalesced wake。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(100_000))
+    let edges = OSAllocatedUnfairLock(initialState: 0)
+    let enqueued = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let outcomeBox = OSAllocatedUnfairLock<ContainerCaptureOutcome>(initialState: .stats(cpStatsA))
+    let coalescer = FollowTickCoalescer(
+        enqueue: { item in
+            enqueued.withLock { $0 += 1 }
+            item.perform()
+        },
+        tick: { wakes.withLock { $0 += 1 } })
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, _ in outcomeBox.withLock { $0 } },
+        onObservationChanged: {
+            edges.withLock { $0 += 1 }
+            coalescer.requestWake()
+        })
+    let container = cpContainer(533)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp76 none→bounds 触发一次回调/coalesced wake",
+          edges.withLock { $0 } == 1 && enqueued.withLock { $0 } == 1 && wakes.withLock { $0 } == 1,
+          "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+    clock.withLock { $0 = 100_000.34 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp77 bounds→same rect 不触发回调/wake",
+          edges.withLock { $0 } == 1 && enqueued.withLock { $0 } == 1 && wakes.withLock { $0 } == 1,
+          "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+    outcomeBox.withLock { $0 = .stats(cpStatsB) }
+    clock.withLock { $0 = 100_000.68 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp78 bounds→different rect 触发一次回调/coalesced wake",
+          edges.withLock { $0 } == 2 && enqueued.withLock { $0 } == 2 && wakes.withLock { $0 } == 2,
+          "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+    probe.reset()
+    outcomeBox.withLock { $0 = .stats(cpStatsA) }
+    clock.withLock { $0 = 100_100 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp79 reset 后 baseline 重武装→none→旧 rect 再次边沿",
+          edges.withLock { $0 } == 3 && enqueued.withLock { $0 } == 3 && wakes.withLock { $0 } == 3,
+          "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+}
+
+// ---- C8 R7 cadence：稳定重捕从 1.0s 收紧到 0.33s（fake monotonic clock）。
+check("T-cp80 stableCaptureInterval=0.33",
+      ContainerPetHeuristics.stableCaptureInterval == 0.33, "")
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(110_000))
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, _ in
+            calls.withLock { $0 += 1 }
+            return .stats(cpStatsA)
+        })
+    let container = cpContainer(534)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    clock.withLock { $0 = 110_000.32 }
+    _ = probe.locate(container: container)
+    check("T-cp81 stable 0.32s→不捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 110_000.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp82 stable 0.33s→捕获", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
 }
 
 print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")

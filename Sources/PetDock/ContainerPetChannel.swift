@@ -23,8 +23,9 @@ enum ContainerPetHeuristics {
     /// 合成宠物矩形边长合理范围（映射后 sanity）。
     static let petMinSide: CGFloat = 20
     static let petMaxSide: CGFloat = 400
-    /// 稳态捕获节奏（bbox 未变化）：1Hz 心跳，保持稳态 CPU 轮廓（R4）。
-    static let stableCaptureInterval: TimeInterval = 1.0
+    /// 稳态捕获节奏（rect 未变化）：3Hz 心跳；R7 要求内容边沿检测 p95 ≤ 0.4s，
+    /// 同时保留低频捕获（而非 display link）的稳态 CPU 轮廓。
+    static let stableCaptureInterval: TimeInterval = 0.33
     /// bbox 变化后的快速节奏（窗内内容移动跟随）。
     static let movingCaptureInterval: TimeInterval = 0.1
     /// bbox 变化后快速节奏的保持时长。
@@ -168,7 +169,8 @@ typealias ContainerCapturer = @Sendable (WinCandidate, CGSize) async -> Containe
 /// Task.detached 后台捕获、generation 失效语义）。
 /// - 缓存保存**捕获坐标 bbox**（ContainerAlphaStats），每次 locate 用**当前** containerBounds
 ///   重新映射 → 容器整窗平移无需重新捕获即可即时跟随；快速节奏（0.1s）只留给窗内内容移动。
-/// - 首个有效观察触发一次 onFirstObservation（唤醒 scheduler）；reset() / wid 变化开启新 episode。
+/// - accepted observation rect 相对上次交付结果变化时触发一次 onObservationChanged
+///   （none→rect / rect→different）；reset() / wid 变化清空 baseline 重新武装。
 final class ContainerPetProbe: Sendable {
     internal struct ProbeState: Sendable {
         /// 最近一次**通过门限**的捕获统计（捕获像素坐标 bbox）；nil = 尚无有效观察。
@@ -181,25 +183,25 @@ final class ContainerPetProbe: Sendable {
         var movingUntil: TimeInterval = -.greatestFiniteMagnitude
         /// 候选切换 / reset 递增；旧 Task 回调 generation 不匹配时丢弃。
         var generation = 0
-        /// 当前 disappearance episode 是否已有过有效观察（onFirstObservation 只发一次）。
-        var observedInEpisode = false
+        /// 上次已交付给回调的 observation rect；nil = baseline 未武装（下次有效 rect 触发边沿）。
+        var lastDeliveredRect: CGRect?
     }
 
     internal let lock: OSAllocatedUnfairLock<ProbeState>
     private let monotonicNow: @Sendable () -> TimeInterval
     private let canCapture: @Sendable () -> Bool
     private let capturer: ContainerCapturer
-    private let onFirstObservation: (@Sendable () -> Void)?
+    private let onObservationChanged: (@Sendable () -> Void)?
 
     init(monotonicNow: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          canCapture: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
          capturer: ContainerCapturer? = nil,
-         onFirstObservation: (@Sendable () -> Void)? = nil) {
+         onObservationChanged: (@Sendable () -> Void)? = nil) {
         self.lock = OSAllocatedUnfairLock(initialState: ProbeState())
         self.monotonicNow = monotonicNow
         self.canCapture = canCapture
         self.capturer = capturer ?? Self.defaultCapturer
-        self.onFirstObservation = onFirstObservation
+        self.onObservationChanged = onObservationChanged
     }
 
     // MARK: - 主线程接口（tick 同步调用）
@@ -212,11 +214,11 @@ final class ContainerPetProbe: Sendable {
             // 权限/能力不可用：陈旧缓存必须丢弃（stale WID 不得降级为错误锚点），
             // 旧在途结果经 generation 失效；inFlight 由旧 Task 自清（strict single-flight）。
             lock.withLock { s in
-                if s.cached != nil || s.observedInEpisode || s.inFlight || s.knownWID != nil {
+                if s.cached != nil || s.lastDeliveredRect != nil || s.inFlight || s.knownWID != nil {
                     s.generation += 1
                     s.cached = nil
                     s.knownWID = nil
-                    s.observedInEpisode = false
+                    s.lastDeliveredRect = nil
                     s.movingUntil = -.greatestFiniteMagnitude
                 }
             }
@@ -235,7 +237,7 @@ final class ContainerPetProbe: Sendable {
             if let known = s.knownWID, known != container.wid {
                 s.generation += 1
                 s.cached = nil
-                s.observedInEpisode = false
+                s.lastDeliveredRect = nil
                 s.movingUntil = -.greatestFiniteMagnitude
             }
             s.knownWID = container.wid
@@ -266,7 +268,7 @@ final class ContainerPetProbe: Sendable {
         guard let start else { return outcome }
         let cap = capturer
         let lock = self.lock
-        let notify = onFirstObservation
+        let notify = onObservationChanged
         let now = monotonicNow
         let gen = start.generation
         let wid = start.container.wid
@@ -283,19 +285,19 @@ final class ContainerPetProbe: Sendable {
                 // 捕获验证门限：stats 且映射有效（按调度时 bounds 判定）才成为观察；
                 // targetMissing / unavailable / 超门限 → 保守保留旧有效观察，不触发。
                 guard case .stats(let stats) = result,
-                      ContainerPetChannel.mapToPetRect(
+                      let observationRect = ContainerPetChannel.mapToPetRect(
                         stats: stats,
                         captureWidth: stats.captureWidth,
                         captureHeight: stats.captureHeight,
-                        containerBounds: scheduledBounds) != nil else { return false }
+                        containerBounds: scheduledBounds) else { return false }
                 if let old = s.cached, old != stats {
                     // bbox（含捕获尺寸）变化 → 快速节奏保持窗口。
                     s.movingUntil = now() + ContainerPetHeuristics.movingHoldDuration
                 }
                 s.cached = stats
-                let first = !s.observedInEpisode
-                s.observedInEpisode = true
-                return first
+                let changed = s.lastDeliveredRect != observationRect
+                s.lastDeliveredRect = observationRect
+                return changed
             }
             if shouldNotify { notify?() }
         }
@@ -314,7 +316,7 @@ final class ContainerPetProbe: Sendable {
             s.generation += 1
             s.cached = nil
             s.knownWID = nil
-            s.observedInEpisode = false
+            s.lastDeliveredRect = nil
             s.movingUntil = -.greatestFiniteMagnitude
         }
     }

@@ -62,6 +62,7 @@ protocol RuntimeEvidenceRecording: Sendable {
     func recordCapture(kind: RuntimeCaptureOutcomeKind, visibility: BubbleVisibility)
     func recordIdentityChange()
     func recordWakeCallback()
+    func recordContainerObservationChange()
     func recordLayoutTick(bubbleObstacles: Int, controlObstacles: Int, visibleObstacles: Int)
     func recordDockDyBucket(_ bucket: DockDyBucket)
     func recordContainerPlacement(shown: Bool)
@@ -97,6 +98,7 @@ private final class RuntimeEvidenceCollector: RuntimeEvidenceRecording, Sendable
         var visibilityHiddenCount = 0
         var identityChangeCount = 0
         var wakeCallbackCount = 0
+        var containerObservationChangeCount = 0
         var containerPlacementShownCount = 0
         var containerPlacementHiddenCount = 0
         /// 上次 container 通道 placement 结果（dirty 抑制；nil = 尚无样本）。
@@ -187,6 +189,15 @@ private final class RuntimeEvidenceCollector: RuntimeEvidenceRecording, Sendable
         }
     }
 
+    /// ContainerPetProbe：accepted observation rect 边沿次数（none→rect / rect→different）。
+    /// 生产只在该边沿调用；每次边沿都是新证据，因此与首个 placement 样本一样置 dirty。
+    func recordContainerObservationChange() {
+        lock.withLock {
+            $0.containerObservationChangeCount += 1
+            $0.dirty = true
+        }
+    }
+
     /// DockPanel：实际写入 frame 相对本 tick 无障碍基础 frame 的匿名 dy bucket。
     /// 仅 bucket 值变化时标记 dirty（同值重复写回不算新证据）。
     func recordDockDyBucket(_ bucket: DockDyBucket) {
@@ -239,6 +250,7 @@ private final class RuntimeEvidenceCollector: RuntimeEvidenceRecording, Sendable
                 "visibilityHiddenCount": s.visibilityHiddenCount,
                 "identityChangeCount": s.identityChangeCount,
                 "wakeCallbackCount": s.wakeCallbackCount,
+                "containerObservationChangeCount": s.containerObservationChangeCount,
                 "containerPlacementShownCount": s.containerPlacementShownCount,
                 "containerPlacementHiddenCount": s.containerPlacementHiddenCount,
                 "dockDyBaseCount": s.dockDyBaseCount,
