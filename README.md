@@ -110,7 +110,7 @@ PetDock stores logs and the token cache under its private `~/Library/Application
 
 **Preview installation** (not a one-click trusted install):
 
-1. Download `CodexPetDock-0.4.0-macOS-arm64.zip` and extract it.
+1. Download `CodexPetDock-0.5.0-macOS-arm64.zip` and extract it.
 2. Move `PetDock.app` to `/Applications` (or any fixed location).
 3. Because the app is locally signed with a self-signed certificate (no Developer ID and not notarized), macOS Gatekeeper may block the first launch. Go to **System Settings › Privacy & Security** and click **Open Anyway** (or "Open Anyway" in the Gatekeeper dialog). See [Apple's guide](https://support.apple.com/guide/mac-help/mh40616/mac) for details.
 4. On first launch, grant **Screen Recording** permission (required for cross-app window enumeration) and restart the app.
