@@ -391,6 +391,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         dock.hideIfNeeded()
                         detail.close()
                     }
+                    // 容器通道 outcome 证据：QA 经 --runtime-evidence 区分容器观察驱动的
+                    // placement（默认关闭，零开销）。
+                    runtimeEvidence?.recordContainerPlacement(shown: shown)
                     // 与主通道一致：完整布局 tick 末尾评估证据落盘（容器通道 QA 需要
                     // runtime outcome 证据，不能滞留缓冲）。
                     runtimeEvidence?.flush()

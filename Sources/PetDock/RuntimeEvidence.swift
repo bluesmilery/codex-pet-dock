@@ -64,6 +64,7 @@ protocol RuntimeEvidenceRecording: Sendable {
     func recordWakeCallback()
     func recordLayoutTick(bubbleObstacles: Int, controlObstacles: Int, visibleObstacles: Int)
     func recordDockDyBucket(_ bucket: DockDyBucket)
+    func recordContainerPlacement(shown: Bool)
     func snapshot() -> [String: Any]
     @discardableResult
     func flush() -> Bool
@@ -96,6 +97,10 @@ private final class RuntimeEvidenceCollector: RuntimeEvidenceRecording, Sendable
         var visibilityHiddenCount = 0
         var identityChangeCount = 0
         var wakeCallbackCount = 0
+        var containerPlacementShownCount = 0
+        var containerPlacementHiddenCount = 0
+        /// 上次 container 通道 placement 结果（dirty 抑制；nil = 尚无样本）。
+        var lastContainerPlacementShown: Bool?
         var dockDyBaseCount = 0
         var dockDyUpTo32Count = 0
         var dockDyUpTo64Count = 0
@@ -198,6 +203,20 @@ private final class RuntimeEvidenceCollector: RuntimeEvidenceRecording, Sendable
         }
     }
 
+    /// 容器回退通道（宿主 overlay，2026-08-28）：本 tick 布局由容器观察驱动时记录
+    /// placement 结果（shown/hidden 枚举计数）。该分支只在合成观察被接受后进入，
+    /// 因此计数即“容器观察驱动的 placement”证据；只有首个样本或 shown 状态变化
+    /// 标记 dirty（稳态同值布局 tick 不产生写盘）。
+    func recordContainerPlacement(shown: Bool) {
+        lock.withLock {
+            let placementChanged = $0.lastContainerPlacementShown != shown
+            if shown { $0.containerPlacementShownCount += 1 }
+            else { $0.containerPlacementHiddenCount += 1 }
+            $0.lastContainerPlacementShown = shown
+            if placementChanged { $0.dirty = true }
+        }
+    }
+
     // MARK: - 序列化与落盘
 
     /// 白名单字段快照（固定 key 集合；新增字段必须同步 privacy 测试）。
@@ -220,6 +239,8 @@ private final class RuntimeEvidenceCollector: RuntimeEvidenceRecording, Sendable
                 "visibilityHiddenCount": s.visibilityHiddenCount,
                 "identityChangeCount": s.identityChangeCount,
                 "wakeCallbackCount": s.wakeCallbackCount,
+                "containerPlacementShownCount": s.containerPlacementShownCount,
+                "containerPlacementHiddenCount": s.containerPlacementHiddenCount,
                 "dockDyBaseCount": s.dockDyBaseCount,
                 "dockDyUpTo32Count": s.dockDyUpTo32Count,
                 "dockDyUpTo64Count": s.dockDyUpTo64Count,

@@ -3111,6 +3111,7 @@ let reExpectedKeys: Set<String> = [
     "captureStatsCount", "captureTargetMissingCount", "captureUnavailableCount",
     "visibilityVisibleCount", "visibilityHiddenCount",
     "identityChangeCount", "wakeCallbackCount",
+    "containerPlacementShownCount", "containerPlacementHiddenCount",
     "dockDyBaseCount", "dockDyUpTo32Count", "dockDyUpTo64Count", "dockDyAbove64Count",
     "lastDockDyBucket",
 ]
@@ -3146,6 +3147,41 @@ check("T-re3b flush落盘：目录0700/文件0600/内容=快照",
         && (reWritten["candidateSHA"] as? String) == reSHA
         && (reWritten["tickCount"] as? Int) == 2,
       "file=0\(String(reFileMode, radix: 8)) dir=0\(String(reDirMode, radix: 8))")
+
+// T-re2d..2i: container 通道 outcome 计数（08-28 修复批次）：placement shown/hidden 计数 +
+// dirty 抑制（首个样本/状态变化才 dirty；稳态同值布局 tick 不产生写盘）。
+let reContRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-container-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reContRoot)
+var reContNow: TimeInterval = 200_000
+let reContCollector = makeRuntimeEvidenceRecorderForTesting(
+    candidateSHA: reSHA,
+    outputURL: reContRoot.appendingPathComponent(runtimeEvidenceOutputFileName),
+    flushNow: { reContNow })
+reContCollector.recordContainerPlacement(shown: true)
+reContCollector.recordContainerPlacement(shown: true)   // 同值重复 → 不产生新证据
+let reContSnap1 = reContCollector.snapshot()
+check("T-re2d container placement 计数正确",
+      (reContSnap1["containerPlacementShownCount"] as? Int) == 2
+        && (reContSnap1["containerPlacementHiddenCount"] as? Int) == 0, "")
+reContNow = 200_001
+check("T-re2e 首样本 dirty→flush 落盘", reContCollector.flush(), "")
+let reContWritten1 = try! JSONSerialization.jsonObject(
+    with: Data(contentsOf: reContRoot.appendingPathComponent(runtimeEvidenceOutputFileName))) as! [String: Any]
+check("T-re2f 落盘内容含 container 计数",
+      (reContWritten1["containerPlacementShownCount"] as? Int) == 2
+        && (reContWritten1["containerPlacementHiddenCount"] as? Int) == 0, "")
+reContCollector.recordContainerPlacement(shown: true)   // 同值重复 → 仍无新证据
+reContNow = 200_002
+check("T-re2g 稳态同值不触发写盘", !reContCollector.flush(), "")
+reContCollector.recordContainerPlacement(shown: false)  // shown 状态变化 → dirty
+reContNow = 200_003
+check("T-re2h hidden 变化→flush", reContCollector.flush(), "")
+let reContSnap2 = reContCollector.snapshot()
+check("T-re2i shown/hidden 计数累计",
+      (reContSnap2["containerPlacementShownCount"] as? Int) == 3
+        && (reContSnap2["containerPlacementHiddenCount"] as? Int) == 1, "")
+try? FileManager.default.removeItem(at: reContRoot)
 
 // T-re4: symlink fail-closed —— 外部链接目标绝不接收诊断内容
 let reEvilTarget = reRoot.appendingPathComponent("evil-target.json")
@@ -6085,7 +6121,55 @@ do {
     check("T-cp63 容器消失→hidden+pauseData+petDisappeared",
           d.state == .hidden && plan.pauseData && plan.petDisappeared && plan.hideUI, "")
     probe.reset()
-    check("T-cp64 消失路径 reset→缓存清空(下一episode重新捕获)", probe.lock.withLock { $0.cached == nil }, "")
+check("T-cp64 消失路径 reset→缓存清空(下一episode重新捕获)", probe.lock.withLock { $0.cached == nil }, "")
+}
+
+// ---- C4b 保守保留语义（真实完成链）：targetMissing / unavailable / 超门限 stats 均不
+// 擦除既有有效观察（stale 失败必须保守处理，SC/CG 清单竞态不产生错误空窗）。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(80_000))
+    let outcomeBox = OSAllocatedUnfairLock<ContainerCaptureOutcome>(initialState: .stats(cpStatsA))
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, _ in outcomeBox.withLock { $0 } })
+    let container = cpContainer(531)
+    // 前置：首捕有效观察
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp65 前置:首捕→bounds", probe.locate(container: container) == .bounds(cpRectA), "")
+    // (a) targetMissing（SCK 清单缺 WID）→ 保留既有观察
+    outcomeBox.withLock { $0 = .targetMissing }
+    clock.withLock { $0 = 80_001 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp66 targetMissing→保留既有有效观察",
+          probe.locate(container: container) == .bounds(cpRectA), "")
+    // (b) unavailable（捕获失败，非权限缺失）→ 保留既有观察
+    outcomeBox.withLock { $0 = .unavailable }
+    clock.withLock { $0 = 80_002 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp67 unavailable→保留既有有效观察",
+          probe.locate(container: container) == .bounds(cpRectA), "")
+    // (c) 超门限 stats（fraction > gate）→ 不接纳新观察 + 保留既有观察
+    let cpDenseStats = ContainerAlphaStats(nonTransparentPixelCount: 4840, minX: 10, minY: 20,
+                                           maxX: 29, maxY: 59, captureWidth: 200, captureHeight: 400)
+    outcomeBox.withLock { $0 = .stats(cpDenseStats) }
+    clock.withLock { $0 = 80_003 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp68 超门限stats→不接纳+保留既有观察",
+          probe.locate(container: container) == .bounds(cpRectA)
+            && probe.lock.withLock { $0.cached?.nonTransparentPixelCount == cpStatsA.nonTransparentPixelCount },
+          "")
+    // 恢复：新的有效观察重新生效（bbox 变化 → 快速节奏窗口）
+    outcomeBox.withLock { $0 = .stats(cpStatsB) }
+    clock.withLock { $0 = 80_004 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp69 新有效观察→bounds更新",
+          probe.locate(container: container) == .bounds(cpRectB), "")
 }
 
 print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")
