@@ -5913,7 +5913,7 @@ check("T-cp22 首个有效观察（none→bounds）触发 onObservationChanged �
     check("T-cp24 stable 0.33s 节奏→捕获(3Hz 心跳)", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
     check("T-cp24b 同 rect 再观察→不重复 wake", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
 
-    // bbox 变化 → 0.1s 快速节奏保持 movingHoldDuration，随后回到 stable 1s。
+    // bbox 变化 → 0.1s 快速节奏保持 movingHoldDuration，随后回到 stable 0.33s。
     clock.withLock { $0 = 10_002 }
     outcomeBox.withLock { $0 = .stats(cpStatsB) }
     _ = probe.locate(container: container)
