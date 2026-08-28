@@ -47,6 +47,7 @@ panel.contentView?.layer?.cornerRadius = metrics.cornerRadius
 - completion 回调经 main 派发；测试用 `waitPumpingMain`（pump RunLoop）避免主线程死锁，**勿用** `XCTestExpectation`。
 - async capturer / provider fixture 使用 async continuation 或等价非阻塞 gate；不得在 async closure 中调用 `DispatchSemaphore.wait()` 或依赖固定 `Task.sleep` 窗口。独立 `swiftc` 测试入口必须把 compiler warning 当 error。
 - `BubbleVisibilityProbe` 用 `OSAllocatedUnfairLock` + generation 校验保证 single-flight。
+- `BubbleVisibilityProbe` 的参考通道（`updateReferences` / `referenceOutcome`）与障碍通道隔离：独立 cache、generation、in-flight。Mascot 只作参照，不得进入障碍 `knownWids`。新增通道后，生产 `FollowLayoutPass.placeDock` 与测试 two-tick helper 都必须覆盖该通道的完成谓词。
 - `LineReader` 用 `readabilityHandler`（GCD）替代阻塞 `availableData`，`stop()` 有限时间返回不挂起。
 
 ## 障碍 kind 与候选 identity

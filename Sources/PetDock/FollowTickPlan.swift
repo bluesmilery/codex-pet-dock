@@ -329,20 +329,43 @@ enum FollowLayoutPass {
         bubbleProbe.probe(candidates: classified.compactMap { pair in
             pair.1 == .bubble || pair.1 == .compositionSurface ? pair.0 : nil
         })
+        // Mascot 只走独立参考通道（同一 capturer、独立缓存/generation），不进入
+        // 障碍候选集 —— 避免 knownWids/复位合同（回归 A）被改写。CS 内容底只从
+        // 主导探测 observation(for:) 读取，禁止再送进参考通道二次捕获。
+        let csCandidates = classified.filter { $0.1 == .compositionSurface }
+        bubbleProbe.updateReferences([mascot])
+        // 活层代表先于避让集构造裁决：非代表 CS 层不产生布局，防止死层幽灵矩形把
+        // dock 推离真实内容底；单 CS 实例时该候选即代表。
+        var rep: WinCandidate?
+        if csCandidates.count == 1 { rep = csCandidates[0].0 }
+        if csCandidates.count > 1,
+           case .stats(let mascotStats) = bubbleProbe.referenceOutcome(for: mascot.wid),
+           mascotStats.contentBottom >= 0 {
+            let epsilon: CGFloat = 2                       // 脚底±1px 动画抖动容差
+            let upperBound: CGFloat = 172                  // 覆盖按钮+展开卡向下延伸（现场 ~110px）
+            let petFootAbs = mascot.bounds.minY + CGFloat(mascotStats.contentBottom + 1)
+            struct LiveLayer { let candidate: WinCandidate; let bottomAbs: CGFloat }
+            var liveLayers: [LiveLayer] = []
+            for (candidate, _) in csCandidates {
+                let observation = bubbleProbe.observation(for: candidate.wid)
+                guard observation.visibility == .visible,
+                      let contentBottom = observation.contentBottom, contentBottom >= 0 else { continue }
+                let csBottomAbs = candidate.bounds.minY + CGFloat(contentBottom + 1)
+                if csBottomAbs >= petFootAbs - epsilon && csBottomAbs <= petFootAbs + upperBound {
+                    liveLayers.append(LiveLayer(candidate: candidate, bottomAbs: csBottomAbs))
+                }
+            }
+            rep = liveLayers.min(by: { lhs, rhs in
+                if lhs.bottomAbs != rhs.bottomAbs { return lhs.bottomAbs < rhs.bottomAbs }
+                return lhs.candidate.wid < rhs.candidate.wid
+            })?.candidate   // 未落入一致性窗口 → rep=nil：显式回退 Mascot 窗口底锚
+        }
         let visibleBounds = classified.compactMap { pair -> CGRect? in
+            // 非代表 CS 层不参与布局（死层残影不得把 dock 推离活层内容底）。
+            if pair.1 == .compositionSurface, pair.0.wid != rep?.wid { return nil }
             if pair.1 == .control { return pair.0.bounds }
             let observation = bubbleProbe.observation(for: pair.0.wid)
             guard observation.visibility == .visible else { return nil }
-            // 可见气泡按可见内容避让：宿主收起后的容器窗口底部仍残留大片透明区，
-            // 障碍高度 = 窗口内内容底边+1（像素≈点），dock 紧贴内容底而非整窗底；
-            // 水平仍用整窗 bounds（内容水平居中且窗口本身水平定位，保持水平避让语义）。
-            // 保守 visible（unavailable/TCC/首次观察前，无内容信息）按种类分流：
-            // - .bubble（ACT 等小窗）：整窗 bounds 避让（macOS13/降级语义与既有版本一致）。
-            // - .compositionSurface（常驻大窗，现场实测 768x912）：障碍性完全取决于宠物下方的
-            //   像素内容，无观察数据时没有任何依据整窗避让 → 跳过（不作为障碍）。降级模式
-            //   （macOS 13/TCC 拒绝/捕获失败）行为与本通道引入前一致；正常模式冷启动首次
-            //   探测完成前（≤~0.3s）若气泡恰好展开仅短暂重叠，由首次探测纠正——远优于
-            //   整窗避让把 dock 永久/闪跳推到大窗底部。
             guard let contentBottom = observation.contentBottom else {
                 return pair.1 == .compositionSurface ? nil : pair.0.bounds
             }
@@ -351,8 +374,7 @@ enum FollowLayoutPass {
                           height: min(CGFloat(contentBottom + 1), pair.0.bounds.height))
         }
         if let evidence {
-            // 证据计数沿用二元 bubble/control 通道：像素探测类（.bubble/.compositionSurface）
-            // 计入 bubbleObstacles，与标题通道引入前的计数口径保持连续。
+            // 证据计数沿用二元 bubble/control 通道口径，与标题通道引入前保持连续。
             let bubbleCount = classified.filter { $0.1 != .control }.count
             evidence.recordLayoutTick(
                 bubbleObstacles: bubbleCount,
@@ -360,18 +382,10 @@ enum FollowLayoutPass {
                 visibleObstacles: visibleBounds.count
             )
         }
-        // 布局锚：基础位锚定“宠物+其下方可见内容”的实时底边，而非 Mascot 窗口底。
-        // Mascot 窗口底部有大量透明 padding（现场实测可见内容底 abs y328 vs 窗口底 369），
-        // 宠物/气泡卡像素实际渲染在 Composition Surface（obstaclesNear 去重后恰一个代表），
-        // 其 contentBottom 观察即可见内容底。visible 且有 contentBottom 时：
-        // effectivePetMaxY = 代表.bounds.minY + contentBottom + 1（Quartz 全局 y；
-        // contentBottom 为窗口内像素行，与上方避让矩形高度 contentBottom+1 同口径——
-        // 展开态障碍底边 == effectivePetMaxY，基础位即内容底+gap，不产生双重下移）。
-        // 否则（hidden / 降级 / 冷启动首 tick 无 cache）回退 Mascot 窗口底，降级行为不变。
-        // 已知权衡：宠物动画（叶子摆动等）会使 contentBottom 逐帧微变 → dock 基础位微跳；
-        // 本轮不加平滑，若真机观察到 >4px 高频抖动，后续轮再加滞回。
+        // 布局锚：活层代表 contentBottom 观察 → effectivePetMaxY；否则回退窗口底。口径与
+        // 上方避让矩形同源（contentBottom+1），展开态不产生双重下移。
         var effectivePetMaxY = mascot.bounds.maxY
-        if let rep = classified.first(where: { $0.1 == .compositionSurface })?.0 {
+        if let rep {
             let observation = bubbleProbe.observation(for: rep.wid)
             if observation.visibility == .visible, let contentBottom = observation.contentBottom {
                 effectivePetMaxY = max(mascot.bounds.minY,

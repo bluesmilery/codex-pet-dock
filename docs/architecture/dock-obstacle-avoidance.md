@@ -13,7 +13,7 @@
 - `minY >= pet.maxY - bubbleMinYSlack`（32），并且水平投影与 pet 重叠；
 - 标题气泡通道：标题精确等于 `Codex Pet Composition Surface` 的窗口（宿主实测稳定标识，与 `selectPet` 依赖的 "Mascot" 标题同级）不受高度/边长上限约束——现场取证显示展开气泡卡只渲染在该标题的 768×912 大窗里（7 个同 bounds 重复实例），几何通道会把它排除；纳入条件是同 owner 浮层、水平投影与 pet 重叠且 `bounds.maxY > pet.maxY`（窗口延伸到宠物下方）。
 - 除 Mascot 自身、main（layer 0）与几何/标题通道都不匹配的窗口外，voice controls（`height < 32`）及包含整个宠物的 wrapper 仍被排除；高度达到 223 且远低于宠物底部的 512×223 wrapper，以及不在宠物底部附近的 384×95 / 17×6 辅助窗，都不会被当作会话气泡；标题不匹配的同尺寸大窗同样不纳入（精确匹配，不做几何猜测）。
-- 输出边界去重分两条通道：**Composition Surface 通道按标题去重（跨 bounds）**——在进入任何排序之前、按原始 candidates 顺序（即 CGWindowList 的前到后顺序）取首个命中实例为唯一代表，其余同标题实例不论 bounds 全部跳过；wid 升序排序仅用于输出稳定性，绝不参与 CS 代表选择（现场前层实例的 wid 反而更大，若在 wid 排序后的列表上取首位会选中最深层残影）。CS 是宿主的重复合成层，仅最前层内容对用户可见；宿主布局切换后可能同时存在多种 bounds 的 CS 窗口，而 desktopIndependentWindow 像素捕获感知不到前层遮挡——后层残留的旧布局“幽灵”气泡卡会被当成真实内容，在气泡位于宠物上方时把 dock 推到幽灵卡片下方（2026-08-24 现场实测：多 bounds CS 并存，后层 86px 残影使 dock 多让 ~31px、宠物与 dock 间出现大气泡尺寸空白）。只保留最前层实例后，被遮挡的后层残影不再产生障碍、内容锚或像素捕获。**其余通道（几何 bubble/control）维持 (owner, title, layer, bounds) 签名去重**（wid 升序保留一个代表）：同一窗口的多个重复实例只产生一个布局障碍和一个 probe 候选；这也保证布局障碍集与像素探测候选集一致。
+- 输出边界去重：全部通道统一按 (owner, title, layer, bounds) 签名去重（输入顺序保留首个代表）——同签名重复实例只产生一个布局障碍和一个 probe 候选；不同签名的 CS 层全部保留，交由 `FollowLayoutPass` 活层代表选择裁决唯一布局锚代表（见下文）。2026-08-26 现场证明“列表首层 = 活层”假设已失效：死层残影排在活层前面，desktopIndependentWindow 像素捕获感知不到前层遮挡，仅像素几何一致性可区分死/活层。wid 升序仅用于输出稳定性排序。
 
 辅助窗口不会成为跟随目标：`selectPet` 仍使用 `isReasonablePet` 排除宽扁或过小控件；障碍集合只用于几何避让。
 
@@ -44,7 +44,7 @@ avoidance 段激活期间，底座用自有 `NSWindow.displayLink`（macOS 14+�
 
 宠物可见内容渲染在 Composition Surface（恒 visible、携带 `contentBottom` 观察），而 Mascot 窗口底部存在大量透明 padding（现场实测可见内容底 abs y≈328、Mascot 窗口底 369，视觉空白 44px）。因此 `FollowLayoutPass.placeDock` 传给 frame sink 的布局锚不再固定为 Mascot 窗口底，而是“有效宠物内容底”：
 
-1. 在分类去重后的候选中取 Composition Surface 代表（`.compositionSurface`，`obstaclesNear` 去重后恰一个）。
+1. 在分类去重后的候选中取 Composition Surface 代表。候选唯一（绝大多数现场）时该实例即代表；宿主同时存在多个不同签名的 CS 层时（2026-08-26 现场：死层残影在 CGWindowList 中排在活层前面），`FollowLayoutPass` 先经独立参考通道只捕获 Mascot，取得实测脚底 `petFootAbs = mascot.bounds.minY + mascotContentBottom + 1`，再对每个 CS 候选按主导探测 `observation(for:)` 的 `contentBottom` 做一致性窗口筛选：`csBottomAbs = candidate.bounds.minY + contentBottom + 1 ∈ [petFootAbs − 2, petFootAbs + 172]`（下界容差吸收脚底动画抖动；上界覆盖控制按钮 + 展开气泡卡的向下延伸）。代表 = 窗口内最小 `csBottomAbs` 的候选；无候选满足窗口 → 显式回退 Mascot 窗口底锚，CS 仍按其自身观察正常避让。参考通道不得二次捕获 CS；稳定身份下参考节奏与主导探测相同（identityDirty 时 0.1s，稳定后 1.0s）。
 2. `bubbleProbe.observation(for: 代表.wid)` 为 visible 且携带 `contentBottom` 时，`effectivePetMaxY = 代表.bounds.minY + contentBottom + 1`（Quartz 全局 y；`contentBottom` 是窗口内像素行，与避让矩形高度 `contentBottom + 1` 同口径），并以 `max(mascot.bounds.minY, …)` 保护。
 3. 否则（hidden、降级 macOS 13 / TCC 拒绝 / 捕获失败、冷启动首 tick 无 cache）回退 `mascot.bounds.maxY`，降级语义与本通道引入前一致。
 4. 以 `adjustedPet`（origin.x / width 不变——水平居中仍按 Mascot 窗口，仅高度收缩/延伸到 `effectivePetMaxY`）调用 frame sink；`DockPanel.placeBelow` 与 `Geometry.safeDockFrame` 完全不变，基础位自然变为内容底 + gap。

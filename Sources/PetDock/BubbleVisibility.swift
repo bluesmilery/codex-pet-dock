@@ -167,6 +167,23 @@ final class BubbleVisibilityProbe: Sendable {
         /// 当前候选 WID 对应的完整身份快照；同 WID 但任一非 bounds 身份字段变化会换 generation
         /// （纯 bounds 平移/缩放不换，见 probe 的粘性可见性判定）。
         var knownCandidates: [CGWindowID: BubbleCandidateIdentity] = [:]
+        /// 独立参考通道（仅 Mascot 参照窗）：wid → 最近一次原始 capture
+        /// outcome。只服务 FollowLayoutPass 的布局锚活层判定，不进入障碍候选的
+        /// cached/knownWids 语义，避免 Mascot 参与改写"消失候选 → hidden 复位"
+        /// （回归 A）等既有合同；参考侧用 stats 非负 contentBottom 表达"本次成功
+        /// 且可判定"，nil 表示未到 / 已失效 / targetMissing / unavailable。
+        var referenceCacheOutcomes: [CGWindowID: BubbleCaptureOutcome] = [:]
+        /// 参考通道当前帧 wid 集：语义镜像 knownWids（当前帧失效），独立维护。
+        var referenceKnownWids: Set<CGWindowID> = []
+        /// 参考通道身份快照；identity 判定复用 sameWindowIgnoringBounds
+        /// （纯 bounds 平移保留参考 cache）。
+        var referenceCandidates: [CGWindowID: BubbleCandidateIdentity] = [:]
+        /// 参考通道 generation：参考候选切换 / 失效 / reset 递增；旧结果作废。
+        var referenceGeneration = 0
+        /// 参考通道在途标记：与障碍 inFlight 独立——不占用主导探测单飞 gate。
+        var referenceInFlight = false
+        /// 参考通道上次捕获启动时刻（同型独立维护，不影响主导探测节奏）。
+        var lastReferenceCaptureAt: TimeInterval = -.greatestFiniteMagnitude
         /// 当前 generation 内至少一次成功取得 alpha 统计的目标 WID。
         /// 只有这些 WID 的后续 targetMissing 才是权威 hidden；unavailable 永远保守 visible。
         var successfullyObservedWids: Set<CGWindowID> = []
@@ -372,6 +389,11 @@ final class BubbleVisibilityProbe: Sendable {
         }
     }
 
+    /// 独立参考通道（布局锚活层判定用）：wid 最近一次原始 capture outcome；只读独立缓存，不触碰障碍候选 cached/knownWids。
+    func referenceOutcome(for wid: CGWindowID) -> BubbleCaptureOutcome? {
+        lock.withLock { $0.referenceCacheOutcomes[wid] }
+    }
+
     /// 同步读可见性状态（wake/telemetry 语义入口；障碍构造请用 observation(for:)）。
     func visibility(for wid: CGWindowID) -> BubbleVisibility {
         observation(for: wid).visibility
@@ -386,8 +408,102 @@ final class BubbleVisibilityProbe: Sendable {
             s.knownWids.removeAll()
             s.knownCandidates.removeAll()
             s.successfullyObservedWids.removeAll()
+            s.referenceGeneration += 1
+            s.referenceCacheOutcomes.removeAll()
+            s.referenceKnownWids.removeAll()
+            s.referenceCandidates.removeAll()
             s.pendingRetryAt = nil
             s.identityDirty = true
+        }
+    }
+
+    // MARK: - 独立参考通道（同 capturer、独立缓存；不改变障碍探测合同）
+
+    /// FollowLayoutPass 每 tick 同步调用：刷新参考通道当前帧候选（Mascot 参照窗），
+    /// 并按独立节拍启动后台参考捕获。参考缓存只服务布局锚活层判定；disabled 时空转。
+    /// 幂等：候选集合与非 bounds 身份快照完全不变且 cadence 未到时，本 tick 只做一次
+    /// 无写入的快速检查并直接返回（无锁写、不启动捕获）；身份变化仍走 generation
+    /// 递增 + 清参考缓存，single-flight 与 stale 拒绝语义不变。
+    func updateReferences(_ references: [WinCandidate]) {
+        // 稳态快速路径：WID 集合与非 bounds 身份完全不变且 cadence 未到 → 只读检查后
+        // 直接返回，跳过锁写与捕获启动（单飞/在途时同样无事可做）。语义等价：
+        // unchanged 分支本就不会写状态；任何身份变化/清缓存/启动都仍走下方完整路径。
+        guard canCapture() else { return }   // 降级模式参考通道同样空转（与主导探测一致）
+        let steadyStateSkip = lock.withLock { s -> Bool in
+            if s.referenceInFlight || s.referenceKnownWids.isEmpty || s.referenceCacheOutcomes.isEmpty {
+                return false
+            }
+            if references.count != s.referenceKnownWids.count { return false }
+            for candidate in references {
+                guard let known = s.referenceCandidates[candidate.wid],
+                      known.sameWindowIgnoringBounds(BubbleCandidateIdentity(candidate)) else {
+                    return false
+                }
+            }
+            let interval = s.identityDirty ? Self.minInterval : Self.stableProbeInterval
+            return monotonicNow() - s.lastReferenceCaptureAt < interval
+        }
+        if steadyStateSkip { return }
+        let refs = references
+        let (gen, capturedRefs, shouldStart): (Int, [CGWindowID: BubbleCandidateIdentity], Bool) =
+            lock.withLock { s -> (Int, [CGWindowID: BubbleCandidateIdentity], Bool) in
+                let nextWids = Set(references.map { $0.wid })
+                let nextCandidates = references.reduce(into: [CGWindowID: BubbleCandidateIdentity]()) { result, candidate in
+                    result[candidate.wid] = BubbleCandidateIdentity(candidate)
+                }
+                let widsChanged = s.referenceKnownWids != nextWids
+                var windowIdentityChanged = widsChanged
+                if !windowIdentityChanged {
+                    for (wid, identity) in nextCandidates
+                    where s.referenceCandidates[wid]?.sameWindowIgnoringBounds(identity) != true {
+                        windowIdentityChanged = true
+                        break
+                    }
+                }
+                if windowIdentityChanged {
+                    s.referenceGeneration += 1
+                    s.referenceCacheOutcomes.removeAll()
+                }
+                s.referenceKnownWids = nextWids
+                s.referenceCandidates = nextCandidates
+                guard !references.isEmpty else {
+                    if s.referenceCacheOutcomes.isEmpty && !s.referenceInFlight {
+                        return (0, [:], false)
+                    }
+                    s.referenceGeneration += 1
+                    s.referenceCacheOutcomes.removeAll()
+                    return (0, [:], false)
+                }
+                guard !s.referenceInFlight else { return (0, [:], false) }
+                let time = monotonicNow()
+                let elapsed = time - s.lastReferenceCaptureAt
+                let interval = s.identityDirty ? Self.minInterval : Self.stableProbeInterval
+                guard elapsed >= interval else { return (0, [:], false) }
+                s.referenceInFlight = true
+                s.lastReferenceCaptureAt = time
+                return (s.referenceGeneration, s.referenceCandidates, true)
+            }
+        guard shouldStart else { return }
+        let makeCapturer = self.makeCapturer
+        Task.detached { [lock] in
+            let cap = await makeCapturer()
+            let resultsBox = OSAllocatedUnfairLock(initialState: [CGWindowID: BubbleCaptureOutcome]())
+            for c in refs {
+                let outcome = await cap(c)
+                resultsBox.withLock { $0[c.wid] = outcome }
+            }
+            let results = resultsBox.withLock { $0 }
+            _ = lock.withLock { s -> Bool in
+                s.referenceInFlight = false   // 旧 Task 始终清自己的在途 token
+                guard s.referenceGeneration == gen,
+                      s.referenceCandidates == capturedRefs else { return false }
+                for entry in results where s.referenceKnownWids.contains(entry.key) {
+                    s.referenceCacheOutcomes[entry.key] = entry.value
+                }
+                return true
+            }
+            // 参考通道完成不再额外 wake：wake 语义只服务障碍可见性变化，
+            // 参考结果由下一 tick 直接读取（参考窗仅 Mascot；节奏与主导探测相同）。
         }
     }
 
