@@ -115,6 +115,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 先记录脱敏边沿计数，再请求合并唤醒；evidence 关闭时仅剩一次 wake 请求开销。
             self?.runtimeEvidence?.recordContainerObservationChange()
             self?.followScheduler.requestWake()
+        },
+        onStreamStartFailure: { [weak self] in
+            self?.runtimeEvidence?.recordContainerStreamStartFailure()
         })
     private let settings = Settings()
     private var themeStore: ThemeStore?

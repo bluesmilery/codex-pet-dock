@@ -63,6 +63,7 @@ protocol RuntimeEvidenceRecording: Sendable {
     func recordIdentityChange()
     func recordWakeCallback()
     func recordContainerObservationChange()
+    func recordContainerStreamStartFailure()
     func recordLayoutTick(bubbleObstacles: Int, controlObstacles: Int, visibleObstacles: Int)
     func recordDockDyBucket(_ bucket: DockDyBucket)
     func recordContainerPlacement(shown: Bool)
@@ -99,6 +100,7 @@ private final class RuntimeEvidenceCollector: RuntimeEvidenceRecording, Sendable
         var identityChangeCount = 0
         var wakeCallbackCount = 0
         var containerObservationChangeCount = 0
+        var containerStreamStartFailureCount = 0
         var containerPlacementShownCount = 0
         var containerPlacementHiddenCount = 0
         /// 上次 container 通道 placement 结果（dirty 抑制；nil = 尚无样本）。
@@ -198,6 +200,15 @@ private final class RuntimeEvidenceCollector: RuntimeEvidenceRecording, Sendable
         }
     }
 
+    /// ContainerPetProbe：首帧 watchdog 触发的 stream 启动失败次数。
+    /// 每次失败都是新证据，直接置 dirty；只包含脱敏聚合计数，不携带 WID 或错误文本。
+    func recordContainerStreamStartFailure() {
+        lock.withLock {
+            $0.containerStreamStartFailureCount += 1
+            $0.dirty = true
+        }
+    }
+
     /// DockPanel：实际写入 frame 相对本 tick 无障碍基础 frame 的匿名 dy bucket。
     /// 仅 bucket 值变化时标记 dirty（同值重复写回不算新证据）。
     func recordDockDyBucket(_ bucket: DockDyBucket) {
@@ -251,6 +262,7 @@ private final class RuntimeEvidenceCollector: RuntimeEvidenceRecording, Sendable
                 "identityChangeCount": s.identityChangeCount,
                 "wakeCallbackCount": s.wakeCallbackCount,
                 "containerObservationChangeCount": s.containerObservationChangeCount,
+                "containerStreamStartFailureCount": s.containerStreamStartFailureCount,
                 "containerPlacementShownCount": s.containerPlacementShownCount,
                 "containerPlacementHiddenCount": s.containerPlacementHiddenCount,
                 "dockDyBaseCount": s.dockDyBaseCount,

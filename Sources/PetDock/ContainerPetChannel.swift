@@ -37,6 +37,8 @@ enum ContainerPetHeuristics {
     static let downsampleMaxSide: CGFloat = 400
     /// managed SCStream 的最小帧间隔（3 fps；由系统按帧推送，替代固定成本很高的一次性截图轮询）。
     static let streamFrameInterval: TimeInterval = 0.33
+    /// 首帧 watchdog：active 后 2s 内没有任何 frame 则按启动失败退役（只检查 first frame）。
+    static let streamFirstFrameTimeout: TimeInterval = 2.0
 }
 
 /// 容器窗选择：纯函数签名，只用可观测窗口事实（不依赖标题）。
@@ -206,6 +208,8 @@ enum ContainerCaptureTransport {
 /// - accepted observation rect 相对上次交付结果变化时触发一次 onObservationChanged
 ///   （none→rect / rect→different）；reset() / wid 变化清空 baseline 重新武装。
 final class ContainerPetProbe: Sendable {
+    private static let streamHealthLogger = PetLogger()
+
     internal struct ProbeState: Sendable {
         /// 最近一次**通过门限**的捕获统计（捕获像素坐标 bbox）；nil = 尚无有效观察。
         var cached: ContainerAlphaStats?
@@ -229,6 +233,10 @@ final class ContainerPetProbe: Sendable {
         var starting = false
         var stopping = false
         var frameComputing = false
+        var firstFrameDelivered = false
+        var firstFrameDeadline: TimeInterval?
+        var consecutiveStartFailures = 0
+        var nextStartAllowedAt: TimeInterval?
         var startingGeneration = 0
         var startingWID: CGWindowID?
         var processingGeneration = 0
@@ -245,12 +253,14 @@ final class ContainerPetProbe: Sendable {
     private let streamFactory: ContainerFrameStreamFactory?
     private let usesManagedStream: Bool
     private let onObservationChanged: (@Sendable () -> Void)?
+    private let onStreamStartFailure: (@Sendable () -> Void)?
 
     init(monotonicNow: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          canCapture: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
          capturer: ContainerCapturer? = nil,
          transport: ContainerCaptureTransport = .oneShot,
-         onObservationChanged: (@Sendable () -> Void)? = nil) {
+         onObservationChanged: (@Sendable () -> Void)? = nil,
+         onStreamStartFailure: (@Sendable () -> Void)? = nil) {
         self.lock = OSAllocatedUnfairLock(initialState: ProbeState())
         self.monotonicNow = monotonicNow
         self.canCapture = canCapture
@@ -265,6 +275,7 @@ final class ContainerPetProbe: Sendable {
             self.streamFactory = nil
         }
         self.onObservationChanged = onObservationChanged
+        self.onStreamStartFailure = onStreamStartFailure
     }
 
     deinit {
@@ -282,6 +293,10 @@ final class ContainerPetProbe: Sendable {
         let knownWID = lock.withLock { $0.knownWID }
         if let knownWID, knownWID != container.wid {
             stopActiveStream()
+            streamRuntime.withLock { s in
+                s.consecutiveStartFailures = 0
+                s.nextStartAllowedAt = nil
+            }
         }
         guard canCapture() else {
             // 权限/能力不可用：陈旧缓存必须丢弃（stale WID 不得降级为错误锚点），
@@ -311,6 +326,10 @@ final class ContainerPetProbe: Sendable {
             return .unavailable
         }
         let useManagedStream = usesManagedStream && managedStreamAvailable
+        if useManagedStream {
+            // watchdog 是 locate 驱动的单调 deadline 检查：无 steady-state timer 成本。
+            retireFirstFrameTimeoutIfDue(now: time)
+        }
         struct CaptureStart: Sendable {
             let generation: Int
             let container: WinCandidate
@@ -418,6 +437,10 @@ final class ContainerPetProbe: Sendable {
             s.currentContainerBounds = nil
             s.movingUntil = -.greatestFiniteMagnitude
         }
+        streamRuntime.withLock { s in
+            s.consecutiveStartFailures = 0
+            s.nextStartAllowedAt = nil
+        }
         stopActiveStream()
     }
 
@@ -431,8 +454,12 @@ final class ContainerPetProbe: Sendable {
     private func startStreamIfNeeded(container: WinCandidate) {
         guard usesManagedStream, streamFactory != nil else { return }
         guard #available(macOS 14.0, *) else { return }
+        let now = monotonicNow()
         let shouldStart = streamRuntime.withLock { s -> Bool in
-            guard !s.starting, !s.stopping, s.active == nil, s.activeWID == nil else { return false }
+            guard !s.starting, !s.stopping, s.active == nil, s.activeWID == nil,
+                  s.nextStartAllowedAt == nil || now >= s.nextStartAllowedAt! else {
+                return false
+            }
             s.starting = true
             s.startingGeneration = lock.withLock { $0.generation }
             s.startingWID = container.wid
@@ -447,6 +474,8 @@ final class ContainerPetProbe: Sendable {
         let consumer: any ContainerFrameConsumer = self
         let runtimeLock = streamRuntime
         let probeLock = lock
+        let nowProvider = monotonicNow
+        let firstFrameTimeout = ContainerPetHeuristics.streamFirstFrameTimeout
         let scheduled = container
         Task.detached(priority: .utility) {
             do {
@@ -463,6 +492,8 @@ final class ContainerPetProbe: Sendable {
                     s.active = stream
                     s.activeWID = scheduled.wid
                     s.starting = false
+                    s.firstFrameDelivered = false
+                    s.firstFrameDeadline = nowProvider() + firstFrameTimeout
                     return true
                 }
                 if !accepted {
@@ -509,6 +540,8 @@ final class ContainerPetProbe: Sendable {
     /// stream completion 和 one-shot completion 共用的 accepted-observation 输入端；
     /// edge/baseline/generation/WID 门限与 telemetry 触发完全一致。
     private func processStreamOutcome(_ result: ContainerCaptureOutcome) async {
+        // Frames-are-truth：mid-stream stall 不做 watchdog 退役；静态窗口可能稀疏送帧，
+        // observation cache 负责 retention。只有“从未收到首帧”的启动路径被健康检查。
         let frameContext = streamRuntime.withLock { s -> (Int, CGWindowID?, CGRect?, Bool)? in
             guard s.frameComputing else { return nil }
             return (s.processingGeneration, s.processingWID, s.processingBounds, true)
@@ -548,9 +581,54 @@ final class ContainerPetProbe: Sendable {
             s.activeWID = nil
             s.starting = false
             s.stopping = false
+            s.firstFrameDelivered = false
+            s.firstFrameDeadline = nil
             return true
         }
         if shouldNotify { onObservationChanged?() }
+    }
+
+    /// 连续 first-frame 失败的 2s -> 4s -> 8s 退避；cap 后维持 8s。
+    private static func startFailureBackoff(consecutiveFailures: Int) -> TimeInterval {
+        let schedule: [TimeInterval] = [2, 4, 8]
+        let index = min(max(consecutiveFailures, 1) - 1, schedule.count - 1)
+        return schedule[index]
+    }
+
+    /// active stream 超过 deadline 仍未送帧：走 wrapper.stop 的 didStop-equivalent teardown，
+    /// 记录脱敏 start failure，退避后由下一次 locate 干净重启。不得杀 mid-stream stall。
+    private func retireFirstFrameTimeoutIfDue(now: TimeInterval) {
+        let retired = streamRuntime.withLock { s -> (any ContainerFrameStream)? in
+            guard let active = s.active,
+                  s.activeWID != nil,
+                  !s.starting,
+                  !s.stopping,
+                  !s.firstFrameDelivered,
+                  let deadline = s.firstFrameDeadline,
+                  now >= deadline else {
+                return nil
+            }
+            s.active = nil
+            s.activeWID = nil
+            s.starting = false
+            s.stopping = true
+            s.firstFrameDelivered = false
+            s.firstFrameDeadline = nil
+            s.consecutiveStartFailures += 1
+            s.nextStartAllowedAt = now + Self.startFailureBackoff(
+                consecutiveFailures: s.consecutiveStartFailures)
+            return active
+        }
+        guard let stream = retired else { return }
+        Self.streamHealthLogger.log("container stream first-frame timeout; retiring stream")
+        onStreamStartFailure?()
+        let runtimeLock = streamRuntime
+        let notify = onObservationChanged
+        Task.detached(priority: .utility) {
+            await stream.stop()
+            runtimeLock.withLock { $0.stopping = false }
+            notify?()
+        }
     }
 
     // MARK: - 默认捕获器（macOS 14+ ScreenCaptureKit；每轮捕获一次共享清单枚举）
@@ -609,6 +687,14 @@ extension ContainerPetProbe: ContainerFrameConsumer {
             s.processingGeneration = generation
             s.processingWID = wid
             s.processingBounds = bounds
+            // 任何被 consumer 实际接收的 frame 都取消 first-frame watchdog，并重置退避链；
+            // 只有 active 生命周期内的 frame 能做这个 reset，watchdog 已退役后到达的旧帧不能。
+            if s.active != nil, !s.stopping {
+                s.firstFrameDelivered = true
+                s.firstFrameDeadline = nil
+                s.consecutiveStartFailures = 0
+                s.nextStartAllowedAt = nil
+            }
             return true
         }
     }
