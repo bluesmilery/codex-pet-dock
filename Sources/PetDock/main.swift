@@ -110,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var containerProbe = ContainerPetProbe(
         monotonicNow: followMonotonicNow,
+        transport: .managedStream(factory: nil),
         onObservationChanged: { [weak self] in
             // 先记录脱敏边沿计数，再请求合并唤醒；evidence 关闭时仅剩一次 wake 请求开销。
             self?.runtimeEvidence?.recordContainerObservationChange()
@@ -233,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func quit() {
         themeStore?.stop()
         followScheduler.stop()
+        containerProbe.shutdown()
         stopDataRefresh()
         provider.stop()
         log("quit")
@@ -241,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         followScheduler.stop()
+        containerProbe.shutdown()
     }
 
     // MARK: - 详情 / 渲染

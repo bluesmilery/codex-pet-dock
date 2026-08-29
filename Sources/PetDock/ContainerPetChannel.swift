@@ -1,4 +1,6 @@
 import Cocoa
+import CoreImage
+import CoreMedia
 import os
 import ScreenCaptureKit
 
@@ -17,9 +19,10 @@ enum ContainerPetHeuristics {
     /// 容器窗面积下限（实测 ~772x2549 约等于 1.97M；旧结构 Composition Surface 768x912 约 0.7M
     /// 不满足 → 主 Mascot 通道存在时容器通道绝不干扰）。
     static let minArea: CGFloat = 1_000_000
-    /// 捕获验证门限：非透明像素占比 ≤ 此值才算“近乎全透明的宠物容器”（实测 ~0.0019），
-    /// 与几何签名共同防止无关大内容窗劫持跟踪。
-    static let opaqueFractionGate: Double = 0.01
+    /// 捕获验证门限：非透明像素占比 ≤ 此值才算“近乎全透明的宠物容器”。QA-run-4 实测
+    /// channel-active 值在 0.0090–0.0102 抖动（精灵抗锯齿/动画），旧 0.01 会造成通道
+    /// 时有时无；正常不透明应用窗 >10× 该值，0.02 headroom 保留拒绝能力。
+    static let opaqueFractionGate: Double = 0.02
     /// 合成宠物矩形边长合理范围（映射后 sanity）。
     static let petMinSide: CGFloat = 20
     static let petMaxSide: CGFloat = 400
@@ -32,6 +35,10 @@ enum ContainerPetHeuristics {
     static let movingHoldDuration: TimeInterval = 2.0
     /// 捕获降采样最长边上限（镜像 BubbleVisibility 降采样模式，无 bubble 阈值耦合）。
     static let downsampleMaxSide: CGFloat = 400
+    /// managed SCStream 的最小帧间隔（3 fps；由系统按帧推送，替代固定成本很高的一次性截图轮询）。
+    static let streamFrameInterval: TimeInterval = 0.33
+    /// macOS 13 无法使用 managed SCStream；一次性截图回退保持保守 1Hz，避免高固定成本轮询。
+    static let legacyStableCaptureInterval: TimeInterval = 1.0
 }
 
 /// 容器窗选择：纯函数签名，只用可观测窗口事实（不依赖标题）。
@@ -165,6 +172,32 @@ enum ContainerPetChannel {
 /// 像素捕获器接口（@Sendable 闭包，后台 Task 安全传递）；size = 降采样目标尺寸。
 typealias ContainerCapturer = @Sendable (WinCandidate, CGSize) async -> ContainerCaptureOutcome
 
+/// managed SCStream 的最小生命周期接口；具体 SCStream 生命周期由默认包装器持有。
+protocol ContainerFrameStream: AnyObject, Sendable {
+    func start() async throws
+    func stop() async
+}
+
+/// frame 生产者与 probe 之间的消费合同：bbox 计算前先取 latest-wins token，
+/// 计算完成后只交付一次 outcome，并立刻归还 token（期间新帧必须丢弃）。
+protocol ContainerFrameConsumer: AnyObject, Sendable {
+    func beginProcessing() -> Bool
+    func endProcessing()
+    func deliver(_ outcome: ContainerCaptureOutcome) async
+}
+
+/// factory 在后台创建/启动 stream；candidate+size 是启动时的目标签名，consumer 是 probe。
+typealias ContainerFrameStreamFactory = @Sendable (
+    WinCandidate, CGSize, any ContainerFrameConsumer
+) async throws -> any ContainerFrameStream
+
+/// 测试/运行时捕获 transport：macOS14+ 用 managed stream；显式 oneShot 供旧路径测试；
+/// managed 在 macOS13 自动走 1Hz legacy one-shot。
+enum ContainerCaptureTransport {
+    case managedStream(factory: ContainerFrameStreamFactory?)
+    case oneShot
+}
+
 /// 容器窗像素探测：镜像 BubbleVisibilityProbe 结构（锁保护状态、single-flight、
 /// Task.detached 后台捕获、generation 失效语义）。
 /// - 缓存保存**捕获坐标 bbox**（ContainerAlphaStats），每次 locate 用**当前** containerBounds
@@ -185,31 +218,70 @@ final class ContainerPetProbe: Sendable {
         var generation = 0
         /// 上次已交付给回调的 observation rect；nil = baseline 未武装（下次有效 rect 触发边沿）。
         var lastDeliveredRect: CGRect?
+        /// stream frame 映射/门限判定所用的最近候选 bounds；每次 locate 刷新。
+        var currentContainerBounds: CGRect?
+    }
+
+    private struct StreamRuntimeState: Sendable {
+        var active: (any ContainerFrameStream)?
+        var activeWID: CGWindowID?
+        var starting = false
+        var stopping = false
+        var frameComputing = false
+        var startingGeneration = 0
+        var startingWID: CGWindowID?
+        var processingGeneration = 0
+        var processingWID: CGWindowID?
+        var processingBounds: CGRect?
     }
 
     internal let lock: OSAllocatedUnfairLock<ProbeState>
+    private let streamRuntime = OSAllocatedUnfairLock<StreamRuntimeState>(initialState: StreamRuntimeState())
     private let monotonicNow: @Sendable () -> TimeInterval
     private let canCapture: @Sendable () -> Bool
     private let capturer: ContainerCapturer
+    private let transport: ContainerCaptureTransport
+    private let streamFactory: ContainerFrameStreamFactory?
+    private let usesManagedStream: Bool
     private let onObservationChanged: (@Sendable () -> Void)?
 
     init(monotonicNow: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          canCapture: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
          capturer: ContainerCapturer? = nil,
+         transport: ContainerCaptureTransport = .oneShot,
          onObservationChanged: (@Sendable () -> Void)? = nil) {
         self.lock = OSAllocatedUnfairLock(initialState: ProbeState())
         self.monotonicNow = monotonicNow
         self.canCapture = canCapture
         self.capturer = capturer ?? Self.defaultCapturer
+        self.transport = transport
+        switch transport {
+        case .managedStream(let factory):
+            self.usesManagedStream = true
+            self.streamFactory = factory ?? Self.defaultStreamFactory
+        case .oneShot:
+            self.usesManagedStream = false
+            self.streamFactory = nil
+        }
         self.onObservationChanged = onObservationChanged
+    }
+
+    deinit {
+        shutdown()
     }
 
     // MARK: - 主线程接口（tick 同步调用）
 
     /// tick 主线程同步调用。返回当前合成宠物矩形（用**当前** containerBounds 映射）；
     /// 权限缺失 → .unavailable 并丢弃陈旧缓存；wid 变化 → 清缓存（新 episode）；
-    /// 节拍允许时调度单飞后台捕获（稳态 0.33s / bbox 变化后 0.1s 保持 movingHoldDuration）。
+    /// macOS14+ managed transport 只负责启动唯一 stream，帧由后台 queue 推送；macOS13 fallback
+    /// 仍用 one-shot，但保持保守 1Hz。显式 oneShot transport 保留旧路径语义与测试注入。
     func locate(container: WinCandidate) -> ContainerPetOutcome {
+        // WID 切换先退役旧 stream，避免 runtime state 仍看到 active old-WID 而不启动新目标。
+        let knownWID = lock.withLock { $0.knownWID }
+        if let knownWID, knownWID != container.wid {
+            stopActiveStream()
+        }
         guard canCapture() else {
             // 权限/能力不可用：陈旧缓存必须丢弃（stale WID 不得降级为错误锚点），
             // 旧在途结果经 generation 失效；inFlight 由旧 Task 自清（strict single-flight）。
@@ -219,12 +291,21 @@ final class ContainerPetProbe: Sendable {
                     s.cached = nil
                     s.knownWID = nil
                     s.lastDeliveredRect = nil
+                    s.currentContainerBounds = nil
                     s.movingUntil = -.greatestFiniteMagnitude
                 }
             }
+            stopActiveStream()
             return .unavailable
         }
         let time = monotonicNow()
+        let managedStreamAvailable: Bool
+        if #available(macOS 14.0, *) {
+            managedStreamAvailable = true
+        } else {
+            managedStreamAvailable = false
+        }
+        let useManagedStream = usesManagedStream && managedStreamAvailable
         struct CaptureStart: Sendable {
             let generation: Int
             let container: WinCandidate
@@ -238,9 +319,11 @@ final class ContainerPetProbe: Sendable {
                 s.generation += 1
                 s.cached = nil
                 s.lastDeliveredRect = nil
+                s.currentContainerBounds = nil
                 s.movingUntil = -.greatestFiniteMagnitude
             }
             s.knownWID = container.wid
+            s.currentContainerBounds = container.bounds
             // 缓存按当前 containerBounds 现映射：整窗平移即时跟随，不依赖下一次捕获。
             var result = ContainerPetOutcome.empty
             if let cached = s.cached,
@@ -251,10 +334,19 @@ final class ContainerPetProbe: Sendable {
                     containerBounds: container.bounds) {
                 result = .bounds(rect)
             }
-            guard !s.inFlight else { return (nil, result) }   // single-flight
-            let interval = time < s.movingUntil
-                ? ContainerPetHeuristics.movingCaptureInterval
-                : ContainerPetHeuristics.stableCaptureInterval
+            guard !s.inFlight else { return (nil, result) }   // one-shot single-flight
+            let interval: TimeInterval
+            if useManagedStream {
+                // 此分支不会走 one-shot；放在同一 switch 中避免 managed/legacy cadence 混用。
+                interval = ContainerPetHeuristics.stableCaptureInterval
+            } else if usesManagedStream {
+                // managed transport 在 macOS13 的 fallback：完全保守 1Hz。
+                interval = ContainerPetHeuristics.legacyStableCaptureInterval
+            } else if time < s.movingUntil {
+                interval = ContainerPetHeuristics.movingCaptureInterval
+            } else {
+                interval = ContainerPetHeuristics.stableCaptureInterval
+            }
             guard time - s.lastCaptureAt >= interval else { return (nil, result) }
             s.inFlight = true
             s.lastCaptureAt = time
@@ -264,6 +356,10 @@ final class ContainerPetProbe: Sendable {
                 .map { CGSize(width: $0.width, height: $0.height) }
                 ?? CGSize(width: container.bounds.width, height: container.bounds.height)
             return (CaptureStart(generation: s.generation, container: container, captureSize: target), result)
+        }
+        if useManagedStream {
+            startStreamIfNeeded(container: container)
+            return outcome
         }
         guard let start else { return outcome }
         let cap = capturer
@@ -310,15 +406,130 @@ final class ContainerPetProbe: Sendable {
     }
 
     /// 宠物/容器消失路径（tick hidden 分支）调用：清缓存 + 新 episode；generation++ 使旧在途
-    /// 结果作废。不设 inFlight=false（旧 Task 自清，strict single-flight 同 BubbleVisibilityProbe）。
+    /// 结果作废，并停止 live stream。不设 inFlight=false（旧 Task 自清，strict single-flight）。
     func reset() {
         lock.withLock { s in
             s.generation += 1
             s.cached = nil
             s.knownWID = nil
             s.lastDeliveredRect = nil
+            s.currentContainerBounds = nil
             s.movingUntil = -.greatestFiniteMagnitude
         }
+        stopActiveStream()
+    }
+
+    /// app quit / 显式停机：停止唯一 live stream；重复调用是安全的 no-op。
+    func shutdown() {
+        stopActiveStream()
+    }
+
+    // MARK: - managed stream lifecycle（QA-run-4 capture pivot）
+
+    private func startStreamIfNeeded(container: WinCandidate) {
+        guard usesManagedStream, streamFactory != nil else { return }
+        guard #available(macOS 14.0, *) else { return }
+        let shouldStart = streamRuntime.withLock { s -> Bool in
+            guard !s.starting, !s.stopping, s.active == nil, s.activeWID == nil else { return false }
+            s.starting = true
+            s.startingGeneration = lock.withLock { $0.generation }
+            s.startingWID = container.wid
+            return true
+        }
+        guard shouldStart, let factory = streamFactory else { return }
+        let target = ContainerPetChannel.captureSize(
+            width: Int(container.bounds.width.rounded()),
+            height: Int(container.bounds.height.rounded()))
+            .map { CGSize(width: $0.width, height: $0.height) }
+            ?? CGSize(width: container.bounds.width, height: container.bounds.height)
+        let consumer: any ContainerFrameConsumer = self
+        let runtimeLock = streamRuntime
+        let probeLock = lock
+        let scheduled = container
+        Task.detached(priority: .utility) {
+            do {
+                let stream = try await factory(scheduled, target, consumer)
+                let accepted = runtimeLock.withLock { s -> Bool in
+                    guard s.starting, s.active == nil,
+                          s.startingGeneration == probeLock.withLock({ $0.generation }),
+                          s.startingWID == scheduled.wid,
+                          probeLock.withLock({ $0.knownWID }) == scheduled.wid else {
+                        return false
+                    }
+                    s.active = stream
+                    s.activeWID = scheduled.wid
+                    s.starting = false
+                    return true
+                }
+                if !accepted {
+                    runtimeLock.withLock { $0.starting = false }
+                    await stream.stop()
+                    runtimeLock.withLock { $0.stopping = false }
+                }
+            } catch {
+                let shouldDeliverUnavailable = runtimeLock.withLock { s -> Bool in
+                    let wasStopping = s.stopping
+                    s.starting = false
+                    s.stopping = false
+                    return probeLock.withLock({ $0.knownWID }) == scheduled.wid
+                        && probeLock.withLock({ $0.generation }) == runtimeLock.withLock({ $0.startingGeneration })
+                        && !wasStopping
+                }
+                if shouldDeliverUnavailable { await consumer.deliver(.unavailable) }
+            }
+        }
+    }
+
+    private func stopActiveStream() {
+        let stream = streamRuntime.withLock { s -> (any ContainerFrameStream)? in
+            if let active = s.active {
+                s.active = nil
+                s.activeWID = nil
+                s.stopping = true
+                return active
+            }
+            if s.starting {
+                // factory/start 仍在途；完成路径会看到 stopping 并 stop 创建出的 stream。
+                s.stopping = true
+            }
+            return nil
+        }
+        guard let stream else { return }
+        let runtimeLock = streamRuntime
+        Task.detached(priority: .utility) {
+            await stream.stop()
+            runtimeLock.withLock { $0.stopping = false }
+        }
+    }
+
+    /// stream completion 和 one-shot completion 共用的 accepted-observation 输入端；
+    /// edge/baseline/generation/WID 门限与 telemetry 触发完全一致。
+    private func processStreamOutcome(_ result: ContainerCaptureOutcome) async {
+        let frameContext = streamRuntime.withLock { s -> (Int, CGWindowID?, CGRect?, Bool)? in
+            guard s.frameComputing else { return nil }
+            return (s.processingGeneration, s.processingWID, s.processingBounds, true)
+        }
+        guard let (generation, wid, bounds, _) = frameContext else { return }
+        let shouldNotify: Bool = lock.withLock { s in
+            // beginProcessing 已捕获 generation/WID/bounds；reset/WID 切换会使旧 frame 失效。
+            guard let bounds,
+                  s.generation == generation,
+                  s.knownWID == wid else { return false }
+            guard case .stats(let stats) = result,
+                  let observationRect = ContainerPetChannel.mapToPetRect(
+                    stats: stats,
+                    captureWidth: stats.captureWidth,
+                    captureHeight: stats.captureHeight,
+                    containerBounds: bounds) else { return false }
+            if let old = s.cached, old != stats {
+                s.movingUntil = monotonicNow() + ContainerPetHeuristics.movingHoldDuration
+            }
+            s.cached = stats
+            let changed = s.lastDeliveredRect != observationRect
+            s.lastDeliveredRect = observationRect
+            return changed
+        }
+        if shouldNotify { onObservationChanged?() }
     }
 
     // MARK: - 默认捕获器（macOS 14+ ScreenCaptureKit；每轮捕获一次共享清单枚举）
@@ -349,5 +560,142 @@ final class ContainerPetProbe: Sendable {
             return .unavailable
         }
         return .stats(ContainerPetChannel.computeOpaqueBBox(image: img))
+    }
+
+    private static let defaultStreamFactory: ContainerFrameStreamFactory = { candidate, size, consumer in
+        guard #available(macOS 14.0, *) else {
+            throw ContainerStreamError.unsupportedOS
+        }
+        let stream = try await ContainerSCFrameStream.make(
+            candidate: candidate, size: size, consumer: consumer)
+        try await stream.start()
+        return stream
+    }
+}
+
+extension ContainerPetProbe: ContainerFrameConsumer {
+    func beginProcessing() -> Bool {
+        let context = lock.withLock { s -> (Int, CGWindowID, CGRect)? in
+            guard let wid = s.knownWID, let bounds = s.currentContainerBounds else { return nil }
+            return (s.generation, wid, bounds)
+        }
+        return streamRuntime.withLock { s -> Bool in
+            guard !s.frameComputing else { return false }
+            guard let (generation, wid, bounds) = context else { return false }
+            s.frameComputing = true
+            s.processingGeneration = generation
+            s.processingWID = wid
+            s.processingBounds = bounds
+            return true
+        }
+    }
+
+    func endProcessing() {
+        streamRuntime.withLock { $0.frameComputing = false }
+    }
+
+    func deliver(_ outcome: ContainerCaptureOutcome) async {
+        await processStreamOutcome(outcome)
+    }
+}
+
+enum ContainerStreamError: Error {
+    case unsupportedOS
+    case targetMissing
+    case unavailable
+}
+
+/// 默认 ScreenCaptureKit stream：3fps 帧推送；bbox 在后台计算，期间新帧 latest-wins 丢弃。
+@available(macOS 14.0, *)
+private final class ContainerSCFrameStream: NSObject, ContainerFrameStream, SCStreamOutput, @unchecked Sendable {
+    private static let imageContext = CIContext(options: [.cacheIntermediates: false])
+
+    private let stream: SCStream
+    private let outputQueue = DispatchQueue(label: "petdock.container-pet.frames", qos: .utility)
+    private weak var consumer: (any ContainerFrameConsumer)?
+
+    private init(stream: SCStream, consumer: any ContainerFrameConsumer) {
+        self.stream = stream
+        self.consumer = consumer
+        super.init()
+    }
+
+    static func make(
+        candidate: WinCandidate,
+        size: CGSize,
+        consumer: any ContainerFrameConsumer
+    ) async throws -> ContainerSCFrameStream {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true) else {
+            throw ContainerStreamError.unavailable
+        }
+        guard let window = content.windows.first(where: { $0.windowID == candidate.wid }) else {
+            throw ContainerStreamError.targetMissing
+        }
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(1, Int(size.width.rounded()))
+        configuration.height = max(1, Int(size.height.rounded()))
+        configuration.scalesToFit = false
+        configuration.showsCursor = false
+        configuration.minimumFrameInterval = CMTime(
+            seconds: ContainerPetHeuristics.streamFrameInterval,
+            preferredTimescale: 600)
+        configuration.queueDepth = 3
+        let stopProxy = ContainerSCFrameStreamStopProxy(consumer: consumer)
+        let scStream = SCStream(
+            filter: SCContentFilter(desktopIndependentWindow: window),
+            configuration: configuration,
+            delegate: stopProxy)
+        return ContainerSCFrameStream(stream: scStream, consumer: consumer)
+    }
+
+    func start() async throws {
+        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
+        try await stream.startCapture()
+    }
+
+    func stop() async {
+        try? await stream.stopCapture()
+    }
+
+    func stream(
+        _ stream: SCStream,
+        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of type: SCStreamOutputType
+    ) {
+        guard type == .screen,
+              sampleBuffer.isValid,
+              CMSampleBufferGetNumSamples(sampleBuffer) == 1,
+              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let cgImage = Self.imageContext.createCGImage(image, from: image.extent),
+              let consumer else { return }
+        // 取 token 在回调线程；bbox 在 detached utility task。token 未归还时后续帧直接 DROP。
+        guard consumer.beginProcessing() else { return }
+        Task.detached(priority: .utility) { [consumer] in
+            let outcome = ContainerCaptureOutcome.stats(
+                ContainerPetChannel.computeOpaqueBBox(image: cgImage))
+            await consumer.deliver(outcome)
+            consumer.endProcessing()
+        }
+    }
+
+}
+
+/// SCStream 的 delegate 入口必须独立于 output wrapper；proxy 只把异常停机转换为保守 unavailable。
+@available(macOS 14.0, *)
+private final class ContainerSCFrameStreamStopProxy: NSObject, SCStreamDelegate, @unchecked Sendable {
+    private weak var consumer: (any ContainerFrameConsumer)?
+
+    init(consumer: any ContainerFrameConsumer) {
+        self.consumer = consumer
+        super.init()
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        guard let consumer else { return }
+        Task.detached(priority: .utility) {
+            await consumer.deliver(.unavailable)
+        }
     }
 }

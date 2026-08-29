@@ -5860,7 +5860,7 @@ if let cpGolden = ContainerPetChannel.mapToPetRect(stats: cpGoldenStats, capture
 }
 let cpDense = ContainerAlphaStats(nonTransparentPixelCount: 4840, minX: 0, minY: 0, maxX: 120, maxY: 399,
                                   captureWidth: 121, captureHeight: 400)
-check("T-cp14 非透明占比超 gate→nil(防劫持)",
+check("T-cp14 非透明占比远超新 gate→nil(防劫持)",
       ContainerPetChannel.mapToPetRect(stats: cpDense, captureWidth: 121, captureHeight: 400,
                                        containerBounds: cpGoldenBounds) == nil, "")
 let cpNoOpaque = ContainerAlphaStats(nonTransparentPixelCount: 0, minX: -1, minY: -1, maxX: -1, maxY: -1,
@@ -5868,11 +5868,23 @@ let cpNoOpaque = ContainerAlphaStats(nonTransparentPixelCount: 0, minX: -1, minY
 check("T-cp15 无非透明像素→nil",
       ContainerPetChannel.mapToPetRect(stats: cpNoOpaque, captureWidth: 121, captureHeight: 400,
                                        containerBounds: cpGoldenBounds) == nil, "")
-let cpSparseWide = ContainerAlphaStats(nonTransparentPixelCount: 484, minX: 0, minY: 0, maxX: 120, maxY: 399,
-                                       captureWidth: 121, captureHeight: 400)
-check("T-cp16 占比恰在 gate(=0.01) 但映射边长超上限→nil",
-      ContainerPetChannel.mapToPetRect(stats: cpSparseWide, captureWidth: 121, captureHeight: 400,
-                                       containerBounds: cpGoldenBounds) == nil, "")
+// QA-run-4 实测 channel-active 占比 0.0090–0.0102 跨旧 0.01 gate 抖动；
+// 新 headroom 必须接受 0.015 / 恰好 0.02，并仍拒绝 0.0201。
+let cpFlickerStats = ContainerAlphaStats(nonTransparentPixelCount: 1_200, minX: 10, minY: 20, maxX: 29, maxY: 59,
+                                         captureWidth: 200, captureHeight: 400)
+check("T-cp16 实测抖动带上方 0.015→接受(新 gate headroom)",
+      ContainerPetChannel.mapToPetRect(stats: cpFlickerStats, captureWidth: 200, captureHeight: 400,
+                                       containerBounds: cpBounds) == cpRectA, "")
+let cpGateBoundaryStats = ContainerAlphaStats(nonTransparentPixelCount: 1_600, minX: 10, minY: 20, maxX: 29, maxY: 59,
+                                              captureWidth: 200, captureHeight: 400)
+check("T-cp16b 占比恰好 0.02→接受(gate 边界含等号)",
+      ContainerPetChannel.mapToPetRect(stats: cpGateBoundaryStats, captureWidth: 200, captureHeight: 400,
+                                       containerBounds: cpBounds) == cpRectA, "")
+let cpAboveGateStats = ContainerAlphaStats(nonTransparentPixelCount: 1_601, minX: 10, minY: 20, maxX: 29, maxY: 59,
+                                           captureWidth: 200, captureHeight: 400)
+check("T-cp16c 占比 0.0201→nil(新 gate 仍拒劫持)",
+      ContainerPetChannel.mapToPetRect(stats: cpAboveGateStats, captureWidth: 200, captureHeight: 400,
+                                       containerBounds: cpBounds) == nil, "")
 let cpPixel = ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 60, minY: 200, maxX: 60, maxY: 200,
                                   captureWidth: 121, captureHeight: 400)
 check("T-cp17 单像素 bbox→映射边长<petMinSide→nil(取整退化)",
@@ -5881,6 +5893,8 @@ check("T-cp17 单像素 bbox→映射边长<petMinSide→nil(取整退化)",
 check("T-cp18 捕获尺寸非法→nil",
       ContainerPetChannel.mapToPetRect(stats: cpStatsA, captureWidth: 0, captureHeight: 400,
                                        containerBounds: cpBounds) == nil, "")
+check("T-cp19 opaqueFractionGate=0.02(QA-run-4 headroom)",
+      ContainerPetHeuristics.opaqueFractionGate == 0.02, "")
 
 // ---- C4 ContainerPetProbe（fake capturer + fake clock：观察边沿/节奏/单飞/代际/unavailable/wake）----
 do {
@@ -6310,8 +6324,155 @@ do {
     clock.withLock { $0 = 110_000.33 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp82 stable 0.33s→捕获", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+check("T-cp82 stable 0.33s→捕获", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
 }
+
+// ---- C9 QA-run-4 capture pivot：managed low-fps SCStream lifecycle + latest-wins。
+final class FakeContainerFrameStream: ContainerFrameStream {
+    private struct State {
+        var starts = 0
+        var stops = 0
+        var consumer: (any ContainerFrameConsumer)?
+        var droppedFrames = 0
+    }
+    private let lock = OSAllocatedUnfairLock<State>(initialState: State())
+
+    func start() async throws {
+        lock.withLock { $0.starts += 1 }
+    }
+
+    func stop() async {
+        lock.withLock { $0.stops += 1 }
+    }
+
+    func attach(_ consumer: any ContainerFrameConsumer) {
+        lock.withLock { $0.consumer = consumer }
+    }
+
+    func counts() -> (starts: Int, stops: Int, dropped: Int) {
+        lock.withLock { ($0.starts, $0.stops, $0.droppedFrames) }
+    }
+
+    func beginFrame() -> Bool {
+        lock.withLock { $0.consumer }?.beginProcessing() == true
+    }
+
+    func finishFrame() {
+        lock.withLock { $0.consumer }?.endProcessing()
+    }
+
+    func deliver(_ outcome: ContainerCaptureOutcome) async {
+        let consumer = lock.withLock { $0.consumer }
+        await consumer?.deliver(outcome)
+    }
+
+    func emit(_ outcome: ContainerCaptureOutcome) async {
+        guard beginFrame() else {
+            lock.withLock { $0.droppedFrames += 1 }
+            return
+        }
+        await deliver(outcome)
+        finishFrame()
+    }
+}
+
+do {
+    let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
+    let factory: ContainerFrameStreamFactory = { _, _, consumer in
+        let stream = FakeContainerFrameStream()
+        stream.attach(consumer)
+        created.withLock { $0.append(stream) }
+        try await stream.start()
+        return stream
+    }
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let permission = OSAllocatedUnfairLock(initialState: true)
+    let probe = ContainerPetProbe(
+        monotonicNow: { 120_000 },
+        canCapture: { permission.withLock { $0 } },
+        transport: .managedStream(factory: factory),
+        onObservationChanged: { wakes.withLock { $0 += 1 } })
+    let containerA = cpContainer(535)
+    let containerB = cpContainer(536)
+
+    // lifecycle: first selected candidate starts exactly one stream; repeat locate never restarts.
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain({ created.withLock { $0.count } >= 1 })
+    let streamA = created.withLock { $0.first! }
+    _ = waitPumpingMain({ streamA.counts().starts == 1 })
+    _ = probe.locate(container: containerA)
+    _ = probe.locate(container: containerA)
+    check("T-cp83 first locate starts exactly one stream; repeat locate does not restart",
+          streamA.counts().starts == 1 && streamA.counts().stops == 0, "counts=\(streamA.counts())")
+
+    // frames replace one-shot outcomes as edge input; semantics unchanged.
+    Task.detached { await streamA.emit(.stats(cpStatsA)) }
+    _ = waitPumpingMain({ wakes.withLock { $0 } == 1 && probe.hasObservation() })
+    Task.detached { await streamA.emit(.stats(cpStatsA)) }
+    _ = waitPumpingMain({ streamA.counts().dropped == 1 })
+    check("T-cp84 stream same-rect frame does not repeat edge",
+          probe.locate(container: containerA) == .bounds(cpRectA) && wakes.withLock { $0 } == 1,
+          "wakes=\(wakes.withLock { $0 })")
+    Task.detached { await streamA.emit(.stats(cpStatsB)) }
+    _ = waitPumpingMain({ wakes.withLock { $0 } == 2 })
+    check("T-cp85 stream different-rect frame fires one edge",
+          probe.locate(container: containerA) == .bounds(cpRectB) && wakes.withLock { $0 } == 2,
+          "wakes=\(wakes.withLock { $0 })")
+
+    // latest-wins: no second queued computation while the first bbox delivery is active.
+    check("T-cp86 latest-wins begins first frame", streamA.beginFrame(), "")
+    let firstFrame = Task.detached { await streamA.deliver(.stats(cpStatsB)) }
+    let droppedFrame = Task.detached { await streamA.emit(.stats(cpStatsB)) }
+    _ = waitPumpingMain({ streamA.counts().dropped >= 1 })
+    streamA.finishFrame()
+    check("T-cp87 frame while computing is dropped, not queued",
+          streamA.counts().dropped == 1 && wakes.withLock { $0 } == 2, "counts=\(streamA.counts())")
+    _ = firstFrame
+    _ = droppedFrame
+
+    // absence is the gated reset path and must stop the live stream.
+    probe.reset()
+    _ = waitPumpingMain({ streamA.counts().stops == 1 })
+    check("T-cp88 reset with absence stops stream",
+          streamA.counts().starts == 1 && streamA.counts().stops == 1, "counts=\(streamA.counts())")
+
+    // WID change retires the old identity before selecting the new one.
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain({ created.withLock { $0.count } >= 2 })
+    let streamA2 = created.withLock { $0[1] }
+    _ = waitPumpingMain({ streamA2.counts().starts == 1 })
+    _ = probe.locate(container: containerB)
+    _ = waitPumpingMain({ streamA2.counts().stops == 1 })
+    _ = probe.locate(container: containerB)
+    _ = waitPumpingMain({ created.withLock { $0.count } >= 3 })
+    let streamB = created.withLock { $0[2] }
+    _ = waitPumpingMain({ streamB.counts().starts == 1 })
+    check("T-cp89 WID change stops old stream and starts exactly one new stream",
+          streamA2.counts() == (1, 1, 0) && streamB.counts() == (1, 0, 0),
+          "old=\(streamA2.counts()) new=\(streamB.counts())")
+
+    // permission loss is conservative: stop the stream and clear observation state.
+    permission.withLock { $0 = false }
+    check("T-cp90 permission loss returns unavailable", probe.locate(container: containerB) == .unavailable, "")
+    _ = waitPumpingMain({ streamB.counts().stops == 1 })
+    check("T-cp91 permission loss stops stream",
+          streamB.counts().starts == 1 && streamB.counts().stops == 1, "counts=\(streamB.counts())")
+
+    permission.withLock { $0 = true }
+    _ = probe.locate(container: containerB)
+    _ = waitPumpingMain({ created.withLock { $0.count } >= 4 })
+    let quitStream = created.withLock { $0[3] }
+    _ = waitPumpingMain({ quitStream.counts().starts == 1 })
+    probe.shutdown()
+    _ = waitPumpingMain({ quitStream.counts().stops == 1 })
+    check("T-cp92 shutdown/quit stops live stream",
+          quitStream.counts() == (1, 1, 0), "counts=\(quitStream.counts())")
+}
+
+check("T-cp93 managed stream minimumFrameInterval=0.33",
+      ContainerPetHeuristics.streamFrameInterval == 0.33, "")
+check("T-cp94 macOS 13 one-shot fallback stable interval=1.0",
+      ContainerPetHeuristics.legacyStableCaptureInterval == 1.0, "")
 
 print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")
 
