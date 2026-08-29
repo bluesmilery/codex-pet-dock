@@ -6351,12 +6351,17 @@ final class FakeContainerFrameStream: ContainerFrameStream {
         var factoryGateReleased = false
     }
     private let lock = OSAllocatedUnfairLock<State>(initialState: State())
+    private let streamEpoch: Int
     private struct FactoryGateState {
         var waiting = false
         var released = false
         var continuation: CheckedContinuation<Void, Never>?
     }
     private let factoryGate = OSAllocatedUnfairLock<FactoryGateState>(initialState: FactoryGateState())
+
+    init(epoch streamEpoch: Int = 0) {
+        self.streamEpoch = streamEpoch
+    }
 
     func start() async throws {
         lock.withLock { $0.starts += 1 }
@@ -6408,7 +6413,7 @@ final class FakeContainerFrameStream: ContainerFrameStream {
     }
 
     func emitDroppingSynchronously(_ outcome: ContainerCaptureOutcome) -> Bool {
-        guard beginFrame() else {
+        guard beginFrame() != nil else {
             lock.withLock { $0.droppedFrames += 1 }
             return true
         }
@@ -6421,33 +6426,39 @@ final class FakeContainerFrameStream: ContainerFrameStream {
         await consumer?.streamDidTerminate(self)
     }
 
-    func beginFrame() -> Bool {
-        lock.withLock { $0.consumer }?.beginProcessing() == true
+    func beginFrame() -> ContainerFrameToken? {
+        lock.withLock { $0.consumer }?.beginProcessing(streamEpoch)
     }
 
     func finishFrame() {
         lock.withLock { $0.consumer }?.endProcessing()
     }
 
+    func deliver(_ outcome: ContainerCaptureOutcome, token: ContainerFrameToken) async {
+        let consumer = lock.withLock { $0.consumer }
+        await consumer?.deliver(outcome, token: token)
+    }
+
+    /// Test convenience for sequences where beginFrame() already pinned the source token.
     func deliver(_ outcome: ContainerCaptureOutcome) async {
         let consumer = lock.withLock { $0.consumer }
-        await consumer?.deliver(outcome)
+        await consumer?.deliver(outcome, token: ContainerFrameToken(streamEpoch: streamEpoch))
     }
 
     func emit(_ outcome: ContainerCaptureOutcome) async {
-        guard beginFrame() else {
+        guard let token = beginFrame() else {
             lock.withLock { $0.droppedFrames += 1 }
             return
         }
-        await deliver(outcome)
+        await deliver(outcome, token: token)
         finishFrame()
     }
 }
 
 do {
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -6474,7 +6485,7 @@ do {
           streamA.counts().starts == 1 && streamA.counts().stops == 0, "counts=\(streamA.counts())")
 
     // deterministic latest-wins: take the production token, complete delivery, then assert drop.
-    check("T-cp84 deterministic latest-wins token begins", streamA.beginFrame(), "")
+    check("T-cp84 deterministic latest-wins token begins", streamA.beginFrame() != nil, "")
     let deliveryReturned = OSAllocatedUnfairLock(initialState: false)
     Task.detached {
         await streamA.deliver(.stats(cpStatsA))
@@ -6497,7 +6508,7 @@ do {
           "wakes=\(wakes.withLock { $0 })")
 
     // latest-wins: no second queued computation while the first bbox delivery is active.
-    check("T-cp86 latest-wins begins first frame", streamA.beginFrame(), "")
+    check("T-cp86 latest-wins begins first frame", streamA.beginFrame() != nil, "")
     let droppedComputing = streamA.emitDroppingSynchronously(.stats(cpStatsB))
     streamA.finishFrame()
     check("T-cp87 frame while computing is dropped, not queued",
@@ -6558,8 +6569,8 @@ check("T-cp94 macOS 13 managed channel unavailable by design",
 // ---- C10 Round-7 P1：start/stop 竞速与 stream 异常终止生命周期。
 do {
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -6600,8 +6611,8 @@ do {
 do {
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let wakes = OSAllocatedUnfairLock(initialState: 0)
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -6641,8 +6652,8 @@ do {
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)
     let wakes = OSAllocatedUnfairLock(initialState: 0)
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -6711,8 +6722,8 @@ do {
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)
     let wakes = OSAllocatedUnfairLock(initialState: 0)
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -6734,7 +6745,7 @@ do {
     })
     let racingStream = created.withLock { $0.first! }
     check("T-cp109 precondition takes token before active publication",
-          racingStream.beginFrame()
+          racingStream.beginFrame() != nil
             && probe.streamRuntime.withLock {
                     $0.active == nil && $0.starting && $0.frameComputing && !$0.firstFrameDelivered
             },
@@ -6774,8 +6785,8 @@ do {
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)
     let wakes = OSAllocatedUnfairLock(initialState: 0)
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -6815,8 +6826,8 @@ do {
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)
     let wakes = OSAllocatedUnfairLock(initialState: 0)
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -6838,7 +6849,7 @@ do {
     })
     let earlyFrameStream = created.withLock { $0.first! }
     check("T-cp111 precondition token precedes factory activation",
-          earlyFrameStream.beginFrame()
+          earlyFrameStream.beginFrame() != nil
             && probe.streamRuntime.withLock {
                     $0.streamEpoch == 1 && $0.active == nil && $0.starting
                         && $0.acceptedFrameEpoch == nil && !$0.firstFrameDelivered
@@ -6886,14 +6897,14 @@ do {
 }
 
 do {
-    // Identity safety: A's already-in-flight accepted stats must never cancel B's armed
-    // watchdog after A is retired and B starts on the same generation/WID.
+    // Identity safety: A's queued source callback may run after B activates, but its stale
+    // stats are dropped and can neither feed cache nor cancel B's armed watchdog.
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(3_000))
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)
     let wakes = OSAllocatedUnfairLock(initialState: 0)
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -6920,7 +6931,7 @@ do {
                     && $0.firstFrameDeadline == 3_002
         }
     })
-    check("T-cp112 precondition A frame in flight before retirement", streamA.beginFrame(), "")
+    check("T-cp112 precondition A frame in flight before retirement", streamA.beginFrame() != nil, "")
     Task.detached { await streamA.emitDidStop() }
     _ = waitPumpingMain({
         probe.streamRuntime.withLock { $0.active == nil && !$0.stopping && $0.frameComputing }
@@ -6945,13 +6956,13 @@ do {
     })
     Task.detached { await streamA.deliver(.stats(cpStatsA)) }
     _ = waitPumpingMain({
-        probe.hasObservation()
+        !probe.hasObservation()
             && probe.streamRuntime.withLock {
-                    $0.streamEpoch == 2 && $0.acceptedFrameEpoch != 2
+                    $0.streamEpoch == 2 && $0.acceptedFrameEpoch == nil
                         && $0.armedEpoch == 2 && !$0.firstFrameDelivered
                         && $0.firstFrameDeadline == 3_002
             }
-            && wakes.withLock { $0 } == 2
+            && wakes.withLock { $0 } == 1
     })
     streamA.finishFrame()
     clock.withLock { $0 = 3_002.1 }
@@ -6960,12 +6971,104 @@ do {
         streamB.counts().stops == 1
             && probe.streamRuntime.withLock { $0.active == nil && !$0.stopping }
     })
-    check("T-cp112 stale accepted frame cannot cancel replacement watchdog",
+check("T-cp112 stale source callback cannot cancel replacement watchdog",
           failures.withLock { $0 } == 1
-            && wakes.withLock { $0 } == 3
+            && wakes.withLock { $0 } == 2
             && probe.streamRuntime.withLock {
                     $0.streamEpoch == 2 && $0.armedEpoch == nil
                         && !$0.firstFrameDelivered && $0.nextStartAllowedAt == 3_004.1
+            },
+          "failures=\(failures.withLock { $0 }) wakes=\(wakes.withLock { $0 }) "
+            + "runtime=\(probe.streamRuntime.withLock { $0 })")
+    probe.shutdown()
+}
+
+do {
+    // Round-11 P1: a stopped stream's already-enqueued sample callback can run after its
+    // replacement is armed. The callback must carry A's source epoch, not read B's current
+    // epoch when it finally acquires the processing token.
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(4_000))
+    let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
+    let failures = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
+        stream.attach(consumer)
+        created.withLock { $0.append(stream) }
+        try await stream.start()
+        await stream.waitFactoryGate()
+        return stream
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        transport: .managedStream(factory: factory),
+        onObservationChanged: { wakes.withLock { $0 += 1 } },
+        onStreamStartFailure: { failures.withLock { $0 += 1 } })
+    let container = cpContainer(550)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        created.withLock { $0.count } == 1
+            && created.withLock { $0[0].isFactoryGateWaiting }
+    })
+    let streamA = created.withLock { $0[0] }
+    streamA.releaseFactoryGate()
+    _ = waitPumpingMain({
+        probe.streamRuntime.withLock {
+                $0.active === streamA && $0.streamEpoch == 1 && $0.armedEpoch == 1
+        }
+    })
+    Task.detached { await streamA.emitDidStop() }
+    _ = waitPumpingMain({
+        probe.streamRuntime.withLock { $0.active == nil && !$0.stopping && !$0.frameComputing }
+    })
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        created.withLock { $0.count } == 2
+            && created.withLock { $0[1].isFactoryGateWaiting }
+            && probe.streamRuntime.withLock { $0.streamEpoch == 2 && $0.starting }
+    })
+    let streamB = created.withLock { $0[1] }
+    streamB.releaseFactoryGate()
+    _ = waitPumpingMain({
+        probe.streamRuntime.withLock {
+                $0.active === streamB && $0.streamEpoch == 2 && $0.armedEpoch == 2
+                    && $0.firstFrameDeadline == 4_002 && !$0.firstFrameDelivered
+        }
+    })
+
+    // This models A's queued sample handler entering the consumer after B activation.
+    check("T-cp113 late A callback takes latest-wins token", streamA.beginFrame() != nil, "")
+    let deliveryReturned = OSAllocatedUnfairLock(initialState: false)
+    Task.detached {
+        await streamA.deliver(.stats(cpStatsA))
+        deliveryReturned.withLock { $0 = true }
+    }
+    _ = waitPumpingMain({ deliveryReturned.withLock { $0 } })
+    streamA.finishFrame()
+    check("T-cp114 late A frame cannot cancel or satisfy silent B",
+          !probe.hasObservation()
+            && probe.streamRuntime.withLock {
+                    $0.active === streamB && $0.streamEpoch == 2
+                        && $0.acceptedFrameEpoch != 2 && $0.armedEpoch == 2
+                        && $0.processingEpoch == 1
+                        && $0.firstFrameDeadline == 4_002 && !$0.firstFrameDelivered
+            }
+            && wakes.withLock { $0 } == 1,
+          "cached=\(probe.hasObservation()) runtime=\(probe.streamRuntime.withLock { $0 }) "
+            + "wakes=\(wakes.withLock { $0 })")
+    clock.withLock { $0 = 4_002.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        streamB.counts().stops == 1
+            && probe.streamRuntime.withLock { $0.active == nil && !$0.stopping }
+    })
+    check("T-cp115 B watchdog still retires after A's late callback",
+          failures.withLock { $0 } == 1
+            && wakes.withLock { $0 } == 2
+            && probe.streamRuntime.withLock {
+                    $0.streamEpoch == 2 && $0.armedEpoch == nil
+                        && !$0.firstFrameDelivered && $0.nextStartAllowedAt == 4_004.1
             },
           "failures=\(failures.withLock { $0 }) wakes=\(wakes.withLock { $0 }) "
             + "runtime=\(probe.streamRuntime.withLock { $0 })")
@@ -6977,8 +7080,8 @@ do {
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)
     let wakes = OSAllocatedUnfairLock(initialState: 0)
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -7017,8 +7120,8 @@ do {
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)
     let permission = OSAllocatedUnfairLock(initialState: true)
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -7135,8 +7238,8 @@ do {
 do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(5_000))
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()
@@ -7177,8 +7280,8 @@ do {
 do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(6_000))
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
-    let factory: ContainerFrameStreamFactory = { _, _, consumer in
-        let stream = FakeContainerFrameStream()
+    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+        let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
         try await stream.start()

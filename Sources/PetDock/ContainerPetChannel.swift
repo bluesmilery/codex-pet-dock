@@ -181,17 +181,21 @@ protocol ContainerFrameStream: AnyObject, Sendable {
 /// frame 生产者与 probe 之间的消费合同：bbox 计算前先取 latest-wins token，
 /// 计算完成后只交付一次 outcome，并立刻归还 token（期间新帧必须丢弃）。
 protocol ContainerFrameConsumer: AnyObject, Sendable {
-    func beginProcessing() -> Bool
+    func beginProcessing(_ streamEpoch: Int) -> ContainerFrameToken?
     func endProcessing()
-    func deliver(_ outcome: ContainerCaptureOutcome) async
+    func deliver(_ outcome: ContainerCaptureOutcome, token: ContainerFrameToken) async
     /// SCStream didStopWithError 的专用生命周期入口；不得经过 frame-token gate。
     func streamDidTerminate(_ stream: any ContainerFrameStream) async
 }
 
 /// factory 在后台创建/启动 stream；candidate+size 是启动时的目标签名，consumer 是 probe。
 typealias ContainerFrameStreamFactory = @Sendable (
-    WinCandidate, CGSize, any ContainerFrameConsumer
+    WinCandidate, CGSize, Int, any ContainerFrameConsumer
 ) async throws -> any ContainerFrameStream
+
+struct ContainerFrameToken: Sendable {
+    let streamEpoch: Int
+}
 
 /// 测试/运行时捕获 transport：macOS14+ 用 managed stream；显式 oneShot 供旧路径测试。
 /// macOS 13: managed channel unavailable by design（SCScreenshotManager 一次性路径是 macOS14+ API，
@@ -463,12 +467,13 @@ final class ContainerPetProbe: Sendable {
         guard usesManagedStream, streamFactory != nil else { return }
         guard #available(macOS 14.0, *) else { return }
         let now = monotonicNow()
-        let shouldStart = streamRuntime.withLock { s -> Bool in
+        let shouldStart = streamRuntime.withLock { s -> (Bool, Int)? in
             guard !s.starting, !s.stopping, s.active == nil, s.activeWID == nil,
                   s.nextStartAllowedAt == nil || now >= s.nextStartAllowedAt! else {
-                return false
+                return nil
             }
             s.streamEpoch += 1
+            let streamEpoch = s.streamEpoch
             s.armedEpoch = nil
             s.acceptedFrameEpoch = nil
             s.firstFrameDelivered = false
@@ -476,9 +481,10 @@ final class ContainerPetProbe: Sendable {
             s.starting = true
             s.startingGeneration = lock.withLock { $0.generation }
             s.startingWID = container.wid
-            return true
+            return (true, streamEpoch)
         }
-        guard shouldStart, let factory = streamFactory else { return }
+        guard let (shouldStart, streamEpoch) = shouldStart, shouldStart,
+              let factory = streamFactory else { return }
         let target = ContainerPetChannel.captureSize(
             width: Int(container.bounds.width.rounded()),
             height: Int(container.bounds.height.rounded()))
@@ -492,7 +498,7 @@ final class ContainerPetProbe: Sendable {
         let scheduled = container
         Task.detached(priority: .utility) {
             do {
-                let stream = try await factory(scheduled, target, consumer)
+                let stream = try await factory(scheduled, target, streamEpoch, consumer)
                 // factory 返回时必须在同一把 runtime 锁下复查停机/切换竞态；
                 // stopping=true 的新 stream 绝不能进入 active。
                 // Activation also rechecks whether this exact epoch already delivered an
@@ -535,7 +541,11 @@ final class ContainerPetProbe: Sendable {
                         && probeLock.withLock({ $0.generation }) == runtimeLock.withLock({ $0.startingGeneration })
                         && !wasStopping
                 }
-                if shouldDeliverUnavailable { await consumer.deliver(.unavailable) }
+                if shouldDeliverUnavailable {
+                    await consumer.deliver(
+                        .unavailable,
+                        token: ContainerFrameToken(streamEpoch: streamEpoch))
+                }
             }
         }
     }
@@ -565,16 +575,21 @@ final class ContainerPetProbe: Sendable {
 
     /// stream completion 和 one-shot completion 共用的 accepted-observation 输入端；
     /// edge/baseline/generation/WID 门限与 telemetry 触发完全一致。
-    private func processStreamOutcome(_ result: ContainerCaptureOutcome) async {
+    private func processStreamOutcome(
+        _ result: ContainerCaptureOutcome,
+        token: ContainerFrameToken
+    ) async {
         // Frames-are-truth：mid-stream stall 不做 watchdog 退役；静态窗口可能稀疏送帧，
         // observation cache 负责 retention。只有“从未收到首帧”的启动路径被健康检查。
         let frameContext = streamRuntime.withLock { s -> (Int, CGWindowID?, CGRect?, Int)? in
             guard s.frameComputing else { return nil }
-            return (s.processingGeneration, s.processingWID, s.processingBounds, s.processingEpoch)
+            return (s.processingGeneration, s.processingWID, s.processingBounds, s.streamEpoch)
         }
-        guard let (generation, wid, bounds, streamEpoch) = frameContext else { return }
+        guard let (generation, wid, bounds, currentEpoch) = frameContext,
+              currentEpoch == token.streamEpoch else { return }
         let (shouldNotify, acceptedStats): (Bool, Bool) = lock.withLock { s in
             // beginProcessing 已捕获 generation/WID/bounds；reset/WID 切换会使旧 frame 失效。
+            // token.streamEpoch 是回调 source identity；stale source 帧整体 DROP。
             guard let bounds,
                   s.generation == generation,
                   s.knownWID == wid else { return (false, false) }
@@ -592,19 +607,13 @@ final class ContainerPetProbe: Sendable {
             s.lastDeliveredRect = observationRect
             return (changed, true)
         }
-        // Frames-are-truth ordering: beginProcessing may take the token while the factory
-        // completion has not yet published active. Activation then arms the deadline under
-        // streamRuntime. Re-acquiring that lock here lets an already-accepted stats outcome
-        // cancel that later-armed deadline before any wake consumer observes it.
-        // Frames-are-truth ordering: beginProcessing may take the token while the factory
-        // completion has not yet published active. If activation wins, it arms this epoch;
-        // if delivery wins, activation observes acceptedFrameEpoch and never arms. Either
-        // way, cancellation below applies only to the epoch captured with the frame token.
+        // Token identity is the stream's source epoch, never runtime's current epoch. A stale
+        // queued callback may take the latest-wins token after replacement activation, but it
+        // can neither feed observation state nor cancel/satisfy replacement health.
         if acceptedStats {
             streamRuntime.withLock { s in
-                guard s.streamEpoch == streamEpoch else { return }
-                s.acceptedFrameEpoch = streamEpoch
-                guard s.armedEpoch == streamEpoch, !s.firstFrameDelivered else { return }
+                s.acceptedFrameEpoch = token.streamEpoch
+                guard s.armedEpoch == token.streamEpoch, !s.firstFrameDelivered else { return }
                 s.firstFrameDelivered = true
                 s.firstFrameDeadline = nil
                 s.consecutiveStartFailures = 0
@@ -712,34 +721,35 @@ final class ContainerPetProbe: Sendable {
         return .stats(ContainerPetChannel.computeOpaqueBBox(image: img))
     }
 
-    private static let defaultStreamFactory: ContainerFrameStreamFactory = { candidate, size, consumer in
+    private static let defaultStreamFactory: ContainerFrameStreamFactory = { candidate, size, streamEpoch, consumer in
         guard #available(macOS 14.0, *) else {
             throw ContainerStreamError.unsupportedOS
         }
         let stream = try await ContainerSCFrameStream.make(
-            candidate: candidate, size: size, consumer: consumer)
+            candidate: candidate, size: size, streamEpoch: streamEpoch, consumer: consumer)
         try await stream.start()
         return stream
     }
 }
 
 extension ContainerPetProbe: ContainerFrameConsumer {
-    func beginProcessing() -> Bool {
+    func beginProcessing(_ sourceEpoch: Int) -> ContainerFrameToken? {
         let context = lock.withLock { s -> (Int, CGWindowID, CGRect)? in
             guard let wid = s.knownWID, let bounds = s.currentContainerBounds else { return nil }
             return (s.generation, wid, bounds)
         }
-        return streamRuntime.withLock { s -> Bool in
-            guard !s.frameComputing else { return false }
-            guard let (generation, wid, bounds) = context else { return false }
+        return streamRuntime.withLock { s -> ContainerFrameToken? in
+            guard !s.frameComputing else { return nil }
+            guard let (generation, wid, bounds) = context else { return nil }
+            let token = ContainerFrameToken(streamEpoch: sourceEpoch)
             s.frameComputing = true
             s.processingGeneration = generation
             s.processingWID = wid
             s.processingBounds = bounds
-            s.processingEpoch = s.streamEpoch
+            s.processingEpoch = token.streamEpoch
             // Token acquisition only snapshots identity; accepted-stats completion owns
             // watchdog cancellation so non-stats outcomes cannot invalidate health state.
-            return true
+            return token
         }
     }
 
@@ -747,8 +757,8 @@ extension ContainerPetProbe: ContainerFrameConsumer {
         streamRuntime.withLock { $0.frameComputing = false }
     }
 
-    func deliver(_ outcome: ContainerCaptureOutcome) async {
-        await processStreamOutcome(outcome)
+    func deliver(_ outcome: ContainerCaptureOutcome, token: ContainerFrameToken) async {
+        await processStreamOutcome(outcome, token: token)
     }
 
     func streamDidTerminate(_ stream: any ContainerFrameStream) async {
@@ -771,9 +781,11 @@ private final class ContainerSCFrameStream: NSObject, ContainerFrameStream, SCSt
     private let stream: SCStream
     private let outputQueue = DispatchQueue(label: "petdock.container-pet.frames", qos: .utility)
     private weak var consumer: (any ContainerFrameConsumer)?
+    private let streamEpoch: Int
 
-    private init(stream: SCStream, consumer: any ContainerFrameConsumer) {
+    private init(stream: SCStream, streamEpoch: Int, consumer: any ContainerFrameConsumer) {
         self.stream = stream
+        self.streamEpoch = streamEpoch
         self.consumer = consumer
         super.init()
     }
@@ -781,6 +793,7 @@ private final class ContainerSCFrameStream: NSObject, ContainerFrameStream, SCSt
     static func make(
         candidate: WinCandidate,
         size: CGSize,
+        streamEpoch: Int,
         consumer: any ContainerFrameConsumer
     ) async throws -> ContainerSCFrameStream {
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
@@ -804,7 +817,8 @@ private final class ContainerSCFrameStream: NSObject, ContainerFrameStream, SCSt
             filter: SCContentFilter(desktopIndependentWindow: window),
             configuration: configuration,
             delegate: stopProxy)
-        let wrapper = ContainerSCFrameStream(stream: scStream, consumer: consumer)
+        let wrapper = ContainerSCFrameStream(
+            stream: scStream, streamEpoch: streamEpoch, consumer: consumer)
         stopProxy.attach(stream: wrapper)
         return wrapper
     }
@@ -838,11 +852,11 @@ private final class ContainerSCFrameStream: NSObject, ContainerFrameStream, SCSt
         guard let cgImage = Self.imageContext.createCGImage(image, from: image.extent),
               let consumer else { return }
         // 取 token 在回调线程；bbox 在 detached utility task。token 未归还时后续帧直接 DROP。
-        guard consumer.beginProcessing() else { return }
-        Task.detached(priority: .utility) { [consumer] in
+        guard let token = consumer.beginProcessing(streamEpoch) else { return }
+        Task.detached(priority: .utility) { [consumer, token] in
             let outcome = ContainerCaptureOutcome.stats(
                 ContainerPetChannel.computeOpaqueBBox(image: cgImage))
-            await consumer.deliver(outcome)
+            await consumer.deliver(outcome, token: token)
             consumer.endProcessing()
         }
     }
