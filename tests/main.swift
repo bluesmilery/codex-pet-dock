@@ -6808,6 +6808,171 @@ do {
 }
 
 do {
+    // Ordering 2: an accepted frame can finish while the factory result is still gated.
+    // The later activation must observe this epoch's accepted stats and never arm a
+    // deadline that can false-fire.
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(3_000))
+    let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
+    let failures = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let factory: ContainerFrameStreamFactory = { _, _, consumer in
+        let stream = FakeContainerFrameStream()
+        stream.attach(consumer)
+        created.withLock { $0.append(stream) }
+        try await stream.start()
+        await stream.waitFactoryGate()
+        return stream
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        transport: .managedStream(factory: factory),
+        onObservationChanged: { wakes.withLock { $0 += 1 } },
+        onStreamStartFailure: { failures.withLock { $0 += 1 } })
+    let container = cpContainer(548)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        created.withLock { $0.count } == 1
+            && created.withLock { $0.first?.counts().starts == 1 }
+            && created.withLock { $0.first?.isFactoryGateWaiting == true }
+    })
+    let earlyFrameStream = created.withLock { $0.first! }
+    check("T-cp111 precondition token precedes factory activation",
+          earlyFrameStream.beginFrame()
+            && probe.streamRuntime.withLock {
+                    $0.streamEpoch == 1 && $0.active == nil && $0.starting
+                        && $0.acceptedFrameEpoch == nil && !$0.firstFrameDelivered
+                        && $0.firstFrameDeadline == nil && $0.armedEpoch == nil
+            },
+          "runtime=\(probe.streamRuntime.withLock { $0 })")
+    Task.detached { await earlyFrameStream.deliver(.stats(cpStatsA)) }
+    _ = waitPumpingMain({
+        probe.hasObservation()
+            && probe.streamRuntime.withLock {
+                    $0.streamEpoch == 1 && $0.acceptedFrameEpoch == 1
+                        && !$0.firstFrameDelivered && $0.firstFrameDeadline == nil
+                        && $0.armedEpoch == nil
+            }
+            && wakes.withLock { $0 } == 1
+    })
+    earlyFrameStream.finishFrame()
+    earlyFrameStream.releaseFactoryGate()
+    _ = waitPumpingMain({
+        probe.streamRuntime.withLock {
+                $0.active === earlyFrameStream && !$0.starting && !$0.stopping
+                    && $0.streamEpoch == 1 && $0.acceptedFrameEpoch == 1
+                    && $0.firstFrameDelivered && $0.firstFrameDeadline == nil
+                    && $0.armedEpoch == nil
+        }
+    })
+    clock.withLock { $0 = 3_002.1 }
+    let observed = probe.locate(container: container)
+    check("T-cp111 activation after accepted frame does not arm watchdog",
+          observed == .bounds(cpRectA)
+            && probe.streamRuntime.withLock {
+                    $0.active === earlyFrameStream && $0.streamEpoch == 1
+                        && $0.acceptedFrameEpoch == 1 && $0.firstFrameDelivered
+                        && $0.firstFrameDeadline == nil && $0.armedEpoch == nil
+            }
+            && earlyFrameStream.counts() == (1, 0, 0)
+            && failures.withLock { $0 } == 0
+            && probe.streamRuntime.withLock {
+                    $0.consecutiveStartFailures == 0 && $0.nextStartAllowedAt == nil
+            },
+          "observed=\(observed) counts=\(earlyFrameStream.counts()) "
+            + "runtime=\(probe.streamRuntime.withLock { $0 }) failures=\(failures.withLock { $0 })")
+    probe.shutdown()
+    _ = waitPumpingMain({ earlyFrameStream.counts().stops == 1 })
+}
+
+do {
+    // Identity safety: A's already-in-flight accepted stats must never cancel B's armed
+    // watchdog after A is retired and B starts on the same generation/WID.
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(3_000))
+    let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
+    let failures = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let factory: ContainerFrameStreamFactory = { _, _, consumer in
+        let stream = FakeContainerFrameStream()
+        stream.attach(consumer)
+        created.withLock { $0.append(stream) }
+        try await stream.start()
+        await stream.waitFactoryGate()
+        return stream
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        transport: .managedStream(factory: factory),
+        onObservationChanged: { wakes.withLock { $0 += 1 } },
+        onStreamStartFailure: { failures.withLock { $0 += 1 } })
+    let container = cpContainer(549)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        created.withLock { $0.count } == 1
+            && created.withLock { $0.first?.isFactoryGateWaiting == true }
+    })
+    let streamA = created.withLock { $0[0] }
+    streamA.releaseFactoryGate()
+    _ = waitPumpingMain({
+        probe.streamRuntime.withLock {
+                $0.active === streamA && $0.streamEpoch == 1 && $0.armedEpoch == 1
+                    && $0.firstFrameDeadline == 3_002
+        }
+    })
+    check("T-cp112 precondition A frame in flight before retirement", streamA.beginFrame(), "")
+    Task.detached { await streamA.emitDidStop() }
+    _ = waitPumpingMain({
+        probe.streamRuntime.withLock { $0.active == nil && !$0.stopping && $0.frameComputing }
+    })
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        created.withLock { $0.count } == 2
+            && created.withLock { $0[1].counts().starts == 1 }
+            && created.withLock { $0[1].isFactoryGateWaiting == true }
+            && probe.streamRuntime.withLock {
+                    $0.streamEpoch == 2 && $0.starting && $0.acceptedFrameEpoch == nil
+            }
+    })
+    let streamB = created.withLock { $0[1] }
+    streamB.releaseFactoryGate()
+    _ = waitPumpingMain({
+        probe.streamRuntime.withLock {
+                $0.active === streamB && !$0.starting && !$0.stopping
+                    && $0.streamEpoch == 2 && $0.armedEpoch == 2
+                    && $0.firstFrameDeadline == 3_002 && !$0.firstFrameDelivered
+        }
+    })
+    Task.detached { await streamA.deliver(.stats(cpStatsA)) }
+    _ = waitPumpingMain({
+        probe.hasObservation()
+            && probe.streamRuntime.withLock {
+                    $0.streamEpoch == 2 && $0.acceptedFrameEpoch != 2
+                        && $0.armedEpoch == 2 && !$0.firstFrameDelivered
+                        && $0.firstFrameDeadline == 3_002
+            }
+            && wakes.withLock { $0 } == 2
+    })
+    streamA.finishFrame()
+    clock.withLock { $0 = 3_002.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        streamB.counts().stops == 1
+            && probe.streamRuntime.withLock { $0.active == nil && !$0.stopping }
+    })
+    check("T-cp112 stale accepted frame cannot cancel replacement watchdog",
+          failures.withLock { $0 } == 1
+            && wakes.withLock { $0 } == 3
+            && probe.streamRuntime.withLock {
+                    $0.streamEpoch == 2 && $0.armedEpoch == nil
+                        && !$0.firstFrameDelivered && $0.nextStartAllowedAt == 3_004.1
+            },
+          "failures=\(failures.withLock { $0 }) wakes=\(wakes.withLock { $0 }) "
+            + "runtime=\(probe.streamRuntime.withLock { $0 })")
+    probe.shutdown()
+}
+
+do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(2_000))
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)
@@ -6935,8 +7100,11 @@ do {
     func activateForBackoff(_ index: Int) {
         streams[index].attach(probe)
         probe.streamRuntime.withLock { s in
+            s.streamEpoch += 1
             s.active = streams[index]
             s.activeWID = container.wid
+            s.armedEpoch = s.streamEpoch
+            s.acceptedFrameEpoch = nil
             s.starting = false
             s.stopping = false
             s.firstFrameDelivered = false

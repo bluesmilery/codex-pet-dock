@@ -233,6 +233,13 @@ final class ContainerPetProbe: Sendable {
         var starting = false
         var stopping = false
         var frameComputing = false
+        /// Start-attempt identity. Allocated before factory completion so frames that land
+        /// during starting can be associated with the future active stream.
+        var streamEpoch = 0
+        /// The epoch whose deadline is currently armed; nil means no watchdog is armed.
+        var armedEpoch: Int?
+        /// The epoch of the latest accepted stats outcome (identity-safe cancellation input).
+        var acceptedFrameEpoch: Int?
         var firstFrameDelivered = false
         var firstFrameDeadline: TimeInterval?
         var consecutiveStartFailures = 0
@@ -242,6 +249,7 @@ final class ContainerPetProbe: Sendable {
         var processingGeneration = 0
         var processingWID: CGWindowID?
         var processingBounds: CGRect?
+        var processingEpoch = 0
     }
 
     internal let lock: OSAllocatedUnfairLock<ProbeState>
@@ -460,6 +468,11 @@ final class ContainerPetProbe: Sendable {
                   s.nextStartAllowedAt == nil || now >= s.nextStartAllowedAt! else {
                 return false
             }
+            s.streamEpoch += 1
+            s.armedEpoch = nil
+            s.acceptedFrameEpoch = nil
+            s.firstFrameDelivered = false
+            s.firstFrameDeadline = nil
             s.starting = true
             s.startingGeneration = lock.withLock { $0.generation }
             s.startingWID = container.wid
@@ -482,6 +495,8 @@ final class ContainerPetProbe: Sendable {
                 let stream = try await factory(scheduled, target, consumer)
                 // factory 返回时必须在同一把 runtime 锁下复查停机/切换竞态；
                 // stopping=true 的新 stream 绝不能进入 active。
+                // Activation also rechecks whether this exact epoch already delivered an
+                // accepted frame while starting; it must never overwrite that cancellation.
                 let accepted = runtimeLock.withLock { s -> Bool in
                     guard s.starting, !s.stopping, s.active == nil,
                           s.startingGeneration == probeLock.withLock({ $0.generation }),
@@ -492,8 +507,18 @@ final class ContainerPetProbe: Sendable {
                     s.active = stream
                     s.activeWID = scheduled.wid
                     s.starting = false
-                    s.firstFrameDelivered = false
-                    s.firstFrameDeadline = nowProvider() + firstFrameTimeout
+                    let frameAlreadyAccepted = s.acceptedFrameEpoch == s.streamEpoch
+                    if frameAlreadyAccepted {
+                        s.armedEpoch = nil
+                        s.firstFrameDelivered = true
+                        s.firstFrameDeadline = nil
+                        s.consecutiveStartFailures = 0
+                        s.nextStartAllowedAt = nil
+                    } else {
+                        s.armedEpoch = s.streamEpoch
+                        s.firstFrameDelivered = false
+                        s.firstFrameDeadline = nowProvider() + firstFrameTimeout
+                    }
                     return true
                 }
                 if !accepted {
@@ -521,6 +546,7 @@ final class ContainerPetProbe: Sendable {
                 s.active = nil
                 s.activeWID = nil
                 s.stopping = true
+                s.armedEpoch = nil
                 return active
             }
             if s.starting {
@@ -542,11 +568,11 @@ final class ContainerPetProbe: Sendable {
     private func processStreamOutcome(_ result: ContainerCaptureOutcome) async {
         // Frames-are-truth：mid-stream stall 不做 watchdog 退役；静态窗口可能稀疏送帧，
         // observation cache 负责 retention。只有“从未收到首帧”的启动路径被健康检查。
-        let frameContext = streamRuntime.withLock { s -> (Int, CGWindowID?, CGRect?, Bool)? in
+        let frameContext = streamRuntime.withLock { s -> (Int, CGWindowID?, CGRect?, Int)? in
             guard s.frameComputing else { return nil }
-            return (s.processingGeneration, s.processingWID, s.processingBounds, true)
+            return (s.processingGeneration, s.processingWID, s.processingBounds, s.processingEpoch)
         }
-        guard let (generation, wid, bounds, _) = frameContext else { return }
+        guard let (generation, wid, bounds, streamEpoch) = frameContext else { return }
         let (shouldNotify, acceptedStats): (Bool, Bool) = lock.withLock { s in
             // beginProcessing 已捕获 generation/WID/bounds；reset/WID 切换会使旧 frame 失效。
             guard let bounds,
@@ -570,8 +596,15 @@ final class ContainerPetProbe: Sendable {
         // completion has not yet published active. Activation then arms the deadline under
         // streamRuntime. Re-acquiring that lock here lets an already-accepted stats outcome
         // cancel that later-armed deadline before any wake consumer observes it.
+        // Frames-are-truth ordering: beginProcessing may take the token while the factory
+        // completion has not yet published active. If activation wins, it arms this epoch;
+        // if delivery wins, activation observes acceptedFrameEpoch and never arms. Either
+        // way, cancellation below applies only to the epoch captured with the frame token.
         if acceptedStats {
             streamRuntime.withLock { s in
+                guard s.streamEpoch == streamEpoch else { return }
+                s.acceptedFrameEpoch = streamEpoch
+                guard s.armedEpoch == streamEpoch, !s.firstFrameDelivered else { return }
                 s.firstFrameDelivered = true
                 s.firstFrameDeadline = nil
                 s.consecutiveStartFailures = 0
@@ -591,6 +624,7 @@ final class ContainerPetProbe: Sendable {
                   s.activeWID != nil else { return false }
             s.active = nil
             s.activeWID = nil
+            s.armedEpoch = nil
             s.starting = false
             s.stopping = false
             s.firstFrameDelivered = false
@@ -615,6 +649,8 @@ final class ContainerPetProbe: Sendable {
                   s.activeWID != nil,
                   !s.starting,
                   !s.stopping,
+                  let armedEpoch = s.armedEpoch,
+                  armedEpoch == s.streamEpoch,
                   !s.firstFrameDelivered,
                   let deadline = s.firstFrameDeadline,
                   now >= deadline else {
@@ -622,6 +658,7 @@ final class ContainerPetProbe: Sendable {
             }
             s.active = nil
             s.activeWID = nil
+            s.armedEpoch = nil
             s.starting = false
             s.stopping = true
             s.firstFrameDelivered = false
@@ -699,14 +736,9 @@ extension ContainerPetProbe: ContainerFrameConsumer {
             s.processingGeneration = generation
             s.processingWID = wid
             s.processingBounds = bounds
-            // 任何被 consumer 实际接收的 frame 都取消 first-frame watchdog，并重置退避链；
-            // 只有 active 生命周期内的 frame 能做这个 reset，watchdog 已退役后到达的旧帧不能。
-            if s.active != nil, !s.stopping {
-                s.firstFrameDelivered = true
-                s.firstFrameDeadline = nil
-                s.consecutiveStartFailures = 0
-                s.nextStartAllowedAt = nil
-            }
+            s.processingEpoch = s.streamEpoch
+            // Token acquisition only snapshots identity; accepted-stats completion owns
+            // watchdog cancellation so non-stats outcomes cannot invalidate health state.
             return true
         }
     }
