@@ -6704,6 +6704,110 @@ do {
 }
 
 do {
+    // Pin the start-completion race: the token can be taken before the factory result is
+    // published. Activation arms the deadline under streamRuntime; accepted delivery must
+    // re-acquire that same lock and cancel it after the fact.
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(1_000))
+    let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
+    let failures = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let factory: ContainerFrameStreamFactory = { _, _, consumer in
+        let stream = FakeContainerFrameStream()
+        stream.attach(consumer)
+        created.withLock { $0.append(stream) }
+        try await stream.start()
+        await stream.waitFactoryGate()
+        return stream
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        transport: .managedStream(factory: factory),
+        onObservationChanged: { wakes.withLock { $0 += 1 } },
+        onStreamStartFailure: { failures.withLock { $0 += 1 } })
+    let container = cpContainer(546)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        created.withLock { $0.count } == 1
+            && created.withLock { $0.first?.counts().starts == 1 }
+            && created.withLock { $0.first?.isFactoryGateWaiting == true }
+    })
+    let racingStream = created.withLock { $0.first! }
+    check("T-cp109 precondition takes token before active publication",
+          racingStream.beginFrame()
+            && probe.streamRuntime.withLock {
+                    $0.active == nil && $0.starting && $0.frameComputing && !$0.firstFrameDelivered
+            },
+          "runtime=\(probe.streamRuntime.withLock { $0 })")
+    racingStream.releaseFactoryGate()
+    _ = waitPumpingMain({
+        probe.streamRuntime.withLock {
+            $0.active != nil && !$0.starting && $0.frameComputing
+                && !$0.firstFrameDelivered && $0.firstFrameDeadline == 1_002
+        }
+    })
+    Task.detached { await racingStream.deliver(.stats(cpStatsA)) }
+    _ = waitPumpingMain({
+        probe.hasObservation()
+            && probe.streamRuntime.withLock {
+                    $0.firstFrameDelivered && $0.firstFrameDeadline == nil && $0.frameComputing
+            }
+            && wakes.withLock { $0 } == 1
+    })
+    racingStream.finishFrame()
+    clock.withLock { $0 = 1_002.1 }
+    let observed = probe.locate(container: container)
+    check("T-cp109 landed frame cancels deadline armed after its token",
+          observed == .bounds(cpRectA)
+            && probe.streamRuntime.withLock { $0.active === racingStream && !$0.starting && !$0.stopping }
+            && racingStream.counts() == (1, 0, 0)
+            && failures.withLock { $0 } == 0
+            && probe.streamRuntime.withLock { $0.consecutiveStartFailures == 0 && $0.nextStartAllowedAt == nil },
+          "observed=\(observed) counts=\(racingStream.counts()) "
+            + "runtime=\(probe.streamRuntime.withLock { $0 }) failures=\(failures.withLock { $0 })")
+    probe.shutdown()
+    _ = waitPumpingMain({ racingStream.counts().stops == 1 })
+}
+
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(2_000))
+    let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
+    let failures = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let factory: ContainerFrameStreamFactory = { _, _, consumer in
+        let stream = FakeContainerFrameStream()
+        stream.attach(consumer)
+        created.withLock { $0.append(stream) }
+        try await stream.start()
+        return stream
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        transport: .managedStream(factory: factory),
+        onObservationChanged: { wakes.withLock { $0 += 1 } },
+        onStreamStartFailure: { failures.withLock { $0 += 1 } })
+    let container = cpContainer(547)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        created.withLock { $0.count } == 1
+            && probe.streamRuntime.withLock { $0.active != nil && $0.firstFrameDeadline != nil }
+    })
+    clock.withLock { $0 = 2_002.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        created.withLock { $0.first?.counts().stops == 1 }
+            && probe.streamRuntime.withLock { $0.active == nil && !$0.stopping }
+    })
+    check("T-cp110 truly silent stream still fires first-frame watchdog",
+          failures.withLock { $0 } == 1
+            && wakes.withLock { $0 } == 1
+            && probe.streamRuntime.withLock { $0.nextStartAllowedAt == 2_004.1 },
+          "failures=\(failures.withLock { $0 }) wakes=\(wakes.withLock { $0 }) "
+            + "runtime=\(probe.streamRuntime.withLock { $0 })")
+}
+
+do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(2_000))
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)

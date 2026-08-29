@@ -547,24 +547,36 @@ final class ContainerPetProbe: Sendable {
             return (s.processingGeneration, s.processingWID, s.processingBounds, true)
         }
         guard let (generation, wid, bounds, _) = frameContext else { return }
-        let shouldNotify: Bool = lock.withLock { s in
+        let (shouldNotify, acceptedStats): (Bool, Bool) = lock.withLock { s in
             // beginProcessing 已捕获 generation/WID/bounds；reset/WID 切换会使旧 frame 失效。
             guard let bounds,
                   s.generation == generation,
-                  s.knownWID == wid else { return false }
+                  s.knownWID == wid else { return (false, false) }
             guard case .stats(let stats) = result,
                   let observationRect = ContainerPetChannel.mapToPetRect(
                     stats: stats,
                     captureWidth: stats.captureWidth,
                     captureHeight: stats.captureHeight,
-                    containerBounds: bounds) else { return false }
+                    containerBounds: bounds) else { return (false, false) }
             if let old = s.cached, old != stats {
                 s.movingUntil = monotonicNow() + ContainerPetHeuristics.movingHoldDuration
             }
             s.cached = stats
             let changed = s.lastDeliveredRect != observationRect
             s.lastDeliveredRect = observationRect
-            return changed
+            return (changed, true)
+        }
+        // Frames-are-truth ordering: beginProcessing may take the token while the factory
+        // completion has not yet published active. Activation then arms the deadline under
+        // streamRuntime. Re-acquiring that lock here lets an already-accepted stats outcome
+        // cancel that later-armed deadline before any wake consumer observes it.
+        if acceptedStats {
+            streamRuntime.withLock { s in
+                s.firstFrameDelivered = true
+                s.firstFrameDeadline = nil
+                s.consecutiveStartFailures = 0
+                s.nextStartAllowedAt = nil
+            }
         }
         if shouldNotify { onObservationChanged?() }
     }
