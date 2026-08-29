@@ -6334,8 +6334,16 @@ final class FakeContainerFrameStream: ContainerFrameStream {
         var stops = 0
         var consumer: (any ContainerFrameConsumer)?
         var droppedFrames = 0
+        var factoryGateWaiting = false
+        var factoryGateReleased = false
     }
     private let lock = OSAllocatedUnfairLock<State>(initialState: State())
+    private struct FactoryGateState {
+        var waiting = false
+        var released = false
+        var continuation: CheckedContinuation<Void, Never>?
+    }
+    private let factoryGate = OSAllocatedUnfairLock<FactoryGateState>(initialState: FactoryGateState())
 
     func start() async throws {
         lock.withLock { $0.starts += 1 }
@@ -6351,6 +6359,53 @@ final class FakeContainerFrameStream: ContainerFrameStream {
 
     func counts() -> (starts: Int, stops: Int, dropped: Int) {
         lock.withLock { ($0.starts, $0.stops, $0.droppedFrames) }
+    }
+
+    var isFactoryGateWaiting: Bool {
+        lock.withLock { $0.factoryGateWaiting }
+    }
+
+    func waitFactoryGate() async {
+        let alreadyReleased = factoryGate.withLock { state -> Bool in
+            if state.released { return true }
+            state.waiting = true
+            return false
+        }
+        guard !alreadyReleased else { return }
+        await withCheckedContinuation { continuation in
+            let shouldResume = factoryGate.withLock { state -> Bool in
+                if state.released {
+                    state.waiting = false
+                    return true
+                }
+                state.continuation = continuation
+                return false
+            }
+            if shouldResume { continuation.resume() }
+        }
+    }
+
+    func releaseFactoryGate() {
+        let continuation = factoryGate.withLock { state -> CheckedContinuation<Void, Never>? in
+            state.released = true
+            state.waiting = false
+            return state.continuation
+        }
+        continuation?.resume()
+    }
+
+    func emitDroppingSynchronously(_ outcome: ContainerCaptureOutcome) -> Bool {
+        guard beginFrame() else {
+            lock.withLock { $0.droppedFrames += 1 }
+            return true
+        }
+        finishFrame()
+        return false
+    }
+
+    func emitDidStop() async {
+        let consumer = lock.withLock { $0.consumer }
+        await consumer?.streamDidTerminate(self)
     }
 
     func beginFrame() -> Bool {
@@ -6405,14 +6460,23 @@ do {
     check("T-cp83 first locate starts exactly one stream; repeat locate does not restart",
           streamA.counts().starts == 1 && streamA.counts().stops == 0, "counts=\(streamA.counts())")
 
-    // frames replace one-shot outcomes as edge input; semantics unchanged.
-    Task.detached { await streamA.emit(.stats(cpStatsA)) }
-    _ = waitPumpingMain({ wakes.withLock { $0 } == 1 && probe.hasObservation() })
-    Task.detached { await streamA.emit(.stats(cpStatsA)) }
-    _ = waitPumpingMain({ streamA.counts().dropped == 1 })
+    // deterministic latest-wins: take the production token, complete delivery, then assert drop.
+    check("T-cp84 deterministic latest-wins token begins", streamA.beginFrame(), "")
+    let deliveryReturned = OSAllocatedUnfairLock(initialState: false)
+    Task.detached {
+        await streamA.deliver(.stats(cpStatsA))
+        deliveryReturned.withLock { $0 = true }
+    }
+    _ = waitPumpingMain({
+        deliveryReturned.withLock { $0 } && wakes.withLock { $0 } == 1 && probe.hasObservation()
+    })
+    let droppedSameRect = streamA.emitDroppingSynchronously(.stats(cpStatsA))
+    streamA.finishFrame()
     check("T-cp84 stream same-rect frame does not repeat edge",
-          probe.locate(container: containerA) == .bounds(cpRectA) && wakes.withLock { $0 } == 1,
-          "wakes=\(wakes.withLock { $0 })")
+          droppedSameRect && streamA.counts().dropped == 1
+            && probe.locate(container: containerA) == .bounds(cpRectA)
+            && wakes.withLock { $0 } == 1,
+          "dropped=\(droppedSameRect) counts=\(streamA.counts()) wakes=\(wakes.withLock { $0 })")
     Task.detached { await streamA.emit(.stats(cpStatsB)) }
     _ = waitPumpingMain({ wakes.withLock { $0 } == 2 })
     check("T-cp85 stream different-rect frame fires one edge",
@@ -6471,8 +6535,95 @@ do {
 
 check("T-cp93 managed stream minimumFrameInterval=0.33",
       ContainerPetHeuristics.streamFrameInterval == 0.33, "")
-check("T-cp94 macOS 13 one-shot fallback stable interval=1.0",
-      ContainerPetHeuristics.legacyStableCaptureInterval == 1.0, "")
+let cpPivotSource = try! String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/PetDock/ContainerPetChannel.swift"),
+    encoding: .utf8)
+check("T-cp94 macOS 13 managed channel unavailable by design",
+      !cpPivotSource.contains("legacyStableCaptureInterval")
+        && cpPivotSource.contains("macOS 13: managed channel unavailable by design"), "")
+
+// ---- C10 Round-7 P1：start/stop 竞速与 stream 异常终止生命周期。
+do {
+    let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
+    let factory: ContainerFrameStreamFactory = { _, _, consumer in
+        let stream = FakeContainerFrameStream()
+        stream.attach(consumer)
+        created.withLock { $0.append(stream) }
+        try await stream.start()
+        await stream.waitFactoryGate()
+        return stream
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { 130_000 },
+        canCapture: { true },
+        transport: .managedStream(factory: factory))
+    let container = cpContainer(537)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ created.withLock { $0.count } >= 1 })
+    let deferredStream = created.withLock { $0.first! }
+    _ = waitPumpingMain({ deferredStream.counts().starts == 1 && deferredStream.isFactoryGateWaiting })
+    probe.shutdown()
+    check("T-cp95 stop-during-start marks stopping before factory returns",
+          probe.streamRuntime.withLock { $0.stopping && $0.active == nil && $0.activeWID == nil }, "")
+    deferredStream.releaseFactoryGate()
+    _ = waitPumpingMain({
+        deferredStream.counts().stops == 1
+            && !probe.streamRuntime.withLock { $0.stopping || $0.starting }
+    })
+    check("T-cp96 stop-during-start retires deferred stream and keeps runtime empty",
+          deferredStream.counts() == (1, 1, 0)
+            && probe.streamRuntime.withLock { $0.active == nil && $0.activeWID == nil },
+          "counts=\(deferredStream.counts())")
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ created.withLock { $0.count } >= 2 })
+    let recoveredStream = created.withLock { $0[1] }
+    _ = waitPumpingMain({ recoveredStream.counts().starts == 1 })
+    check("T-cp97 later locate starts a fresh stream after stop-during-start",
+          recoveredStream.counts() == (1, 0, 0), "counts=\(recoveredStream.counts())")
+    probe.shutdown()
+    _ = waitPumpingMain({ recoveredStream.counts().stops == 1 })
+}
+
+do {
+    let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let factory: ContainerFrameStreamFactory = { _, _, consumer in
+        let stream = FakeContainerFrameStream()
+        stream.attach(consumer)
+        created.withLock { $0.append(stream) }
+        try await stream.start()
+        return stream
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { 140_000 },
+        canCapture: { true },
+        transport: .managedStream(factory: factory),
+        onObservationChanged: { wakes.withLock { $0 += 1 } })
+    let container = cpContainer(538)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ created.withLock { $0.count } >= 1 })
+    let deadStream = created.withLock { $0.first! }
+    _ = waitPumpingMain({ deadStream.counts().starts == 1 })
+    Task.detached { await deadStream.emitDidStop() }
+    _ = waitPumpingMain({
+        wakes.withLock { $0 } == 1
+            && probe.streamRuntime.withLock { $0.active == nil && $0.activeWID == nil && !$0.frameComputing }
+    })
+    check("T-cp98 didStopWithError retires dead stream and wakes without a frame token",
+          deadStream.counts() == (1, 0, 0) && wakes.withLock { $0 } == 1,
+          "counts=\(deadStream.counts()) wakes=\(wakes.withLock { $0 })")
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ created.withLock { $0.count } >= 2 })
+    let replacement = created.withLock { $0[1] }
+    _ = waitPumpingMain({ replacement.counts().starts == 1 })
+    check("T-cp99 locate after didStop starts a clean replacement stream",
+          replacement.counts() == (1, 0, 0), "counts=\(replacement.counts())")
+    probe.shutdown()
+    _ = waitPumpingMain({ replacement.counts().stops == 1 })
+}
 
 print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")
 
