@@ -77,12 +77,13 @@ struct ContainerAlphaStats: Equatable, Sendable {
 
 /// ScreenCaptureKit 观察结果语义（对应 BubbleCaptureOutcome）。
 /// - stats：成功取得目标窗口并完成匿名 alpha 统计。
-/// - regionStats：区域捕获成功，并携带实际窗口本地捕获区域（可能被显示器边界裁剪）。
+/// - regionStats：区域捕获成功，并携带实际窗口本地捕获区域及所选显示器 segment。
 /// - targetMissing：成功取得窗口清单，但目标 WID 不在清单中。
 /// - unavailable：权限、清单、截图或统计不可用；必须保守处理（不改写既有缓存）。
 enum ContainerCaptureOutcome: Equatable, Sendable {
     case stats(ContainerAlphaStats)
-    case regionStats(ContainerAlphaStats, captureRegion: CGRect)
+    case regionStats(
+        ContainerAlphaStats, captureRegion: CGRect, displaySegment: CGRect)
     case targetMissing
     case unavailable
 }
@@ -101,6 +102,8 @@ struct ContainerCaptureRequest: Equatable, Sendable {
 struct ContainerRegionCaptureGeometry: Equatable, Sendable {
     let sourceRect: CGRect
     let captureRegion: CGRect
+    /// 容器窗与所选显示器交集，转换为窗口本地坐标；其边缘是合法外边界。
+    let displaySegment: CGRect
 }
 
 /// locate() 同步返回：缓存的合成宠物矩形 / 尚无有效观察 / 捕获不可用（权限缺失，已清陈旧缓存）。
@@ -173,20 +176,33 @@ enum ContainerPetChannel {
         return expanded.intersection(CGRect(origin: .zero, size: windowSize))
     }
 
-    /// 只有位于窗口内部的裁剪边缘表示宠物可能已离开 region；与不可变窗口边界重合的
-    /// 边缘是合法外边界（例如宠物贴住窗口 x=0），不得触发 full/region 振荡。
+    /// 捕获边缘只有同时严格位于窗口和所选 display segment 内部，才表示宠物可能已离开
+    /// region。与任一边界重合都属于合法外边界：跨显示器的宠物会以当前 segment 内的截断
+    /// bbox 作为降级但稳定的观察继续跟随；该可见片段的 content bottom 仍有效，且保守保留
+    /// 比反复 full/region 定位更符合通道语义。
     static func bboxTouchesInteriorCaptureEdge(
-        _ stats: ContainerAlphaStats, captureRegion: CGRect, windowSize: CGSize
+        _ stats: ContainerAlphaStats,
+        captureRegion: CGRect,
+        windowSize: CGSize,
+        displaySegment: CGRect
     ) -> Bool {
         guard stats.nonTransparentPixelCount > 0 else { return false }
         let windowBounds = CGRect(origin: .zero, size: windowSize)
         let epsilon: CGFloat = 1e-9
-        return (stats.minX == 0 && captureRegion.minX > windowBounds.minX + epsilon)
-            || (stats.minY == 0 && captureRegion.minY > windowBounds.minY + epsilon)
+        let leftIsInterior = captureRegion.minX > windowBounds.minX + epsilon
+            && captureRegion.minX > displaySegment.minX + epsilon
+        let topIsInterior = captureRegion.minY > windowBounds.minY + epsilon
+            && captureRegion.minY > displaySegment.minY + epsilon
+        let rightIsInterior = captureRegion.maxX < windowBounds.maxX - epsilon
+            && captureRegion.maxX < displaySegment.maxX - epsilon
+        let bottomIsInterior = captureRegion.maxY < windowBounds.maxY - epsilon
+            && captureRegion.maxY < displaySegment.maxY - epsilon
+        return (stats.minX == 0 && leftIsInterior)
+            || (stats.minY == 0 && topIsInterior)
             || (stats.maxX == stats.captureWidth - 1
-                && captureRegion.maxX < windowBounds.maxX - epsilon)
+                && rightIsInterior)
             || (stats.maxY == stats.captureHeight - 1
-                && captureRegion.maxY < windowBounds.maxY - epsilon)
+                && bottomIsInterior)
     }
 
     /// 区域降采样会产生约一个源像素的量化误差；交付边沿与 moving 判定沿用位置容差。
@@ -220,8 +236,8 @@ enum ContainerPetChannel {
     }
 
     /// 实机 sweep 校准：跨屏 desktopIndependentWindow 的 sourceRect 原点是“容器窗与所选
-    /// 显示器交集”的左上角。跨 segment 的 region 裁到该交集，并把实际窗口本地区域随
-    /// stats 返回；贴实际 clamp 边且该边仍在窗口内部时，完成路径会触发下一轮 full locate。
+    /// 显示器交集”的左上角。跨 segment 的 region 裁到该交集，并把实际窗口本地区域及
+    /// segment 一并返回；segment clamp 是合法外边界，不因截断 bbox 而重启 full locate。
     static func regionCaptureGeometry(
         windowRegion: CGRect, containerBounds: CGRect, displayBounds: CGRect
     ) -> ContainerRegionCaptureGeometry? {
@@ -239,7 +255,8 @@ enum ContainerPetChannel {
             sourceRect: captureRegion.offsetBy(
                 dx: -segmentOriginInWindow.x,
                 dy: -segmentOriginInWindow.y),
-            captureRegion: captureRegion)
+            captureRegion: captureRegion,
+            displaySegment: segmentInWindow)
     }
 
     /// 区域轮次沿用全窗的降采样比例，避免裁剪后反而把小区域放大到 400px。
@@ -335,7 +352,7 @@ final class ContainerPetProbe: Sendable {
         var cachedWindowSize: CGSize?
         /// 下一轮 region capture 的窗口本地区域；nil 表示尚未完成全窗定位。
         var regionTracking: CGRect?
-        /// true 时下一轮必须全窗定位（首次/reset/WID变化/region miss/贴边）。
+        /// true 时下一轮必须全窗定位（首次/reset/WID变化/region miss/严格内部边缘）。
         var needsFullLocate = true
         /// 已知容器 wid（首次 locate 后锁定；wid 变化 → 清缓存 + 新 episode，防 WID 重用串台）。
         var knownWID: CGWindowID?
@@ -471,13 +488,16 @@ final class ContainerPetProbe: Sendable {
                 // targetMissing / unavailable / 超门限 → 保守保留旧有效观察，不触发。
                 let stats: ContainerAlphaStats
                 let returnedCaptureRegion: CGRect?
+                let returnedDisplaySegment: CGRect?
                 switch result {
                 case .stats(let value):
                     stats = value
                     returnedCaptureRegion = nil
-                case .regionStats(let value, let captureRegion):
+                    returnedDisplaySegment = nil
+                case .regionStats(let value, let captureRegion, let displaySegment):
                     stats = value
                     returnedCaptureRegion = captureRegion
+                    returnedDisplaySegment = displaySegment
                 case .targetMissing:
                     s.needsFullLocate = true
                     return (false, false, "target-missing")
@@ -489,7 +509,7 @@ final class ContainerPetProbe: Sendable {
                 var needsFullLocateAfterAcceptance = false
                 switch request.round {
                 case .fullWindow:
-                    guard returnedCaptureRegion == nil else {
+                    guard returnedCaptureRegion == nil, returnedDisplaySegment == nil else {
                         s.needsFullLocate = true
                         return (false, false, "capture-region")
                     }
@@ -503,8 +523,13 @@ final class ContainerPetProbe: Sendable {
                     }
                 case .region(let region):
                     captureRegion = returnedCaptureRegion ?? region
+                    let windowBounds = CGRect(origin: .zero, size: scheduledBounds.size)
+                    let displaySegment = returnedDisplaySegment ?? windowBounds
                     guard captureRegion.width > 0, captureRegion.height > 0,
-                          region.contains(captureRegion) else {
+                          displaySegment.width > 0, displaySegment.height > 0,
+                          region.contains(captureRegion),
+                          windowBounds.contains(displaySegment),
+                          displaySegment.contains(captureRegion) else {
                         s.needsFullLocate = true
                         return (false, false, "capture-region")
                     }
@@ -516,7 +541,8 @@ final class ContainerPetProbe: Sendable {
                         ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
                             stats,
                             captureRegion: captureRegion,
-                            windowSize: scheduledBounds.size)
+                            windowSize: scheduledBounds.size,
+                            displaySegment: displaySegment)
                 }
                 let expectedOutputSize = ContainerPetChannel.captureOutputSize(
                     windowSize: scheduledBounds.size, captureRegion: captureRegion)
@@ -615,7 +641,7 @@ final class ContainerPetProbe: Sendable {
         config.scalesToFit = false
         config.showsCursor = false
         var outputSize = request.outputSize
-        var returnedCaptureRegion: CGRect?
+        var returnedGeometry: ContainerRegionCaptureGeometry?
         if case .region(let windowRegion) = request.round {
             var displayCount: UInt32 = 0
             var displayIDs = [CGDirectDisplayID](repeating: 0, count: 16)
@@ -631,7 +657,7 @@ final class ContainerPetProbe: Sendable {
                 containerBounds: candidate.bounds,
                 displayBounds: displayBounds) else { return .unavailable }
             config.sourceRect = geometry.sourceRect
-            returnedCaptureRegion = geometry.captureRegion
+            returnedGeometry = geometry
             outputSize = ContainerPetChannel.captureOutputSize(
                 windowSize: candidate.bounds.size,
                 captureRegion: geometry.captureRegion)
@@ -642,8 +668,11 @@ final class ContainerPetProbe: Sendable {
             return .unavailable
         }
         let stats = ContainerPetChannel.computeOpaqueBBox(image: img)
-        if let returnedCaptureRegion {
-            return .regionStats(stats, captureRegion: returnedCaptureRegion)
+        if let returnedGeometry {
+            return .regionStats(
+                stats,
+                captureRegion: returnedGeometry.captureRegion,
+                displaySegment: returnedGeometry.displaySegment)
         }
         return .stats(stats)
     }

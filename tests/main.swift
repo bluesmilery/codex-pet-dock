@@ -6434,17 +6434,20 @@ let cpEdgeFixtures = [
 let cpInteriorFixture = ContainerAlphaStats(
     nonTransparentPixelCount: 1, minX: 2, minY: 2, maxX: 4, maxY: 6,
     captureWidth: 20, captureHeight: 20)
-check("T-cp91b each capture edge arms fallback while an interior bbox does not",
+let cpWindowLocalBounds = CGRect(origin: .zero, size: cpBounds.size)
+check("T-cp91b interior capture edges arm fallback while an interior bbox does not",
       cpEdgeFixtures.allSatisfy {
           ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
               $0,
               captureRegion: CGRect(x: 100, y: 100, width: 200, height: 200),
-              windowSize: cpBounds.size)
+              windowSize: cpBounds.size,
+              displaySegment: cpWindowLocalBounds)
       }
         && !ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
             cpInteriorFixture,
             captureRegion: CGRect(x: 100, y: 100, width: 200, height: 200),
-            windowSize: cpBounds.size), "")
+            windowSize: cpBounds.size,
+            displaySegment: cpWindowLocalBounds), "")
 check("T-cp91c region output keeps full-window scale instead of upscaling crop to 400px",
       ContainerPetChannel.captureOutputSize(
         windowSize: cpBounds.size, captureRegion: cpTracked) == CGSize(width: 95, height: 178), "")
@@ -6455,15 +6458,25 @@ check("T-cp91d window-aligned capture edge is exterior and does not arm fallback
       !ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
         cpWindowLeftStats,
         captureRegion: CGRect(x: 0, y: 100, width: 200, height: 200),
-        windowSize: cpBounds.size), "")
+        windowSize: cpBounds.size,
+        displaySegment: cpWindowLocalBounds), "")
 let cpCrossSegmentRegion = CGRect(x: 300, y: 500, width: 300, height: 300)
+let cpRightClampedStats = ContainerAlphaStats(
+    nonTransparentPixelCount: 20, minX: 2, minY: 2, maxX: 19, maxY: 6,
+    captureWidth: 20, captureHeight: 20)
 let cpCrossSegmentGeometry = ContainerPetChannel.regionCaptureGeometry(
     windowRegion: cpCrossSegmentRegion,
     containerBounds: cpBounds,
     displayBounds: CGRect(x: 100, y: 100, width: 400, height: 1600))
-check("T-cp91e cross-segment region clamps sourceRect and records actual capture region",
+check("T-cp91e cross-segment clamp records its exterior display boundary",
       cpCrossSegmentGeometry?.sourceRect == CGRect(x: 300, y: 500, width: 100, height: 300)
-        && cpCrossSegmentGeometry?.captureRegion == CGRect(x: 300, y: 500, width: 100, height: 300),
+        && cpCrossSegmentGeometry?.captureRegion == CGRect(x: 300, y: 500, width: 100, height: 300)
+        && cpCrossSegmentGeometry?.displaySegment == CGRect(x: 0, y: 0, width: 400, height: 1600)
+        && !ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
+            cpRightClampedStats,
+            captureRegion: CGRect(x: 300, y: 500, width: 100, height: 300),
+            windowSize: cpBounds.size,
+            displaySegment: CGRect(x: 0, y: 0, width: 400, height: 1600)),
       "actual=\(String(describing: cpCrossSegmentGeometry))")
 
 @Sendable func cpStats(for windowBBox: CGRect, in region: CGRect, outputSize: CGSize) -> ContainerAlphaStats {
@@ -6612,34 +6625,50 @@ do {
           "requests=\(requests.withLock { $0 })")
 }
 
-// Round-17：跨 display segment 的 region 使用实际 clamp 区域映射；内容未贴 clamp 边则继续 region。
+// Round-18：display segment 与窗口边界同为合法外边界；跨界内容接受截断观察并稳定留在 region。
 do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(140_000))
     let requests = OSAllocatedUnfairLock(initialState: [ContainerCaptureRequest]())
     let touchClampEdge = OSAllocatedUnfairLock(initialState: false)
-    let clampedRegion = CGRect(x: 150, y: 350, width: 250, height: 710)
+    let forceInteriorEdge = OSAllocatedUnfairLock(initialState: false)
+    let returnedRegion = OSAllocatedUnfairLock<CGRect?>(initialState: nil)
+    let requestedRegion = OSAllocatedUnfairLock<CGRect?>(initialState: nil)
+    let returnedStats = OSAllocatedUnfairLock<ContainerAlphaStats?>(initialState: nil)
+    let displaySegment = CGRect(x: 0, y: 0, width: 400, height: 1600)
     let probe = ContainerPetProbe(
         monotonicNow: { clock.withLock { $0 } },
         canCapture: { true },
         capturer: { _, request in
             requests.withLock { $0.append(request) }
-            let desiredBBox = touchClampEdge.withLock { touches in
-                touches
-                    ? CGRect(x: 320, y: 500, width: 80, height: 160)
-                    : CGRect(x: 300, y: 500, width: 80, height: 160)
-            }
             switch request.round {
             case .fullWindow:
                 return .stats(cpStats(
-                    for: desiredBBox,
+                    for: CGRect(x: 300, y: 500, width: 80, height: 160),
                     in: CGRect(origin: .zero, size: cpBounds.size),
                     outputSize: request.outputSize))
-            case .region:
+            case .region(let region):
+                requestedRegion.withLock { $0 = region }
+                let captureRegion = region.intersection(displaySegment)
+                returnedRegion.withLock { $0 = captureRegion }
+                let desiredBBox: CGRect
+                if forceInteriorEdge.withLock({ $0 }) {
+                    desiredBBox = CGRect(
+                        x: captureRegion.minX, y: 500, width: 80, height: 160)
+                } else if touchClampEdge.withLock({ $0 }) {
+                    desiredBBox = CGRect(x: 320, y: 500, width: 100, height: 160)
+                } else {
+                    desiredBBox = CGRect(x: 300, y: 500, width: 80, height: 160)
+                }
+                let visibleBBox = desiredBBox.intersection(captureRegion)
                 let outputSize = ContainerPetChannel.captureOutputSize(
-                    windowSize: cpBounds.size, captureRegion: clampedRegion)
+                    windowSize: cpBounds.size, captureRegion: captureRegion)
+                let stats = cpStats(
+                    for: visibleBBox, in: captureRegion, outputSize: outputSize)
+                returnedStats.withLock { $0 = stats }
                 return .regionStats(
-                    cpStats(for: desiredBBox, in: clampedRegion, outputSize: outputSize),
-                    captureRegion: clampedRegion)
+                    stats,
+                    captureRegion: captureRegion,
+                    displaySegment: displaySegment)
             }
         })
     let container = cpContainer(538)
@@ -6648,9 +6677,11 @@ do {
     clock.withLock { $0 += 0.33 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    let firstReturnedRegion = returnedRegion.withLock { $0 }
     check("T-cp101 clamped cross-segment capture is accepted when bbox stays inside clamp",
           probe.lock.withLock {
-              $0.cachedCaptureRegion == clampedRegion && !$0.needsFullLocate
+              $0.cachedCaptureRegion == firstReturnedRegion
+                && !$0.needsFullLocate
           } && requests.withLock {
               guard case .region = $0.last?.round else { return false }
               return true
@@ -6659,13 +6690,28 @@ do {
     clock.withLock { $0 += 0.1 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp102 bbox touching an interior display clamp edge arms full locate",
-          probe.lock.withLock { $0.needsFullLocate }, "")
+    let observationAfterClamp = probe.locate(container: container)
+    let clampRequestedRegion = requestedRegion.withLock { $0 }
+    let clampReturnedRegion = returnedRegion.withLock { $0 }
+    let clampStats = returnedStats.withLock { $0 }
+    check("T-cp102 display-boundary clamp edge accepts truncated observation without relocation",
+          clampRequestedRegion?.contains(clampReturnedRegion ?? .null) == true
+            && clampStats?.maxX == (clampStats?.captureWidth ?? 0) - 1
+            && probe.lock.withLock {
+              !$0.needsFullLocate && $0.cachedCaptureRegion == clampReturnedRegion
+          } && observationAfterClamp != .empty,
+          "requests=\(requests.withLock { $0 }) observation=\(observationAfterClamp)")
+    touchClampEdge.withLock { $0 = false }
+    forceInteriorEdge.withLock { $0 = true }
     clock.withLock { $0 += 0.1 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp103 display-clamp edge fallback executes a full-window round",
-          requests.withLock { $0.last?.round == .fullWindow },
+    let interiorEdgeArmed = probe.lock.withLock { $0.needsFullLocate }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp103 interior capture edge still arms and executes full locate",
+          interiorEdgeArmed && requests.withLock { $0.last?.round == .fullWindow },
           "requests=\(requests.withLock { $0 })")
 }
 
