@@ -6369,13 +6369,24 @@ do {
     let container = cpContainer(534)
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    clock.withLock { $0 = 110_000.32 }
-    _ = probe.locate(container: container)
-    check("T-cp81 stable 0.32s→不捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 110_000.33 }
+    // 首个观察（nil→bbox）会武装 2s moving hold（interval=0.1s），0.32s 落在 hold 内
+    // 会合法启动第二次捕获；必须先把时钟推过 hold 结束再测 stable 门限。bbox 不变时
+    // hold 不重置，因此后续轮次保持 stable。每次断言前都等 detached 捕获 quiesce。
+    clock.withLock { $0 = 110_002.1 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp82 stable 0.33s→捕获", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+    check("T-cp81a 前置:moving hold过期→stable重捕完成",
+          calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 110_002.42 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp81 stable 0.32s→不捕获",
+          calls.withLock { $0 } == 2 && !probe.lock.withLock { $0.inFlight },
+          "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 110_002.43 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp82 stable 0.33s→捕获", calls.withLock { $0 } == 3, "calls=\(calls.withLock { $0 })")
 }
 
 // ---- C9 option 1 region tracking：坐标校准 + full/region/fallback 状态机。----
