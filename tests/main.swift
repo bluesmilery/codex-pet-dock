@@ -3482,7 +3482,7 @@ final class AsyncCaptureEntryGate: @unchecked Sendable {
             return true
         }
         guard shouldSuspend else { return }
-        await withCheckedContinuation { continuation in
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let resumeImmediately = lock.withLock { state -> Bool in
                 if state.pendingReleases > 0 {
                     state.pendingReleases -= 1
@@ -6412,7 +6412,7 @@ final class FakeContainerFrameStream: ContainerFrameStream {
             return false
         }
         guard !alreadyReleased else { return }
-        await withCheckedContinuation { continuation in
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let shouldResume = factoryGate.withLock { state -> Bool in
                 if state.released {
                     state.waiting = false
@@ -7388,6 +7388,81 @@ do {
     })
     check("T-cp116 retry after backoff invokes a fresh factory attempt",
           probe.streamRuntime.withLock { $0.streamEpoch == 2 && $0.nextStartAllowedAt == 7_006.1 },
+          "attempts=\(attempts.withLock { $0 }) runtime=\(probe.streamRuntime.withLock { $0 })")
+    _ = waitPumpingMain({ false }, timeout: 0.1)
+}
+
+do {
+    // A factory error may complete after reset. It carries the old start epoch and must be
+    // dropped silently; a fresh attempt after reset is still a visible current failure.
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(8_000))
+    let attempts = OSAllocatedUnfairLock<[CGWindowID]>(initialState: [])
+    let failures = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    struct DeferredErrorGateState {
+        var armed = false
+        var continuation: CheckedContinuation<Void, Never>?
+    }
+    let errorGate = OSAllocatedUnfairLock<DeferredErrorGateState>(initialState: DeferredErrorGateState())
+    let factory: ContainerFrameStreamFactory = { candidate, _, streamEpoch, _ in
+        attempts.withLock { $0.append(candidate.wid) }
+        _ = streamEpoch
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let shouldResume = errorGate.withLock { state -> Bool in
+                if !state.armed {
+                    state.armed = true
+                    state.continuation = continuation
+                    return false
+                }
+                return true
+            }
+            if shouldResume { continuation.resume() }
+        }
+        throw ContainerStreamError.targetMissing
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        transport: .managedStream(factory: factory),
+        onObservationChanged: { wakes.withLock { $0 += 1 } },
+        onStreamStartFailure: { failures.withLock { $0 += 1 } })
+    let container = cpContainer(551)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        attempts.withLock { $0 } == [container.wid]
+            && errorGate.withLock { $0.armed && $0.continuation != nil }
+            && probe.streamRuntime.withLock { $0.streamEpoch == 1 && $0.starting }
+    })
+    check("T-cp117 precondition deferred error is still gated",
+          failures.withLock { $0 } == 0 && wakes.withLock { $0 } == 0,
+          "failures=\(failures.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+    probe.reset()
+    check("T-cp117 reset clears prior attempt failure state",
+          failures.withLock { $0 } == 0
+            && probe.streamRuntime.withLock {
+                    $0.consecutiveStartFailures == 0 && $0.nextStartAllowedAt == nil
+            },
+          "failures=\(failures.withLock { $0 }) runtime=\(probe.streamRuntime.withLock { $0 })")
+    let continuation = errorGate.withLock { $0.continuation }
+    continuation?.resume()
+    _ = waitPumpingMain({
+        probe.streamRuntime.withLock {
+                !$0.starting && !$0.stopping && $0.consecutiveStartFailures == 0
+                    && $0.nextStartAllowedAt == nil
+        }
+    })
+    check("T-cp117 stale reset-attempt error is dropped silently",
+          failures.withLock { $0 } == 0 && wakes.withLock { $0 } == 0,
+          "failures=\(failures.withLock { $0 }) wakes=\(wakes.withLock { $0 }) "
+            + "runtime=\(probe.streamRuntime.withLock { $0 })")
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        attempts.withLock { $0 } == [container.wid, container.wid]
+            && failures.withLock { $0 } == 1
+            && probe.streamRuntime.withLock { $0.nextStartAllowedAt == 8_002 }
+    })
+    check("T-cp117 current factory error still records failure and backoff",
+          probe.streamRuntime.withLock { $0.streamEpoch == 2 && !$0.starting && !$0.stopping },
           "attempts=\(attempts.withLock { $0 }) runtime=\(probe.streamRuntime.withLock { $0 })")
 }
 

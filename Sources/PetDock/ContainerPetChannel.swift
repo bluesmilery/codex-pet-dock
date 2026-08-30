@@ -542,15 +542,16 @@ final class ContainerPetProbe: Sendable {
                     runtimeLock.withLock { $0.stopping = false }
                 }
             } catch {
-                let errorContext = probeLock.withLock {
-                    (generation: $0.generation, knownWID: $0.knownWID)
-                }
                 let (shouldDeliverUnavailable, shouldRecordFailure) = runtimeLock.withLock { s -> (Bool, Bool) in
+                    let wasStarting = s.starting
                     let wasStopping = s.stopping
                     s.starting = false
                     s.stopping = false
-                    let attemptStillCurrent = errorContext.knownWID == scheduled.wid
-                        && errorContext.generation == s.startingGeneration
+                    // Error completion carries the epoch allocated for this attempt. Reset/WID
+                    // stop marks starting/stopping and the next start allocates a new epoch,
+                    // so stale errors cannot restore state after reset cleared backoff.
+                    let attemptStillCurrent = s.streamEpoch == streamEpoch
+                        && wasStarting
                         && !wasStopping
                     if attemptStillCurrent {
                         s.consecutiveStartFailures += 1
