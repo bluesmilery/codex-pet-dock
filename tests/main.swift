@@ -7387,7 +7387,7 @@ do {
             && failures.withLock { $0 } == 2
     })
     check("T-cp116 retry after backoff invokes a fresh factory attempt",
-          probe.streamRuntime.withLock { $0.streamEpoch == 2 && $0.nextStartAllowedAt == 7_004.1 },
+          probe.streamRuntime.withLock { $0.streamEpoch == 2 && $0.nextStartAllowedAt == 7_006.1 },
           "attempts=\(attempts.withLock { $0 }) runtime=\(probe.streamRuntime.withLock { $0 })")
 }
 

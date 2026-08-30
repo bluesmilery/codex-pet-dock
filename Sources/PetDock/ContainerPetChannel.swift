@@ -467,6 +467,7 @@ final class ContainerPetProbe: Sendable {
         guard usesManagedStream, streamFactory != nil else { return }
         guard #available(macOS 14.0, *) else { return }
         let now = monotonicNow()
+        let startGeneration = lock.withLock { $0.generation }
         let shouldStart = streamRuntime.withLock { s -> (Bool, Int)? in
             guard !s.starting, !s.stopping, s.active == nil, s.activeWID == nil,
                   s.nextStartAllowedAt == nil || now >= s.nextStartAllowedAt! else {
@@ -479,7 +480,7 @@ final class ContainerPetProbe: Sendable {
             s.firstFrameDelivered = false
             s.firstFrameDeadline = nil
             s.starting = true
-            s.startingGeneration = lock.withLock { $0.generation }
+            s.startingGeneration = startGeneration
             s.startingWID = container.wid
             return (true, streamEpoch)
         }
@@ -497,6 +498,11 @@ final class ContainerPetProbe: Sendable {
         let nowProvider = monotonicNow
         let firstFrameTimeout = ContainerPetHeuristics.streamFirstFrameTimeout
         let scheduled = container
+        // Snapshot probe identity before taking runtimeLock; nested probe reads create an
+        // avoidable lock-ordering hazard on the completion task.
+        let activationContext = probeLock.withLock {
+            (generation: $0.generation, knownWID: $0.knownWID)
+        }
         Task.detached(priority: .utility) {
             do {
                 let stream = try await factory(scheduled, target, streamEpoch, consumer)
@@ -506,9 +512,9 @@ final class ContainerPetProbe: Sendable {
                 // accepted frame while starting; it must never overwrite that cancellation.
                 let accepted = runtimeLock.withLock { s -> Bool in
                     guard s.starting, !s.stopping, s.active == nil,
-                          s.startingGeneration == probeLock.withLock({ $0.generation }),
+                          s.startingGeneration == activationContext.generation,
                           s.startingWID == scheduled.wid,
-                          probeLock.withLock({ $0.knownWID }) == scheduled.wid else {
+                          activationContext.knownWID == scheduled.wid else {
                         return false
                     }
                     s.active = stream
@@ -536,12 +542,15 @@ final class ContainerPetProbe: Sendable {
                     runtimeLock.withLock { $0.stopping = false }
                 }
             } catch {
+                let errorContext = probeLock.withLock {
+                    (generation: $0.generation, knownWID: $0.knownWID)
+                }
                 let (shouldDeliverUnavailable, shouldRecordFailure) = runtimeLock.withLock { s -> (Bool, Bool) in
                     let wasStopping = s.stopping
                     s.starting = false
                     s.stopping = false
-                    let attemptStillCurrent = probeLock.withLock({ $0.knownWID }) == scheduled.wid
-                        && probeLock.withLock({ $0.generation }) == runtimeLock.withLock({ $0.startingGeneration })
+                    let attemptStillCurrent = errorContext.knownWID == scheduled.wid
+                        && errorContext.generation == s.startingGeneration
                         && !wasStopping
                     if attemptStillCurrent {
                         s.consecutiveStartFailures += 1
@@ -666,7 +675,7 @@ final class ContainerPetProbe: Sendable {
             s.stopping = false
             s.firstFrameDelivered = false
             s.firstFrameDeadline = nil
-                return true
+            return true
             }
         if shouldNotify {
             Self.streamHealthLogger.log("container stream retirement reason=didStop")
