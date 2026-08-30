@@ -6400,13 +6400,14 @@ check("T-cp88 active display is selected by largest tracked-region intersection"
         windowRegion: cpWindowRegion,
         containerBounds: cpCalibrationBounds,
         displayBounds: cpDisplays) == cpDisplays[1], "")
-let cpSourceRect = ContainerPetChannel.sourceRect(
+let cpCaptureGeometry = ContainerPetChannel.regionCaptureGeometry(
     windowRegion: cpWindowRegion,
     containerBounds: cpCalibrationBounds,
     displayBounds: cpDisplays[1])
 check("T-cp89 sourceRect is relative to the selected display/container segment origin",
-      cpSourceRect == CGRect(x: 40, y: 217, width: 300, height: 300),
-      "actual=\(String(describing: cpSourceRect))")
+      cpCaptureGeometry?.sourceRect == CGRect(x: 40, y: 217, width: 300, height: 300)
+        && cpCaptureGeometry?.captureRegion == cpWindowRegion,
+      "actual=\(String(describing: cpCaptureGeometry))")
 
 let cpTracked = ContainerPetChannel.trackedRegion(
     for: CGRect(x: 300, y: 500, width: 80, height: 160),
@@ -6434,11 +6435,36 @@ let cpInteriorFixture = ContainerAlphaStats(
     nonTransparentPixelCount: 1, minX: 2, minY: 2, maxX: 4, maxY: 6,
     captureWidth: 20, captureHeight: 20)
 check("T-cp91b each capture edge arms fallback while an interior bbox does not",
-      cpEdgeFixtures.allSatisfy(ContainerPetChannel.bboxTouchesCaptureEdge)
-        && !ContainerPetChannel.bboxTouchesCaptureEdge(cpInteriorFixture), "")
+      cpEdgeFixtures.allSatisfy {
+          ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
+              $0,
+              captureRegion: CGRect(x: 100, y: 100, width: 200, height: 200),
+              windowSize: cpBounds.size)
+      }
+        && !ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
+            cpInteriorFixture,
+            captureRegion: CGRect(x: 100, y: 100, width: 200, height: 200),
+            windowSize: cpBounds.size), "")
 check("T-cp91c region output keeps full-window scale instead of upscaling crop to 400px",
       ContainerPetChannel.captureOutputSize(
         windowSize: cpBounds.size, captureRegion: cpTracked) == CGSize(width: 95, height: 178), "")
+let cpWindowLeftStats = ContainerAlphaStats(
+    nonTransparentPixelCount: 20, minX: 0, minY: 2, maxX: 4, maxY: 6,
+    captureWidth: 20, captureHeight: 20)
+check("T-cp91d window-aligned capture edge is exterior and does not arm fallback",
+      !ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
+        cpWindowLeftStats,
+        captureRegion: CGRect(x: 0, y: 100, width: 200, height: 200),
+        windowSize: cpBounds.size), "")
+let cpCrossSegmentRegion = CGRect(x: 300, y: 500, width: 300, height: 300)
+let cpCrossSegmentGeometry = ContainerPetChannel.regionCaptureGeometry(
+    windowRegion: cpCrossSegmentRegion,
+    containerBounds: cpBounds,
+    displayBounds: CGRect(x: 100, y: 100, width: 400, height: 1600))
+check("T-cp91e cross-segment region clamps sourceRect and records actual capture region",
+      cpCrossSegmentGeometry?.sourceRect == CGRect(x: 300, y: 500, width: 100, height: 300)
+        && cpCrossSegmentGeometry?.captureRegion == CGRect(x: 300, y: 500, width: 100, height: 300),
+      "actual=\(String(describing: cpCrossSegmentGeometry))")
 
 @Sendable func cpStats(for windowBBox: CGRect, in region: CGRect, outputSize: CGSize) -> ContainerAlphaStats {
     let width = Int(outputSize.width.rounded())
@@ -6547,6 +6573,100 @@ do {
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
     check("T-cp99 WID change clears region and restarts with full locate",
           requests.withLock { $0.last?.round == .fullWindow }, "")
+}
+
+// Round-17：窗口外边界合法贴边不得 full/region 振荡。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(130_000))
+    let requests = OSAllocatedUnfairLock(initialState: [ContainerCaptureRequest]())
+    let windowEdgeBBox = CGRect(x: 0, y: 500, width: 80, height: 160)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            requests.withLock { $0.append(request) }
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(for: windowEdgeBBox, in: region, outputSize: request.outputSize))
+        })
+    let container = cpContainer(537)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp100 pet at window x=0 stays on repeated region rounds without oscillation",
+          requests.withLock {
+              guard $0.count == 3,
+                    $0[0].round == .fullWindow,
+                    case .region(let firstRegion) = $0[1].round,
+                    case .region(let secondRegion) = $0[2].round else { return false }
+              return firstRegion.minX == 0 && secondRegion.minX == 0
+          } && probe.lock.withLock { !$0.needsFullLocate },
+          "requests=\(requests.withLock { $0 })")
+}
+
+// Round-17：跨 display segment 的 region 使用实际 clamp 区域映射；内容未贴 clamp 边则继续 region。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(140_000))
+    let requests = OSAllocatedUnfairLock(initialState: [ContainerCaptureRequest]())
+    let touchClampEdge = OSAllocatedUnfairLock(initialState: false)
+    let clampedRegion = CGRect(x: 150, y: 350, width: 250, height: 710)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            requests.withLock { $0.append(request) }
+            let desiredBBox = touchClampEdge.withLock { touches in
+                touches
+                    ? CGRect(x: 320, y: 500, width: 80, height: 160)
+                    : CGRect(x: 300, y: 500, width: 80, height: 160)
+            }
+            switch request.round {
+            case .fullWindow:
+                return .stats(cpStats(
+                    for: desiredBBox,
+                    in: CGRect(origin: .zero, size: cpBounds.size),
+                    outputSize: request.outputSize))
+            case .region:
+                let outputSize = ContainerPetChannel.captureOutputSize(
+                    windowSize: cpBounds.size, captureRegion: clampedRegion)
+                return .regionStats(
+                    cpStats(for: desiredBBox, in: clampedRegion, outputSize: outputSize),
+                    captureRegion: clampedRegion)
+            }
+        })
+    let container = cpContainer(538)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp101 clamped cross-segment capture is accepted when bbox stays inside clamp",
+          probe.lock.withLock {
+              $0.cachedCaptureRegion == clampedRegion && !$0.needsFullLocate
+          } && requests.withLock {
+              guard case .region = $0.last?.round else { return false }
+              return true
+          }, "requests=\(requests.withLock { $0 })")
+    touchClampEdge.withLock { $0 = true }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp102 bbox touching an interior display clamp edge arms full locate",
+          probe.lock.withLock { $0.needsFullLocate }, "")
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp103 display-clamp edge fallback executes a full-window round",
+          requests.withLock { $0.last?.round == .fullWindow },
+          "requests=\(requests.withLock { $0 })")
 }
 
 // ---- C10 Addendum 4：one-shot transport / wiring / verbose lifecycle logging guards。

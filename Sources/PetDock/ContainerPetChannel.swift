@@ -77,10 +77,12 @@ struct ContainerAlphaStats: Equatable, Sendable {
 
 /// ScreenCaptureKit 观察结果语义（对应 BubbleCaptureOutcome）。
 /// - stats：成功取得目标窗口并完成匿名 alpha 统计。
+/// - regionStats：区域捕获成功，并携带实际窗口本地捕获区域（可能被显示器边界裁剪）。
 /// - targetMissing：成功取得窗口清单，但目标 WID 不在清单中。
 /// - unavailable：权限、清单、截图或统计不可用；必须保守处理（不改写既有缓存）。
 enum ContainerCaptureOutcome: Equatable, Sendable {
     case stats(ContainerAlphaStats)
+    case regionStats(ContainerAlphaStats, captureRegion: CGRect)
     case targetMissing
     case unavailable
 }
@@ -94,6 +96,11 @@ enum ContainerCaptureRound: Equatable, Sendable {
 struct ContainerCaptureRequest: Equatable, Sendable {
     let round: ContainerCaptureRound
     let outputSize: CGSize
+}
+
+struct ContainerRegionCaptureGeometry: Equatable, Sendable {
+    let sourceRect: CGRect
+    let captureRegion: CGRect
 }
 
 /// locate() 同步返回：缓存的合成宠物矩形 / 尚无有效观察 / 捕获不可用（权限缺失，已清陈旧缓存）。
@@ -166,11 +173,20 @@ enum ContainerPetChannel {
         return expanded.intersection(CGRect(origin: .zero, size: windowSize))
     }
 
-    static func bboxTouchesCaptureEdge(_ stats: ContainerAlphaStats) -> Bool {
-        stats.nonTransparentPixelCount > 0
-            && (stats.minX == 0 || stats.minY == 0
-                || stats.maxX == stats.captureWidth - 1
-                || stats.maxY == stats.captureHeight - 1)
+    /// 只有位于窗口内部的裁剪边缘表示宠物可能已离开 region；与不可变窗口边界重合的
+    /// 边缘是合法外边界（例如宠物贴住窗口 x=0），不得触发 full/region 振荡。
+    static func bboxTouchesInteriorCaptureEdge(
+        _ stats: ContainerAlphaStats, captureRegion: CGRect, windowSize: CGSize
+    ) -> Bool {
+        guard stats.nonTransparentPixelCount > 0 else { return false }
+        let windowBounds = CGRect(origin: .zero, size: windowSize)
+        let epsilon: CGFloat = 1e-9
+        return (stats.minX == 0 && captureRegion.minX > windowBounds.minX + epsilon)
+            || (stats.minY == 0 && captureRegion.minY > windowBounds.minY + epsilon)
+            || (stats.maxX == stats.captureWidth - 1
+                && captureRegion.maxX < windowBounds.maxX - epsilon)
+            || (stats.maxY == stats.captureHeight - 1
+                && captureRegion.maxY < windowBounds.maxY - epsilon)
     }
 
     /// 区域降采样会产生约一个源像素的量化误差；交付边沿与 moving 判定沿用位置容差。
@@ -204,17 +220,26 @@ enum ContainerPetChannel {
     }
 
     /// 实机 sweep 校准：跨屏 desktopIndependentWindow 的 sourceRect 原点是“容器窗与所选
-    /// 显示器交集”的左上角，而不是整个容器窗原点或 filter.contentRect 全局原点。
-    static func sourceRect(
+    /// 显示器交集”的左上角。跨 segment 的 region 裁到该交集，并把实际窗口本地区域随
+    /// stats 返回；贴实际 clamp 边且该边仍在窗口内部时，完成路径会触发下一轮 full locate。
+    static func regionCaptureGeometry(
         windowRegion: CGRect, containerBounds: CGRect, displayBounds: CGRect
-    ) -> CGRect {
+    ) -> ContainerRegionCaptureGeometry? {
         let displaySegment = containerBounds.intersection(displayBounds)
+        guard !displaySegment.isNull,
+              displaySegment.width > 0, displaySegment.height > 0 else { return nil }
         let segmentOriginInWindow = CGPoint(
             x: displaySegment.minX - containerBounds.minX,
             y: displaySegment.minY - containerBounds.minY)
-        return windowRegion.offsetBy(
-            dx: -segmentOriginInWindow.x,
-            dy: -segmentOriginInWindow.y)
+        let segmentInWindow = CGRect(origin: segmentOriginInWindow, size: displaySegment.size)
+        let captureRegion = windowRegion.intersection(segmentInWindow)
+        guard !captureRegion.isNull,
+              captureRegion.width > 0, captureRegion.height > 0 else { return nil }
+        return ContainerRegionCaptureGeometry(
+            sourceRect: captureRegion.offsetBy(
+                dx: -segmentOriginInWindow.x,
+                dy: -segmentOriginInWindow.y),
+            captureRegion: captureRegion)
     }
 
     /// 区域轮次沿用全窗的降采样比例，避免裁剪后反而把小区域放大到 400px。
@@ -445,9 +470,14 @@ final class ContainerPetProbe: Sendable {
                 // 捕获验证门限：stats 且映射有效（按调度时 bounds 判定）才成为观察；
                 // targetMissing / unavailable / 超门限 → 保守保留旧有效观察，不触发。
                 let stats: ContainerAlphaStats
+                let returnedCaptureRegion: CGRect?
                 switch result {
                 case .stats(let value):
                     stats = value
+                    returnedCaptureRegion = nil
+                case .regionStats(let value, let captureRegion):
+                    stats = value
+                    returnedCaptureRegion = captureRegion
                 case .targetMissing:
                     s.needsFullLocate = true
                     return (false, false, "target-missing")
@@ -455,17 +485,14 @@ final class ContainerPetProbe: Sendable {
                     s.needsFullLocate = true
                     return (false, false, "unavailable")
                 }
-                let expectedWidth = max(1, Int(request.outputSize.width.rounded()))
-                let expectedHeight = max(1, Int(request.outputSize.height.rounded()))
-                guard stats.captureWidth == expectedWidth,
-                      stats.captureHeight == expectedHeight else {
-                    s.needsFullLocate = true
-                    return (false, false, "capture-size")
-                }
                 let captureRegion: CGRect
                 var needsFullLocateAfterAcceptance = false
                 switch request.round {
                 case .fullWindow:
+                    guard returnedCaptureRegion == nil else {
+                        s.needsFullLocate = true
+                        return (false, false, "capture-region")
+                    }
                     captureRegion = CGRect(origin: .zero, size: scheduledBounds.size)
                     let fraction = Double(stats.nonTransparentPixelCount)
                         / (Double(stats.captureWidth) * Double(stats.captureHeight))
@@ -475,12 +502,30 @@ final class ContainerPetProbe: Sendable {
                         return (false, false, "validation")
                     }
                 case .region(let region):
-                    captureRegion = region
+                    captureRegion = returnedCaptureRegion ?? region
+                    guard captureRegion.width > 0, captureRegion.height > 0,
+                          region.contains(captureRegion) else {
+                        s.needsFullLocate = true
+                        return (false, false, "capture-region")
+                    }
                     guard stats.nonTransparentPixelCount > 0 else {
                         s.needsFullLocate = true
                         return (false, false, "region-empty")
                     }
-                    needsFullLocateAfterAcceptance = ContainerPetChannel.bboxTouchesCaptureEdge(stats)
+                    needsFullLocateAfterAcceptance =
+                        ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
+                            stats,
+                            captureRegion: captureRegion,
+                            windowSize: scheduledBounds.size)
+                }
+                let expectedOutputSize = ContainerPetChannel.captureOutputSize(
+                    windowSize: scheduledBounds.size, captureRegion: captureRegion)
+                let expectedWidth = max(1, Int(expectedOutputSize.width.rounded()))
+                let expectedHeight = max(1, Int(expectedOutputSize.height.rounded()))
+                guard stats.captureWidth == expectedWidth,
+                      stats.captureHeight == expectedHeight else {
+                    s.needsFullLocate = true
+                    return (false, false, "capture-size")
                 }
                 guard let windowBBox = ContainerPetChannel.windowBBox(
                         stats: stats, captureRegion: captureRegion),
@@ -567,10 +612,10 @@ final class ContainerPetProbe: Sendable {
         }
         let filter = SCContentFilter(desktopIndependentWindow: win)
         let config = SCStreamConfiguration()
-        config.width = max(1, Int(request.outputSize.width.rounded()))
-        config.height = max(1, Int(request.outputSize.height.rounded()))
         config.scalesToFit = false
         config.showsCursor = false
+        var outputSize = request.outputSize
+        var returnedCaptureRegion: CGRect?
         if case .region(let windowRegion) = request.round {
             var displayCount: UInt32 = 0
             var displayIDs = [CGDirectDisplayID](repeating: 0, count: 16)
@@ -581,19 +626,25 @@ final class ContainerPetProbe: Sendable {
                 windowRegion: windowRegion,
                 containerBounds: candidate.bounds,
                 displayBounds: bounds) else { return .unavailable }
-            let sourceRect = ContainerPetChannel.sourceRect(
+            guard let geometry = ContainerPetChannel.regionCaptureGeometry(
                 windowRegion: windowRegion,
                 containerBounds: candidate.bounds,
-                displayBounds: displayBounds)
-            let displaySegment = candidate.bounds.intersection(displayBounds)
-            guard sourceRect.minX >= 0, sourceRect.minY >= 0,
-                  sourceRect.maxX <= displaySegment.width,
-                  sourceRect.maxY <= displaySegment.height else { return .unavailable }
-            config.sourceRect = sourceRect
+                displayBounds: displayBounds) else { return .unavailable }
+            config.sourceRect = geometry.sourceRect
+            returnedCaptureRegion = geometry.captureRegion
+            outputSize = ContainerPetChannel.captureOutputSize(
+                windowSize: candidate.bounds.size,
+                captureRegion: geometry.captureRegion)
         }
+        config.width = max(1, Int(outputSize.width.rounded()))
+        config.height = max(1, Int(outputSize.height.rounded()))
         guard let img = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else {
             return .unavailable
         }
-        return .stats(ContainerPetChannel.computeOpaqueBBox(image: img))
+        let stats = ContainerPetChannel.computeOpaqueBBox(image: img)
+        if let returnedCaptureRegion {
+            return .regionStats(stats, captureRegion: returnedCaptureRegion)
+        }
+        return .stats(stats)
     }
 }
