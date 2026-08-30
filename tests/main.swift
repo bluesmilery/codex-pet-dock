@@ -3101,7 +3101,6 @@ reCollector.recordLayoutTick(bubbleObstacles: 1, controlObstacles: 0, visibleObs
 reCollector.recordCapture(kind: .targetMissing, visibility: .hidden)
 reCollector.recordIdentityChange()
 reCollector.recordWakeCallback()
-reCollector.recordContainerStreamStartFailure()
 reCollector.recordDockDyBucket(.upTo64)
 reCollector.recordDockDyBucket(.base)
 let reSnapshot = reCollector.snapshot()
@@ -3113,7 +3112,6 @@ let reExpectedKeys: Set<String> = [
     "visibilityVisibleCount", "visibilityHiddenCount",
     "identityChangeCount", "wakeCallbackCount",
     "containerObservationChangeCount",
-    "containerStreamStartFailureCount",
     "containerPlacementShownCount", "containerPlacementHiddenCount",
     "dockDyBaseCount", "dockDyUpTo32Count", "dockDyUpTo64Count", "dockDyAbove64Count",
     "lastDockDyBucket",
@@ -3131,7 +3129,6 @@ check("T-re2b 聚合计数正确",
         && (reSnapshot["visibilityHiddenCount"] as? Int) == 1
         && (reSnapshot["identityChangeCount"] as? Int) == 1
         && (reSnapshot["wakeCallbackCount"] as? Int) == 1
-        && (reSnapshot["containerStreamStartFailureCount"] as? Int) == 1
         && (reSnapshot["dockDyUpTo64Count"] as? Int) == 1
         && (reSnapshot["dockDyBaseCount"] as? Int) == 1
         && (reSnapshot["lastDockDyBucket"] as? String) == DockDyBucket.base.rawValue, "")
@@ -3149,8 +3146,7 @@ let reWritten = try! JSONSerialization.jsonObject(with: Data(contentsOf: reOutpu
 check("T-re3b flush落盘：目录0700/文件0600/内容=快照",
       reFileMode == 0o600 && reDirMode == 0o700
         && (reWritten["candidateSHA"] as? String) == reSHA
-        && (reWritten["tickCount"] as? Int) == 2
-        && (reWritten["containerStreamStartFailureCount"] as? Int) == 1,
+        && (reWritten["tickCount"] as? Int) == 2,
       "file=0\(String(reFileMode, radix: 8)) dir=0\(String(reDirMode, radix: 8))")
 
 // T-re2d..2i: container 通道 outcome 计数（08-28 修复批次）：placement shown/hidden 计数 +
@@ -6372,12 +6368,29 @@ let cpChannelSource = try! String(
 let cpMainSource = try! String(
     contentsOf: cpRepoRoot.appendingPathComponent("Sources/PetDock/main.swift"),
     encoding: .utf8)
-check("T-cp83 managed stream/watchdog/backoff/epoch transport removed",
-      !cpChannelSource.contains("protocol ContainerFrameStream")
-        && !cpChannelSource.contains("ContainerSCFrameStream")
-        && !cpChannelSource.contains("streamFirstFrameTimeout")
-        && !cpChannelSource.contains("streamEpoch")
-        && !cpChannelSource.contains("startFailureBackoff"), "")
+let cpProductionSourceDirectory = cpRepoRoot.appendingPathComponent("Sources/PetDock", isDirectory: true)
+let cpProductionSourceURLs = try! FileManager.default.contentsOfDirectory(
+    at: cpProductionSourceDirectory,
+    includingPropertiesForKeys: nil)
+    .filter { $0.pathExtension == "swift" }
+    .sorted { $0.lastPathComponent < $1.lastPathComponent }
+let cpProductionSourceText = try! cpProductionSourceURLs.map {
+    try String(contentsOf: $0, encoding: .utf8)
+}.joined(separator: "\n")
+let cpRemovedStreamSymbols = [
+    "recordContainerStreamStartFailure",
+    "containerStreamStartFailureCount",
+    "ContainerFrameStream",
+    "ContainerSCFrameStream",
+    "streamFirstFrameTimeout",
+    "streamEpoch",
+    "armedEpoch",
+    "startFailureBackoff",
+]
+let cpRemainingStreamSymbols = cpRemovedStreamSymbols.filter(cpProductionSourceText.contains)
+check("T-cp83 all production Swift sources exclude managed stream/watchdog/backoff/epoch symbols",
+      cpRemainingStreamSymbols.isEmpty,
+      "remaining=\(cpRemainingStreamSymbols)")
 check("T-cp84 default one-shot round freshly enumerates then screenshots",
       cpChannelSource.contains("SCShareableContent.excludingDesktopWindows")
         && cpChannelSource.contains("SCScreenshotManager.captureImage")
