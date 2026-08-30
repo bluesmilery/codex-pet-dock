@@ -110,14 +110,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var containerProbe = ContainerPetProbe(
         monotonicNow: followMonotonicNow,
-        transport: .managedStream(factory: nil),
         onObservationChanged: { [weak self] in
             // 先记录脱敏边沿计数，再请求合并唤醒；evidence 关闭时仅剩一次 wake 请求开销。
             self?.runtimeEvidence?.recordContainerObservationChange()
             self?.followScheduler.requestWake()
-        },
-        onStreamStartFailure: { [weak self] in
-            self?.runtimeEvidence?.recordContainerStreamStartFailure()
         })
     private let settings = Settings()
     private var themeStore: ThemeStore?
@@ -237,7 +233,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func quit() {
         themeStore?.stop()
         followScheduler.stop()
-        containerProbe.shutdown()
         stopDataRefresh()
         provider.stop()
         log("quit")
@@ -246,7 +241,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         followScheduler.stop()
-        containerProbe.shutdown()
     }
 
     // MARK: - 详情 / 渲染
@@ -427,8 +421,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if FollowTickPlanner.containerProbeReset(containerCandidatePresent: containerCandidate != nil) {
                 containerProbe.reset()
             }
-            // Hidden/disappearance must still flush stream start-failure counters; flush()
-            // returns without IO when no recorder state is dirty.
+            // Hidden/disappearance must still flush dirty container evidence; flush()
+            // returns without IO when recorder state is clean.
             runtimeEvidence?.flush()
         }
         lastMaterialChangeAt = d.lastMaterialChangeAt
