@@ -5950,17 +5950,27 @@ do {
           probe.locate(container: container) == .bounds(cpRectA), "")
 check("T-cp22 首个有效观察（none→bounds）触发 onObservationChanged 恰一次",
           wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
-    clock.withLock { $0 = 10_000.32 }
-    _ = probe.locate(container: container)
-    check("T-cp23 stable 0.32s→不捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_000.33 }
+    // 首个观察（nil→bbox）武装 2s moving hold；先推过 hold 结束再测 stable 1.0s 门限。
+    // bbox 不变时 hold 不重置，后续轮次保持 stable。断言前等待 detached 捕获 quiesce。
+    clock.withLock { $0 = 10_002.1 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp24 stable 0.33s 节奏→捕获(约3Hz)", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+    check("T-cp23a 前置:moving hold过期→stable重捕完成",
+          calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_002.42 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp23 stable 0.32s→不捕获(stable=1.0s)",
+          calls.withLock { $0 } == 2 && !probe.lock.withLock { $0.inFlight },
+          "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_003.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp24 stable 1.0s 节奏→捕获(R7-amended)", calls.withLock { $0 } == 3, "calls=\(calls.withLock { $0 })")
     check("T-cp24b 同 rect 再观察→不重复 wake", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
 
-    // bbox 变化 → 0.1s 快速节奏保持 movingHoldDuration，随后回到 stable 0.33s。
-    clock.withLock { $0 = 10_002 }
+    // bbox 变化 → 0.1s 快速节奏保持 movingHoldDuration，随后回到 stable 1.0s。
+    clock.withLock { $0 = 10_004.2 }
     outcomeBox.withLock { $0 = .stats(cpStatsB) }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
@@ -5976,34 +5986,34 @@ check("T-cp22 首个有效观察（none→bounds）触发 onObservationChanged �
     }
     check("T-cp25 bbox变化→新观察生效(区域量化≤1源像素)", cp25Changed,
           "outcome=\(cp25Outcome) calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_002.05 }
+    clock.withLock { $0 = 10_004.25 }
     _ = probe.locate(container: container)
-    check("T-cp26 快速节奏 0.05s→不捕获", calls.withLock { $0 } == 3, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_002.1 }
+    check("T-cp26 快速节奏 0.05s→不捕获", calls.withLock { $0 } == 4, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_004.3 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp27 快速节奏 0.1s→捕获", calls.withLock { $0 } == 4, "calls=\(calls.withLock { $0 })")
+    check("T-cp27 快速节奏 0.1s→捕获", calls.withLock { $0 } == 5, "calls=\(calls.withLock { $0 })")
     check("T-cp28 快速节奏期间 rect 变化→恰好一次 wake", wakes.withLock { $0 } == 2, "wakes=\(wakes.withLock { $0 })")
-    clock.withLock { $0 = 10_002.2 }
+    clock.withLock { $0 = 10_004.4 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp29 保持期内 0.2s→第5捕(0.1s cadence)", calls.withLock { $0 } == 5, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_003.0 }
+    check("T-cp29 保持期内 0.2s→第6捕(0.1s cadence)", calls.withLock { $0 } == 6, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_005.2 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp30 保持期内 10_003 仍按 0.1s→第6捕", calls.withLock { $0 } == 6, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_003.9 }
+    check("T-cp30 保持期内 10_005.2 仍按 0.1s→第7捕", calls.withLock { $0 } == 7, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_006.1 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp31 保持期内 10_003.9→第7捕", calls.withLock { $0 } == 7, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_004.22 }
+    check("T-cp31 保持期内 10_006.1→第8捕", calls.withLock { $0 } == 8, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_006.42 }
     _ = probe.locate(container: container)
     check("T-cp32 保持期结束→回到 stable，0.32s 不捕获",
-          calls.withLock { $0 } == 7, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_004.23 }
+          calls.withLock { $0 } == 8, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_007.1 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp33 保持期结束 0.33s 节奏→捕获(stable 恢复)", calls.withLock { $0 } == 8, "calls=\(calls.withLock { $0 })")
+    check("T-cp33 保持期结束 1.0s 节奏→捕获(stable 恢复 R7-amended)", calls.withLock { $0 } == 9, "calls=\(calls.withLock { $0 })")
 }
 
 // single-flight：在途捕获不重复
@@ -6353,9 +6363,9 @@ do {
           "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
 }
 
-// ---- C8 option 1 cadence：region-tracked one-shot 稳定重捕为 0.33s（fake monotonic clock）。
-check("T-cp80 stableCaptureInterval=0.33",
-      ContainerPetHeuristics.stableCaptureInterval == 0.33, "")
+// ---- C8 option 1 cadence：region-tracked one-shot 稳定重捕为 1.0s（R7-amended，fake monotonic clock）。
+check("T-cp80 stableCaptureInterval=1.0(R7-amended)",
+      ContainerPetHeuristics.stableCaptureInterval == 1.0, "")
 do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(110_000))
     let calls = OSAllocatedUnfairLock(initialState: 0)
@@ -6380,13 +6390,13 @@ do {
     clock.withLock { $0 = 110_002.42 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp81 stable 0.32s→不捕获",
+    check("T-cp81 stable 0.32s→不捕获(stable=1.0s)",
           calls.withLock { $0 } == 2 && !probe.lock.withLock { $0.inFlight },
           "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 110_002.43 }
+    clock.withLock { $0 = 110_003.1 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp82 stable 0.33s→捕获", calls.withLock { $0 } == 3, "calls=\(calls.withLock { $0 })")
+    check("T-cp82 stable 1.0s 节奏→捕获(R7-amended)", calls.withLock { $0 } == 3, "calls=\(calls.withLock { $0 })")
 }
 
 // ---- C9 option 1 region tracking：坐标校准 + full/region/fallback 状态机。----
@@ -6587,12 +6597,12 @@ do {
           requests.withLock { $0.last?.round == .fullWindow }, "")
 
     probe.reset()
-    clock.withLock { $0 += 0.33 }
+    clock.withLock { $0 += 1.0 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
     check("T-cp98 reset clears region and restarts with full locate",
           requests.withLock { $0.last?.round == .fullWindow }, "")
-    clock.withLock { $0 += 0.33 }
+    clock.withLock { $0 += 1.0 }
     _ = probe.locate(container: cpContainer(536))
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
     check("T-cp99 WID change clears region and restarts with full locate",

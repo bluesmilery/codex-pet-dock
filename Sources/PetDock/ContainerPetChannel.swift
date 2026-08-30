@@ -23,8 +23,9 @@ enum ContainerPetHeuristics {
     /// 合成宠物矩形边长合理范围（映射后 sanity）。
     static let petMinSide: CGFloat = 20
     static let petMaxSide: CGFloat = 400
-    /// 稳态捕获节奏：用户选择 option 1 的约 3Hz；稳态轮次由区域裁剪控制 CPU。
-    static let stableCaptureInterval: TimeInterval = 0.33
+    /// 稳态捕获节奏：R7-amended 1.0s tier（QA-9 实测 0.33s 通道活跃 CPU 5.38% 超 5% cap，
+    /// 0.33 为派发错误携带的 pre-R7 值）；稳态轮次由区域裁剪控制 CPU。
+    static let stableCaptureInterval: TimeInterval = 1.0
     /// bbox 变化后的快速节奏（窗内内容移动跟随）。
     static let movingCaptureInterval: TimeInterval = 0.1
     /// bbox 变化后快速节奏的保持时长。
@@ -387,7 +388,7 @@ final class ContainerPetProbe: Sendable {
 
     /// tick 主线程同步调用。返回当前合成宠物矩形（用**当前** containerBounds 映射）；
     /// 权限缺失 → .unavailable 并丢弃陈旧缓存；wid 变化 → 清缓存（新 episode）；
-    /// 节拍允许时调度单飞后台捕获（稳态 0.33s / bbox 变化后 0.1s 保持 movingHoldDuration）。
+    /// 节拍允许时调度单飞后台捕获（稳态 1.0s / bbox 变化后 0.1s 保持 movingHoldDuration）。
     func locate(container: WinCandidate) -> ContainerPetOutcome {
         guard canCapture() else {
             // 权限/能力不可用：陈旧缓存必须丢弃（stale WID 不得降级为错误锚点），
