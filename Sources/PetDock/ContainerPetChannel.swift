@@ -23,14 +23,19 @@ enum ContainerPetHeuristics {
     /// 合成宠物矩形边长合理范围（映射后 sanity）。
     static let petMinSide: CGFloat = 20
     static let petMaxSide: CGFloat = 400
-    /// 稳态捕获节奏：R7-amended 的 one-shot 1Hz 档（最坏检测延迟 ≤ 1.2s，CPU 预期约 4%）。
-    static let stableCaptureInterval: TimeInterval = 1.0
+    /// 稳态捕获节奏：用户选择 option 1 的约 3Hz；稳态轮次由区域裁剪控制 CPU。
+    static let stableCaptureInterval: TimeInterval = 0.33
     /// bbox 变化后的快速节奏（窗内内容移动跟随）。
     static let movingCaptureInterval: TimeInterval = 0.1
     /// bbox 变化后快速节奏的保持时长。
     static let movingHoldDuration: TimeInterval = 2.0
     /// 捕获降采样最长边上限（镜像 BubbleVisibility 降采样模式，无 bubble 阈值耦合）。
     static let downsampleMaxSide: CGFloat = 400
+    /// 区域追踪向左右及上方留出的移动余量。
+    static let regionHorizontalMargin: CGFloat = 150
+    static let regionTopMargin: CGFloat = 150
+    /// 下方包含 bubbleHeightMax（约 223px）及额外移动余量。
+    static let regionBelowMargin: CGFloat = 400
 }
 
 /// 容器窗选择：纯函数签名，只用可观测窗口事实（不依赖标题）。
@@ -80,6 +85,17 @@ enum ContainerCaptureOutcome: Equatable, Sendable {
     case unavailable
 }
 
+/// 单次截图轮次：首次定位使用全窗；稳定态使用窗口本地（左上原点）的追踪区域。
+enum ContainerCaptureRound: Equatable, Sendable {
+    case fullWindow
+    case region(CGRect)
+}
+
+struct ContainerCaptureRequest: Equatable, Sendable {
+    let round: ContainerCaptureRound
+    let outputSize: CGSize
+}
+
 /// locate() 同步返回：缓存的合成宠物矩形 / 尚无有效观察 / 捕获不可用（权限缺失，已清陈旧缓存）。
 enum ContainerPetOutcome: Equatable, Sendable {
     case bounds(CGRect)
@@ -97,6 +113,119 @@ enum ContainerPetChannel {
         let scale = Double(ContainerPetHeuristics.downsampleMaxSide) / Double(longest)
         return (max(1, Int((Double(width) * scale).rounded())),
                 max(1, Int((Double(height) * scale).rounded())))
+    }
+
+    /// alpha bbox 映射到窗口本地坐标。实机 full/region 对照确认 x/y 与 sourceRect 同向；
+    /// 先前失败来自跨屏窗口的 sourceRect 原点，不是图像 Y 翻转。
+    static func windowBBox(stats: ContainerAlphaStats, captureRegion: CGRect) -> CGRect? {
+        guard stats.captureWidth > 0, stats.captureHeight > 0,
+              stats.nonTransparentPixelCount > 0,
+              stats.minX >= 0, stats.minY >= 0,
+              stats.maxX >= stats.minX, stats.maxY >= stats.minY,
+              stats.maxX < stats.captureWidth, stats.maxY < stats.captureHeight,
+              captureRegion.width > 0, captureRegion.height > 0 else { return nil }
+        let scaleX = captureRegion.width / CGFloat(stats.captureWidth)
+        let scaleY = captureRegion.height / CGFloat(stats.captureHeight)
+        return CGRect(
+            x: captureRegion.minX + CGFloat(stats.minX) * scaleX,
+            y: captureRegion.minY + CGFloat(stats.minY) * scaleY,
+            width: CGFloat(stats.maxX - stats.minX + 1) * scaleX,
+            height: CGFloat(stats.maxY - stats.minY + 1) * scaleY)
+    }
+
+    /// 把捕获时窗口本地 bbox 映射到当前 CGWindowList bounds；窗口平移无需等待下一轮截图。
+    static func mapWindowBBoxToPetRect(
+        windowBBox: CGRect,
+        capturedWindowSize: CGSize,
+        containerBounds: CGRect
+    ) -> CGRect? {
+        guard capturedWindowSize.width > 0, capturedWindowSize.height > 0,
+              containerBounds.width > 0, containerBounds.height > 0 else { return nil }
+        let scaleX = containerBounds.width / capturedWindowSize.width
+        let scaleY = containerBounds.height / capturedWindowSize.height
+        let rect = CGRect(
+            x: containerBounds.minX + windowBBox.minX * scaleX,
+            y: containerBounds.minY + windowBBox.minY * scaleY,
+            width: windowBBox.width * scaleX,
+            height: windowBBox.height * scaleY)
+        guard rect.width >= ContainerPetHeuristics.petMinSide,
+              rect.width <= ContainerPetHeuristics.petMaxSide,
+              rect.height >= ContainerPetHeuristics.petMinSide,
+              rect.height <= ContainerPetHeuristics.petMaxSide else { return nil }
+        return rect
+    }
+
+    /// 最近 bbox 周围的裁剪区域；下方 400px 明确保留气泡区域。
+    static func trackedRegion(for windowBBox: CGRect, windowSize: CGSize) -> CGRect {
+        let expanded = CGRect(
+            x: windowBBox.minX - ContainerPetHeuristics.regionHorizontalMargin,
+            y: windowBBox.minY - ContainerPetHeuristics.regionTopMargin,
+            width: windowBBox.width + ContainerPetHeuristics.regionHorizontalMargin * 2,
+            height: windowBBox.height + ContainerPetHeuristics.regionTopMargin
+                + ContainerPetHeuristics.regionBelowMargin)
+        return expanded.intersection(CGRect(origin: .zero, size: windowSize))
+    }
+
+    static func bboxTouchesCaptureEdge(_ stats: ContainerAlphaStats) -> Bool {
+        stats.nonTransparentPixelCount > 0
+            && (stats.minX == 0 || stats.minY == 0
+                || stats.maxX == stats.captureWidth - 1
+                || stats.maxY == stats.captureHeight - 1)
+    }
+
+    /// 区域降采样会产生约一个源像素的量化误差；交付边沿与 moving 判定沿用位置容差。
+    static func rectMateriallyChanged(
+        _ lhs: CGRect?, _ rhs: CGRect, tolerance: CGFloat
+    ) -> Bool {
+        guard let lhs else { return true }
+        if abs(lhs.width - rhs.width) > tolerance
+            || abs(lhs.height - rhs.height) > tolerance { return true }
+        let dx = lhs.minX - rhs.minX
+        let dy = lhs.minY - rhs.minY
+        return (dx * dx + dy * dy).squareRoot() > tolerance
+    }
+
+    /// 区域可能跨显示器；按 tracked region 的全局相交面积选择实际承载内容的显示器。
+    static func captureDisplayBounds(
+        windowRegion: CGRect, containerBounds: CGRect, displayBounds: [CGRect]
+    ) -> CGRect? {
+        let globalRegion = windowRegion.offsetBy(
+            dx: containerBounds.minX, dy: containerBounds.minY)
+        guard let selected = displayBounds.max(by: { lhs, rhs in
+            let lhsIntersection = globalRegion.intersection(lhs)
+            let rhsIntersection = globalRegion.intersection(rhs)
+            let lhsArea = lhsIntersection.isNull ? 0 : lhsIntersection.width * lhsIntersection.height
+            let rhsArea = rhsIntersection.isNull ? 0 : rhsIntersection.width * rhsIntersection.height
+            return lhsArea < rhsArea
+        }) else { return nil }
+        let intersection = globalRegion.intersection(selected)
+        guard !intersection.isNull, intersection.width > 0, intersection.height > 0 else { return nil }
+        return selected
+    }
+
+    /// 实机 sweep 校准：跨屏 desktopIndependentWindow 的 sourceRect 原点是“容器窗与所选
+    /// 显示器交集”的左上角，而不是整个容器窗原点或 filter.contentRect 全局原点。
+    static func sourceRect(
+        windowRegion: CGRect, containerBounds: CGRect, displayBounds: CGRect
+    ) -> CGRect {
+        let displaySegment = containerBounds.intersection(displayBounds)
+        let segmentOriginInWindow = CGPoint(
+            x: displaySegment.minX - containerBounds.minX,
+            y: displaySegment.minY - containerBounds.minY)
+        return windowRegion.offsetBy(
+            dx: -segmentOriginInWindow.x,
+            dy: -segmentOriginInWindow.y)
+    }
+
+    /// 区域轮次沿用全窗的降采样比例，避免裁剪后反而把小区域放大到 400px。
+    static func captureOutputSize(windowSize: CGSize, captureRegion: CGRect) -> CGSize {
+        let longest = max(windowSize.width, windowSize.height)
+        let scale = longest > ContainerPetHeuristics.downsampleMaxSide
+            ? ContainerPetHeuristics.downsampleMaxSide / longest
+            : 1
+        return CGSize(
+            width: max(1, (captureRegion.width * scale).rounded()),
+            height: max(1, (captureRegion.height * scale).rounded()))
     }
 
     /// 捕获 bbox → 全局 Quartz 宠物矩形。containerBounds（CGWindowList bounds）是唯一
@@ -118,19 +247,18 @@ enum ContainerPetChannel {
         let fraction = Double(stats.nonTransparentPixelCount)
             / (Double(captureWidth) * Double(captureHeight))
         guard fraction <= ContainerPetHeuristics.opaqueFractionGate else { return nil }
-        let scaleX = containerBounds.width / CGFloat(captureWidth)
-        let scaleY = containerBounds.height / CGFloat(captureHeight)
-        let width = CGFloat(stats.maxX - stats.minX + 1) * scaleX
-        let height = CGFloat(stats.maxY - stats.minY + 1) * scaleY
-        guard width >= ContainerPetHeuristics.petMinSide,
-              width <= ContainerPetHeuristics.petMaxSide,
-              height >= ContainerPetHeuristics.petMinSide,
-              height <= ContainerPetHeuristics.petMaxSide else { return nil }
-        return CGRect(
-            x: containerBounds.minX + CGFloat(stats.minX) * scaleX,
-            y: containerBounds.minY + CGFloat(stats.minY) * scaleY,
-            width: width,
-            height: height)
+        guard stats.captureWidth == captureWidth, stats.captureHeight == captureHeight,
+              let windowBBox = windowBBox(
+                stats: stats,
+                captureRegion: CGRect(
+                    origin: .zero,
+                    size: CGSize(width: containerBounds.width, height: containerBounds.height))) else {
+            return nil
+        }
+        return mapWindowBBoxToPetRect(
+            windowBBox: windowBBox,
+            capturedWindowSize: containerBounds.size,
+            containerBounds: containerBounds)
     }
 
     /// 内存计算全图 alpha 统计（全 bbox，alpha>0.04 阈值与 BubbleVisibility.computeAlphaStats
@@ -161,8 +289,8 @@ enum ContainerPetChannel {
     }
 }
 
-/// 像素捕获器接口（@Sendable 闭包，后台 Task 安全传递）；size = 降采样目标尺寸。
-typealias ContainerCapturer = @Sendable (WinCandidate, CGSize) async -> ContainerCaptureOutcome
+/// 像素捕获器接口（@Sendable 闭包，后台 Task 安全传递）。
+typealias ContainerCapturer = @Sendable (WinCandidate, ContainerCaptureRequest) async -> ContainerCaptureOutcome
 
 /// 容器窗像素探测：镜像 BubbleVisibilityProbe 结构（锁保护状态、single-flight、
 /// Task.detached 后台捕获、generation 失效语义）。
@@ -177,6 +305,13 @@ final class ContainerPetProbe: Sendable {
     internal struct ProbeState: Sendable {
         /// 最近一次**通过门限**的捕获统计（捕获像素坐标 bbox）；nil = 尚无有效观察。
         var cached: ContainerAlphaStats?
+        /// cached 对应的窗口本地捕获区域及捕获时整窗尺寸。
+        var cachedCaptureRegion: CGRect?
+        var cachedWindowSize: CGSize?
+        /// 下一轮 region capture 的窗口本地区域；nil 表示尚未完成全窗定位。
+        var regionTracking: CGRect?
+        /// true 时下一轮必须全窗定位（首次/reset/WID变化/region miss/贴边）。
+        var needsFullLocate = true
         /// 已知容器 wid（首次 locate 后锁定；wid 变化 → 清缓存 + 新 episode，防 WID 重用串台）。
         var knownWID: CGWindowID?
         var lastCaptureAt: TimeInterval = -.greatestFiniteMagnitude
@@ -210,7 +345,7 @@ final class ContainerPetProbe: Sendable {
 
     /// tick 主线程同步调用。返回当前合成宠物矩形（用**当前** containerBounds 映射）；
     /// 权限缺失 → .unavailable 并丢弃陈旧缓存；wid 变化 → 清缓存（新 episode）；
-    /// 节拍允许时调度单飞后台捕获（稳态 1s / bbox 变化后 0.1s 保持 movingHoldDuration）。
+    /// 节拍允许时调度单飞后台捕获（稳态 0.33s / bbox 变化后 0.1s 保持 movingHoldDuration）。
     func locate(container: WinCandidate) -> ContainerPetOutcome {
         guard canCapture() else {
             // 权限/能力不可用：陈旧缓存必须丢弃（stale WID 不得降级为错误锚点），
@@ -219,6 +354,10 @@ final class ContainerPetProbe: Sendable {
                 if s.cached != nil || s.lastDeliveredRect != nil || s.inFlight || s.knownWID != nil {
                     s.generation += 1
                     s.cached = nil
+                    s.cachedCaptureRegion = nil
+                    s.cachedWindowSize = nil
+                    s.regionTracking = nil
+                    s.needsFullLocate = true
                     s.knownWID = nil
                     s.lastDeliveredRect = nil
                     s.movingUntil = -.greatestFiniteMagnitude
@@ -230,7 +369,7 @@ final class ContainerPetProbe: Sendable {
         struct CaptureStart: Sendable {
             let generation: Int
             let container: WinCandidate
-            let captureSize: CGSize
+            let request: ContainerCaptureRequest
         }
         let start: CaptureStart?
         let outcome: ContainerPetOutcome
@@ -239,6 +378,10 @@ final class ContainerPetProbe: Sendable {
             if let known = s.knownWID, known != container.wid {
                 s.generation += 1
                 s.cached = nil
+                s.cachedCaptureRegion = nil
+                s.cachedWindowSize = nil
+                s.regionTracking = nil
+                s.needsFullLocate = true
                 s.lastDeliveredRect = nil
                 s.movingUntil = -.greatestFiniteMagnitude
             }
@@ -246,10 +389,13 @@ final class ContainerPetProbe: Sendable {
             // 缓存按当前 containerBounds 现映射：整窗平移即时跟随，不依赖下一次捕获。
             var result = ContainerPetOutcome.empty
             if let cached = s.cached,
-               let rect = ContainerPetChannel.mapToPetRect(
-                    stats: cached,
-                    captureWidth: cached.captureWidth,
-                    captureHeight: cached.captureHeight,
+               let captureRegion = s.cachedCaptureRegion,
+               let capturedWindowSize = s.cachedWindowSize,
+               let windowBBox = ContainerPetChannel.windowBBox(
+                    stats: cached, captureRegion: captureRegion),
+               let rect = ContainerPetChannel.mapWindowBBoxToPetRect(
+                    windowBBox: windowBBox,
+                    capturedWindowSize: capturedWindowSize,
                     containerBounds: container.bounds) {
                 result = .bounds(rect)
             }
@@ -257,15 +403,22 @@ final class ContainerPetProbe: Sendable {
             let interval = time < s.movingUntil
                 ? ContainerPetHeuristics.movingCaptureInterval
                 : ContainerPetHeuristics.stableCaptureInterval
-            guard time - s.lastCaptureAt >= interval else { return (nil, result) }
+            guard time - s.lastCaptureAt + 1e-9 >= interval else { return (nil, result) }
             s.inFlight = true
             s.lastCaptureAt = time
-            let target = ContainerPetChannel.captureSize(
-                width: Int(container.bounds.width.rounded()),
-                height: Int(container.bounds.height.rounded()))
-                .map { CGSize(width: $0.width, height: $0.height) }
-                ?? CGSize(width: container.bounds.width, height: container.bounds.height)
-            return (CaptureStart(generation: s.generation, container: container, captureSize: target), result)
+            let round: ContainerCaptureRound
+            let captureRegion: CGRect
+            if !s.needsFullLocate, let region = s.regionTracking {
+                round = .region(region)
+                captureRegion = region
+            } else {
+                round = .fullWindow
+                captureRegion = CGRect(origin: .zero, size: container.bounds.size)
+            }
+            let target = ContainerPetChannel.captureOutputSize(
+                windowSize: container.bounds.size, captureRegion: captureRegion)
+            let request = ContainerCaptureRequest(round: round, outputSize: target)
+            return (CaptureStart(generation: s.generation, container: container, request: request), result)
         }
         guard let start else { return outcome }
         let cap = capturer
@@ -275,12 +428,12 @@ final class ContainerPetProbe: Sendable {
         let gen = start.generation
         let wid = start.container.wid
         let scheduledBounds = start.container.bounds
-        let target = start.captureSize
+        let request = start.request
         let scheduled = start.container
         Self.captureLogger.log("container capture start attempt")
         // Task.detached：不捕获 self（仅捕获 Sendable 局部值）→ 像素统计在后台线程执行。
         Task.detached {
-            let result = await cap(scheduled, target)
+            let result = await cap(scheduled, request)
             let completion = lock.withLock { s -> (
                 shouldNotify: Bool, firstObservation: Bool, failureReason: String?
             ) in
@@ -296,25 +449,70 @@ final class ContainerPetProbe: Sendable {
                 case .stats(let value):
                     stats = value
                 case .targetMissing:
+                    s.needsFullLocate = true
                     return (false, false, "target-missing")
                 case .unavailable:
+                    s.needsFullLocate = true
                     return (false, false, "unavailable")
                 }
-                guard let observationRect = ContainerPetChannel.mapToPetRect(
-                        stats: stats,
-                        captureWidth: stats.captureWidth,
-                        captureHeight: stats.captureHeight,
+                let expectedWidth = max(1, Int(request.outputSize.width.rounded()))
+                let expectedHeight = max(1, Int(request.outputSize.height.rounded()))
+                guard stats.captureWidth == expectedWidth,
+                      stats.captureHeight == expectedHeight else {
+                    s.needsFullLocate = true
+                    return (false, false, "capture-size")
+                }
+                let captureRegion: CGRect
+                var needsFullLocateAfterAcceptance = false
+                switch request.round {
+                case .fullWindow:
+                    captureRegion = CGRect(origin: .zero, size: scheduledBounds.size)
+                    let fraction = Double(stats.nonTransparentPixelCount)
+                        / (Double(stats.captureWidth) * Double(stats.captureHeight))
+                    guard stats.nonTransparentPixelCount > 0,
+                          fraction <= ContainerPetHeuristics.opaqueFractionGate else {
+                        s.needsFullLocate = true
+                        return (false, false, "validation")
+                    }
+                case .region(let region):
+                    captureRegion = region
+                    guard stats.nonTransparentPixelCount > 0 else {
+                        s.needsFullLocate = true
+                        return (false, false, "region-empty")
+                    }
+                    needsFullLocateAfterAcceptance = ContainerPetChannel.bboxTouchesCaptureEdge(stats)
+                }
+                guard let windowBBox = ContainerPetChannel.windowBBox(
+                        stats: stats, captureRegion: captureRegion),
+                      let observationRect = ContainerPetChannel.mapWindowBBoxToPetRect(
+                        windowBBox: windowBBox,
+                        capturedWindowSize: scheduledBounds.size,
                         containerBounds: scheduledBounds) else {
+                    s.needsFullLocate = true
                     return (false, false, "validation")
                 }
                 let firstObservation = s.cached == nil
-                if let old = s.cached, old != stats {
+                let quantizationTolerance = max(
+                    captureRegion.width / CGFloat(stats.captureWidth),
+                    captureRegion.height / CGFloat(stats.captureHeight)) + 1e-9
+                let oldWindowBBox: CGRect? = {
+                    guard let old = s.cached, let oldRegion = s.cachedCaptureRegion else { return nil }
+                    return ContainerPetChannel.windowBBox(stats: old, captureRegion: oldRegion)
+                }()
+                if ContainerPetChannel.rectMateriallyChanged(
+                    oldWindowBBox, windowBBox, tolerance: quantizationTolerance) {
                     // bbox（含捕获尺寸）变化 → 快速节奏保持窗口。
                     s.movingUntil = now() + ContainerPetHeuristics.movingHoldDuration
                 }
                 s.cached = stats
-                let changed = s.lastDeliveredRect != observationRect
-                s.lastDeliveredRect = observationRect
+                s.cachedCaptureRegion = captureRegion
+                s.cachedWindowSize = scheduledBounds.size
+                s.regionTracking = ContainerPetChannel.trackedRegion(
+                    for: windowBBox, windowSize: scheduledBounds.size)
+                s.needsFullLocate = needsFullLocateAfterAcceptance
+                let changed = ContainerPetChannel.rectMateriallyChanged(
+                    s.lastDeliveredRect, observationRect, tolerance: quantizationTolerance)
+                if changed { s.lastDeliveredRect = observationRect }
                 return (changed, firstObservation, nil)
             }
             if let reason = completion.failureReason {
@@ -339,6 +537,10 @@ final class ContainerPetProbe: Sendable {
         lock.withLock { s in
             s.generation += 1
             s.cached = nil
+            s.cachedCaptureRegion = nil
+            s.cachedWindowSize = nil
+            s.regionTracking = nil
+            s.needsFullLocate = true
             s.knownWID = nil
             s.lastDeliveredRect = nil
             s.movingUntil = -.greatestFiniteMagnitude
@@ -347,28 +549,48 @@ final class ContainerPetProbe: Sendable {
 
     // MARK: - 默认捕获器（macOS 14+ ScreenCaptureKit；每轮捕获一次共享清单枚举）
 
-    private static let defaultCapturer: ContainerCapturer = { candidate, size in
+    private static let defaultCapturer: ContainerCapturer = { candidate, request in
         guard #available(macOS 14.0, *) else { return .unavailable }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true) else {
             return .unavailable
         }
-        return await captureStats(candidate, size: size, content: content)
+        return await captureStats(candidate, request: request, content: content)
     }
 
     @available(macOS 14.0, *)
     private static func captureStats(
-        _ candidate: WinCandidate, size: CGSize, content: SCShareableContent
+        _ candidate: WinCandidate, request: ContainerCaptureRequest, content: SCShareableContent
     ) async -> ContainerCaptureOutcome {
         guard let win = content.windows.first(where: { $0.windowID == candidate.wid }) else {
             return .targetMissing
         }
         let filter = SCContentFilter(desktopIndependentWindow: win)
         let config = SCStreamConfiguration()
-        config.width = max(1, Int(size.width.rounded()))
-        config.height = max(1, Int(size.height.rounded()))
+        config.width = max(1, Int(request.outputSize.width.rounded()))
+        config.height = max(1, Int(request.outputSize.height.rounded()))
         config.scalesToFit = false
         config.showsCursor = false
+        if case .region(let windowRegion) = request.round {
+            var displayCount: UInt32 = 0
+            var displayIDs = [CGDirectDisplayID](repeating: 0, count: 16)
+            guard CGGetActiveDisplayList(UInt32(displayIDs.count), &displayIDs, &displayCount) == .success,
+                  displayCount > 0 else { return .unavailable }
+            let bounds = displayIDs.prefix(Int(displayCount)).map(CGDisplayBounds)
+            guard let displayBounds = ContainerPetChannel.captureDisplayBounds(
+                windowRegion: windowRegion,
+                containerBounds: candidate.bounds,
+                displayBounds: bounds) else { return .unavailable }
+            let sourceRect = ContainerPetChannel.sourceRect(
+                windowRegion: windowRegion,
+                containerBounds: candidate.bounds,
+                displayBounds: displayBounds)
+            let displaySegment = candidate.bounds.intersection(displayBounds)
+            guard sourceRect.minX >= 0, sourceRect.minY >= 0,
+                  sourceRect.maxX <= displaySegment.width,
+                  sourceRect.maxY <= displaySegment.height else { return .unavailable }
+            config.sourceRect = sourceRect
+        }
         guard let img = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else {
             return .unavailable
         }

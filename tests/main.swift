@@ -5927,9 +5927,19 @@ do {
     let probe = ContainerPetProbe(
         monotonicNow: { clock.withLock { $0 } },
         canCapture: { true },
-        capturer: { _, _ in
+        capturer: { _, request in
             calls.withLock { $0 += 1 }
-            return outcomeBox.withLock { $0 }
+            let outcome = outcomeBox.withLock { $0 }
+            guard case .stats(let fullStats) = outcome,
+                  let bbox = ContainerPetChannel.windowBBox(
+                    stats: fullStats,
+                    captureRegion: CGRect(origin: .zero, size: cpBounds.size)) else { return outcome }
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(for: bbox, in: region, outputSize: request.outputSize))
         },
         onObservationChanged: { wakes.withLock { $0 += 1 } })
     let container = cpContainer(520)
@@ -5940,22 +5950,32 @@ do {
           probe.locate(container: container) == .bounds(cpRectA), "")
 check("T-cp22 首个有效观察（none→bounds）触发 onObservationChanged 恰一次",
           wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
-    clock.withLock { $0 = 10_000.99 }
+    clock.withLock { $0 = 10_000.32 }
     _ = probe.locate(container: container)
-    check("T-cp23 stable 0.99s→不捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_001 }
+    check("T-cp23 stable 0.32s→不捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_000.33 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp24 stable 1.0s 节奏→捕获(1Hz 心跳)", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+    check("T-cp24 stable 0.33s 节奏→捕获(约3Hz)", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
     check("T-cp24b 同 rect 再观察→不重复 wake", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
 
-    // bbox 变化 → 0.1s 快速节奏保持 movingHoldDuration，随后回到 stable 1.0s。
+    // bbox 变化 → 0.1s 快速节奏保持 movingHoldDuration，随后回到 stable 0.33s。
     clock.withLock { $0 = 10_002 }
     outcomeBox.withLock { $0 = .stats(cpStatsB) }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp25 bbox变化→新观察生效", probe.locate(container: container) == .bounds(cpRectB),
-          "calls=\(calls.withLock { $0 })")
+    let cp25Outcome = probe.locate(container: container)
+    let cp25Changed: Bool
+    if case .bounds(let rect) = cp25Outcome {
+        cp25Changed = abs(rect.minX - cpRectB.minX) <= 5
+            && abs(rect.minY - cpRectB.minY) <= 5
+            && abs(rect.width - cpRectB.width) <= 5
+            && abs(rect.height - cpRectB.height) <= 5
+    } else {
+        cp25Changed = false
+    }
+    check("T-cp25 bbox变化→新观察生效(区域量化≤1源像素)", cp25Changed,
+          "outcome=\(cp25Outcome) calls=\(calls.withLock { $0 })")
     clock.withLock { $0 = 10_002.05 }
     _ = probe.locate(container: container)
     check("T-cp26 快速节奏 0.05s→不捕获", calls.withLock { $0 } == 3, "calls=\(calls.withLock { $0 })")
@@ -5972,18 +5992,18 @@ check("T-cp22 首个有效观察（none→bounds）触发 onObservationChanged �
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
     check("T-cp30 保持期内 10_003 仍按 0.1s→第6捕", calls.withLock { $0 } == 6, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_003.5 }
+    clock.withLock { $0 = 10_003.9 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp31 保持期内 10_003.5→第7捕", calls.withLock { $0 } == 7, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_004.49 }
+    check("T-cp31 保持期内 10_003.9→第7捕", calls.withLock { $0 } == 7, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_004.22 }
     _ = probe.locate(container: container)
-    check("T-cp32 保持期结束→回到 stable，0.99s 不捕获",
+    check("T-cp32 保持期结束→回到 stable，0.32s 不捕获",
           calls.withLock { $0 } == 7, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 10_004.5 }
+    clock.withLock { $0 = 10_004.23 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp33 保持期结束 1.0s 节奏→捕获(stable 恢复)", calls.withLock { $0 } == 8, "calls=\(calls.withLock { $0 })")
+    check("T-cp33 保持期结束 0.33s 节奏→捕获(stable 恢复)", calls.withLock { $0 } == 8, "calls=\(calls.withLock { $0 })")
 }
 
 // single-flight：在途捕获不重复
@@ -6333,9 +6353,9 @@ do {
           "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
 }
 
-// ---- C8 R7-amended cadence：one-shot 稳定重捕为 1.0s（fake monotonic clock）。
-check("T-cp80 stableCaptureInterval=1.0",
-      ContainerPetHeuristics.stableCaptureInterval == 1.0, "")
+// ---- C8 option 1 cadence：region-tracked one-shot 稳定重捕为 0.33s（fake monotonic clock）。
+check("T-cp80 stableCaptureInterval=0.33",
+      ContainerPetHeuristics.stableCaptureInterval == 0.33, "")
 do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(110_000))
     let calls = OSAllocatedUnfairLock(initialState: 0)
@@ -6349,16 +6369,187 @@ do {
     let container = cpContainer(534)
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    clock.withLock { $0 = 110_000.99 }
+    clock.withLock { $0 = 110_000.32 }
     _ = probe.locate(container: container)
-    check("T-cp81 stable 0.99s→不捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
-    clock.withLock { $0 = 110_001 }
+    check("T-cp81 stable 0.32s→不捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 110_000.33 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
-    check("T-cp82 stable 1.0s→捕获", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+    check("T-cp82 stable 0.33s→捕获", calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
 }
 
-// ---- C9 Addendum 4：one-shot transport / wiring / verbose lifecycle logging guards。
+// ---- C9 option 1 region tracking：坐标校准 + full/region/fallback 状态机。----
+let cpCalibrationStats = ContainerAlphaStats(
+    nonTransparentPixelCount: 800, minX: 10, minY: 20, maxX: 29, maxY: 59,
+    captureWidth: 200, captureHeight: 400)
+let cpCalibrationRegion = CGRect(x: 50, y: 300, width: 800, height: 1600)
+let cpCalibrationBBox = ContainerPetChannel.windowBBox(
+    stats: cpCalibrationStats, captureRegion: cpCalibrationRegion)
+check("T-cp87 capture alpha bbox maps directly into window-local coordinates",
+      cpCalibrationBBox == CGRect(x: 90, y: 380, width: 80, height: 160),
+      "actual=\(String(describing: cpCalibrationBBox))")
+
+let cpDisplays = [
+    CGRect(x: 0, y: 0, width: 1728, height: 1117),
+    CGRect(x: 1728, y: -1117, width: 1728, height: 1117),
+]
+let cpCalibrationBounds = CGRect(x: 1900, y: -1400, width: 800, height: 1600)
+let cpWindowRegion = CGRect(x: 40, y: 500, width: 300, height: 300)
+check("T-cp88 active display is selected by largest tracked-region intersection",
+      ContainerPetChannel.captureDisplayBounds(
+        windowRegion: cpWindowRegion,
+        containerBounds: cpCalibrationBounds,
+        displayBounds: cpDisplays) == cpDisplays[1], "")
+let cpSourceRect = ContainerPetChannel.sourceRect(
+    windowRegion: cpWindowRegion,
+    containerBounds: cpCalibrationBounds,
+    displayBounds: cpDisplays[1])
+check("T-cp89 sourceRect is relative to the selected display/container segment origin",
+      cpSourceRect == CGRect(x: 40, y: 217, width: 300, height: 300),
+      "actual=\(String(describing: cpSourceRect))")
+
+let cpTracked = ContainerPetChannel.trackedRegion(
+    for: CGRect(x: 300, y: 500, width: 80, height: 160),
+    windowSize: CGSize(width: 800, height: 1600))
+check("T-cp90 tracked region expands 150px horizontally/top and 400px below",
+      cpTracked == CGRect(x: 150, y: 350, width: 380, height: 710),
+      "actual=\(cpTracked)")
+let cpTrackedClamped = ContainerPetChannel.trackedRegion(
+    for: CGRect(x: 20, y: 1300, width: 80, height: 160),
+    windowSize: CGSize(width: 800, height: 1600))
+check("T-cp91 tracked region clamps to window while retaining bubble zone where available",
+      cpTrackedClamped == CGRect(x: 0, y: 1150, width: 250, height: 450),
+      "actual=\(cpTrackedClamped)")
+let cpEdgeFixtures = [
+    ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 0, minY: 2, maxX: 4, maxY: 6,
+                        captureWidth: 20, captureHeight: 20),
+    ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 2, minY: 0, maxX: 4, maxY: 6,
+                        captureWidth: 20, captureHeight: 20),
+    ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 2, minY: 2, maxX: 19, maxY: 6,
+                        captureWidth: 20, captureHeight: 20),
+    ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 2, minY: 2, maxX: 4, maxY: 19,
+                        captureWidth: 20, captureHeight: 20),
+]
+let cpInteriorFixture = ContainerAlphaStats(
+    nonTransparentPixelCount: 1, minX: 2, minY: 2, maxX: 4, maxY: 6,
+    captureWidth: 20, captureHeight: 20)
+check("T-cp91b each capture edge arms fallback while an interior bbox does not",
+      cpEdgeFixtures.allSatisfy(ContainerPetChannel.bboxTouchesCaptureEdge)
+        && !ContainerPetChannel.bboxTouchesCaptureEdge(cpInteriorFixture), "")
+check("T-cp91c region output keeps full-window scale instead of upscaling crop to 400px",
+      ContainerPetChannel.captureOutputSize(
+        windowSize: cpBounds.size, captureRegion: cpTracked) == CGSize(width: 95, height: 178), "")
+
+@Sendable func cpStats(for windowBBox: CGRect, in region: CGRect, outputSize: CGSize) -> ContainerAlphaStats {
+    let width = Int(outputSize.width.rounded())
+    let height = Int(outputSize.height.rounded())
+    let scaleX = CGFloat(width) / region.width
+    let scaleY = CGFloat(height) / region.height
+    let minX = Int(((windowBBox.minX - region.minX) * scaleX).rounded())
+    let maxX = Int(((windowBBox.maxX - region.minX) * scaleX).rounded()) - 1
+    let minY = Int(((windowBBox.minY - region.minY) * scaleY).rounded())
+    let maxY = Int(((windowBBox.maxY - region.minY) * scaleY).rounded()) - 1
+    return ContainerAlphaStats(
+        nonTransparentPixelCount: max(1, (maxX - minX + 1) * (maxY - minY + 1) / 4),
+        minX: minX, minY: minY, maxX: maxX, maxY: maxY,
+        captureWidth: width, captureHeight: height)
+}
+
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(120_000))
+    let requests = OSAllocatedUnfairLock(initialState: [ContainerCaptureRequest]())
+    let desiredBBox = OSAllocatedUnfairLock(initialState: CGRect(x: 300, y: 500, width: 80, height: 160))
+    let forceEmpty = OSAllocatedUnfairLock(initialState: false)
+    let forceEdge = OSAllocatedUnfairLock(initialState: false)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            requests.withLock { $0.append(request) }
+            let region: CGRect
+            switch request.round {
+            case .fullWindow:
+                region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value):
+                region = value
+            }
+            if forceEmpty.withLock({ $0 }) {
+                return .stats(ContainerAlphaStats(
+                    nonTransparentPixelCount: 0, minX: -1, minY: -1, maxX: -1, maxY: -1,
+                    captureWidth: Int(request.outputSize.width), captureHeight: Int(request.outputSize.height)))
+            }
+            var bbox = desiredBBox.withLock { $0 }
+            if forceEdge.withLock({ $0 }) { bbox.origin.x = region.minX }
+            return .stats(cpStats(for: bbox, in: region, outputSize: request.outputSize))
+        })
+    let container = cpContainer(535)
+
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp92 first activation round is full-window and seeds tracking region",
+          requests.withLock { $0.first?.round == .fullWindow }
+            && probe.lock.withLock { $0.regionTracking == cpTracked && !$0.needsFullLocate },
+          "requests=\(requests.withLock { $0 }) state=\(probe.lock.withLock { ($0.regionTracking, $0.needsFullLocate) })")
+
+    desiredBBox.withLock { $0 = CGRect(x: 360, y: 520, width: 80, height: 160) }
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    let cpUpdatedTracked = ContainerPetChannel.trackedRegion(
+        for: desiredBBox.withLock { $0 }, windowSize: cpBounds.size)
+    check("T-cp93 region hit uses tracked source and recenters tracking",
+          requests.withLock {
+            guard case .region(let region) = $0.last?.round else { return false }
+            return region == cpTracked
+          } && probe.lock.withLock {
+            guard let updated = $0.regionTracking else { return false }
+            return updated != cpTracked && !$0.needsFullLocate
+                && abs(updated.midX - cpUpdatedTracked.midX) < 4
+                && abs(updated.midY - cpUpdatedTracked.midY) < 4
+          }, "requests=\(requests.withLock { $0 })")
+
+    forceEmpty.withLock { $0 = true }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp94 empty region capture arms full locate without erasing last observation",
+          probe.lock.withLock { $0.needsFullLocate }
+            && probe.locate(container: container) != .empty, "")
+    forceEmpty.withLock { $0 = false }
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp95 region miss cannot loop: next capture is full-window",
+          requests.withLock { $0.last?.round == .fullWindow },
+          "requests=\(requests.withLock { $0 })")
+
+    forceEdge.withLock { $0 = true }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp96 bbox touching region edge arms full locate",
+          probe.lock.withLock { $0.needsFullLocate }, "")
+    forceEdge.withLock { $0 = false }
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp97 edge fallback next round is full-window",
+          requests.withLock { $0.last?.round == .fullWindow }, "")
+
+    probe.reset()
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp98 reset clears region and restarts with full locate",
+          requests.withLock { $0.last?.round == .fullWindow }, "")
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: cpContainer(536))
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp99 WID change clears region and restarts with full locate",
+          requests.withLock { $0.last?.round == .fullWindow }, "")
+}
+
+// ---- C10 Addendum 4：one-shot transport / wiring / verbose lifecycle logging guards。
 let cpRepoRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
