@@ -3211,6 +3211,28 @@ check("T-re2l 落盘内容含 observation change 计数",
       (reObsWritten["containerObservationChangeCount"] as? Int) == 2, "")
 try? FileManager.default.removeItem(at: reObsRoot)
 
+// T-re2m: start failure must survive hidden/disappearance ticks. Clean flush is zero IO;
+// record marks dirty; the next flush writes once and subsequent clean flush writes nothing.
+let reHiddenRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-hidden-flush-(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reHiddenRoot)
+var reHiddenNow: TimeInterval = 215_000
+let reHiddenCollector = makeRuntimeEvidenceRecorderForTesting(
+    candidateSHA: reSHA,
+    outputURL: reHiddenRoot.appendingPathComponent(runtimeEvidenceOutputFileName),
+    flushNow: { reHiddenNow })
+check("T-re2m clean hidden-branch flush is zero IO", !reHiddenCollector.flush(), "")
+reHiddenCollector.recordContainerStreamStartFailure()
+reHiddenNow = 215_001
+check("T-re2m start failure makes hidden-branch flush dirty", reHiddenCollector.flush(), "")
+reHiddenNow = 215_002
+check("T-re2m clean flush after start-failure write is zero IO", !reHiddenCollector.flush(), "")
+let reHiddenWritten = try! JSONSerialization.jsonObject(
+    with: Data(contentsOf: reHiddenRoot.appendingPathComponent(runtimeEvidenceOutputFileName))) as! [String: Any]
+check("T-re2m hidden-branch flush contains start failure",
+      (reHiddenWritten["containerStreamStartFailureCount"] as? Int) == 1, "")
+try? FileManager.default.removeItem(at: reHiddenRoot)
+
 // T-re4: symlink fail-closed —— 外部链接目标绝不接收诊断内容
 let reEvilTarget = reRoot.appendingPathComponent("evil-target.json")
 try! "SENTINEL".data(using: .utf8)!.write(to: reEvilTarget)
@@ -3744,7 +3766,7 @@ check("T-re12b dy telemetry输入=setFrame后panel.frame回读（source guard）
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)
 let staleCap: BubbleCapturer = { _ in
-    try? await Task.sleep(nanoseconds: 100_000_000)
+    try? await Task.sleep(nanoseconds: 300_000_000)
     return .stats(collapsedS)
 }
 let staleProbe = BubbleVisibilityProbe(
@@ -6650,9 +6672,11 @@ do {
 do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(1_000))
     let created = OSAllocatedUnfairLock<[FakeContainerFrameStream]>(initialState: [])
+    let requestedWIDs = OSAllocatedUnfairLock<[CGWindowID]>(initialState: [])
     let failures = OSAllocatedUnfairLock(initialState: 0)
     let wakes = OSAllocatedUnfairLock(initialState: 0)
-    let factory: ContainerFrameStreamFactory = { _, _, streamEpoch, consumer in
+    let factory: ContainerFrameStreamFactory = { candidate, _, streamEpoch, consumer in
+        requestedWIDs.withLock { $0.append(candidate.wid) }
         let stream = FakeContainerFrameStream(epoch: streamEpoch)
         stream.attach(consumer)
         created.withLock { $0.append(stream) }
@@ -6708,8 +6732,12 @@ do {
         probe.streamRuntime.withLock { $0.active != nil && $0.firstFrameDeadline != nil }
     })
     check("T-cp103 locate after backoff starts replacement",
-          created.withLock { $0[1].counts() } == (1, 0, 0),
-          "counts=\(created.withLock { $0[1].counts() })")
+          created.withLock { $0[1].counts() } == (1, 0, 0)
+            && created.withLock { $0[0] !== created.withLock { $0[1] } }
+            && requestedWIDs.withLock { $0 } == [container.wid, container.wid]
+            && probe.streamRuntime.withLock { $0.streamEpoch == 2 },
+          "counts=\(created.withLock { $0[1].counts() }) "
+            + "wids=\(requestedWIDs.withLock { $0 }) runtime=\(probe.streamRuntime.withLock { $0 })")
     probe.shutdown()
     _ = waitPumpingMain({ created.withLock { $0[1].counts().stops == 1 } })
 }
@@ -7318,6 +7346,49 @@ do {
           "runtime=\(probe.streamRuntime.withLock { $0 })")
     probe.shutdown()
     _ = waitPumpingMain({ created.withLock { $0[1].counts().stops == 1 } })
+}
+
+do {
+    // A failed factory attempt (including fresh-enumeration target-missing) must be a
+    // visible start failure with backoff. The next allowed locate invokes the factory
+    // again; no stream object or failed attempt is reused.
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(7_000))
+    let attempts = OSAllocatedUnfairLock<[CGWindowID]>(initialState: [])
+    let failures = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let factory: ContainerFrameStreamFactory = { candidate, _, _, _ in
+        attempts.withLock { $0.append(candidate.wid) }
+        throw ContainerStreamError.targetMissing
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        transport: .managedStream(factory: factory),
+        onObservationChanged: { wakes.withLock { $0 += 1 } },
+        onStreamStartFailure: { failures.withLock { $0 += 1 } })
+    let container = cpContainer(550)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        attempts.withLock { $0 } == [container.wid]
+            && failures.withLock { $0 } == 1
+            && probe.streamRuntime.withLock { $0.nextStartAllowedAt == 7_002 }
+    })
+    check("T-cp116 fresh-enumeration target-missing records failure and backoff",
+          probe.streamRuntime.withLock { $0.active == nil && !$0.starting && !$0.stopping },
+          "attempts=\(attempts.withLock { $0 }) runtime=\(probe.streamRuntime.withLock { $0 })")
+    _ = probe.locate(container: container)
+    check("T-cp116 locate during factory-error backoff does not retry",
+          attempts.withLock { $0.count } == 1,
+          "attempts=\(attempts.withLock { $0 })")
+    clock.withLock { $0 = 7_002.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        attempts.withLock { $0 } == [container.wid, container.wid]
+            && failures.withLock { $0 } == 2
+    })
+    check("T-cp116 retry after backoff invokes a fresh factory attempt",
+          probe.streamRuntime.withLock { $0.streamEpoch == 2 && $0.nextStartAllowedAt == 7_004.1 },
+          "attempts=\(attempts.withLock { $0 }) runtime=\(probe.streamRuntime.withLock { $0 })")
 }
 
 print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")

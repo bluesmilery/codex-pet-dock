@@ -427,6 +427,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if FollowTickPlanner.containerProbeReset(containerCandidatePresent: containerCandidate != nil) {
                 containerProbe.reset()
             }
+            // Hidden/disappearance must still flush stream start-failure counters; flush()
+            // returns without IO when no recorder state is dirty.
+            runtimeEvidence?.flush()
         }
         lastMaterialChangeAt = d.lastMaterialChangeAt
 

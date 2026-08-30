@@ -485,6 +485,7 @@ final class ContainerPetProbe: Sendable {
         }
         guard let (shouldStart, streamEpoch) = shouldStart, shouldStart,
               let factory = streamFactory else { return }
+        Self.streamHealthLogger.log("container stream start attempt epoch=\(streamEpoch)")
         let target = ContainerPetChannel.captureSize(
             width: Int(container.bounds.width.rounded()),
             height: Int(container.bounds.height.rounded()))
@@ -520,6 +521,8 @@ final class ContainerPetProbe: Sendable {
                         s.firstFrameDeadline = nil
                         s.consecutiveStartFailures = 0
                         s.nextStartAllowedAt = nil
+                        Self.streamHealthLogger.log(
+                            "container stream first frame accepted epoch=\(s.streamEpoch)")
                     } else {
                         s.armedEpoch = s.streamEpoch
                         s.firstFrameDelivered = false
@@ -533,13 +536,32 @@ final class ContainerPetProbe: Sendable {
                     runtimeLock.withLock { $0.stopping = false }
                 }
             } catch {
-                let shouldDeliverUnavailable = runtimeLock.withLock { s -> Bool in
+                let (shouldDeliverUnavailable, shouldRecordFailure) = runtimeLock.withLock { s -> (Bool, Bool) in
                     let wasStopping = s.stopping
                     s.starting = false
                     s.stopping = false
-                    return probeLock.withLock({ $0.knownWID }) == scheduled.wid
+                    let attemptStillCurrent = probeLock.withLock({ $0.knownWID }) == scheduled.wid
                         && probeLock.withLock({ $0.generation }) == runtimeLock.withLock({ $0.startingGeneration })
                         && !wasStopping
+                    if attemptStillCurrent {
+                        s.consecutiveStartFailures += 1
+                        s.nextStartAllowedAt = nowProvider() + Self.startFailureBackoff(
+                            consecutiveFailures: s.consecutiveStartFailures)
+                    }
+                    return (attemptStillCurrent, attemptStillCurrent)
+                }
+                if shouldRecordFailure {
+                    let reason: String
+                    if case ContainerStreamError.targetMissing = error {
+                        reason = "target-missing"
+                    } else if case ContainerStreamError.unavailable = error {
+                        reason = "enumeration-unavailable"
+                    } else {
+                        reason = "factory-or-start-error"
+                    }
+                    Self.streamHealthLogger.log(
+                        "container stream start failure epoch=\(streamEpoch) reason=\(reason)")
+                    self.onStreamStartFailure?()
                 }
                 if shouldDeliverUnavailable {
                     await consumer.deliver(
@@ -566,6 +588,7 @@ final class ContainerPetProbe: Sendable {
             return nil
         }
         guard let stream else { return }
+        Self.streamHealthLogger.log("container stream retirement reason=explicit")
         let runtimeLock = streamRuntime
         Task.detached(priority: .utility) {
             await stream.stop()
@@ -611,13 +634,18 @@ final class ContainerPetProbe: Sendable {
         // queued callback may take the latest-wins token after replacement activation, but it
         // can neither feed observation state nor cancel/satisfy replacement health.
         if acceptedStats {
-            streamRuntime.withLock { s in
+            let firstFrameAcceptedNow = streamRuntime.withLock { s -> Bool in
                 s.acceptedFrameEpoch = token.streamEpoch
-                guard s.armedEpoch == token.streamEpoch, !s.firstFrameDelivered else { return }
+                guard s.armedEpoch == token.streamEpoch, !s.firstFrameDelivered else { return false }
                 s.firstFrameDelivered = true
                 s.firstFrameDeadline = nil
                 s.consecutiveStartFailures = 0
                 s.nextStartAllowedAt = nil
+                return true
+            }
+            if firstFrameAcceptedNow {
+                Self.streamHealthLogger.log(
+                    "container stream first frame accepted epoch=\(token.streamEpoch)")
             }
         }
         if shouldNotify { onObservationChanged?() }
@@ -638,7 +666,10 @@ final class ContainerPetProbe: Sendable {
             s.stopping = false
             s.firstFrameDelivered = false
             s.firstFrameDeadline = nil
-            return true
+                return true
+            }
+        if shouldNotify {
+            Self.streamHealthLogger.log("container stream retirement reason=didStop")
         }
         if shouldNotify { onObservationChanged?() }
     }
@@ -796,6 +827,8 @@ private final class ContainerSCFrameStream: NSObject, ContainerFrameStream, SCSt
         streamEpoch: Int,
         consumer: any ContainerFrameConsumer
     ) async throws -> ContainerSCFrameStream {
+        // Fresh enumeration is part of every start attempt. SCShareableContent, SCWindow,
+        // and SCContentFilter are deliberately scoped to this call; no failed attempt is reused.
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true) else {
             throw ContainerStreamError.unavailable
