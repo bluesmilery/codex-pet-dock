@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBar: StatusBar?
     private var stationaryAnchor: CGRect?
     private var lastWID: CGWindowID?
+    private var lastPrimaryWindowOrigin: CGPoint?
     private var lastPlacementWindowOrigin: CGPoint?
     private var lastMaterialChangeAt: TimeInterval?
     private var dataTimer: Timer?           // 数据刷新（低频：退避间隔）
@@ -351,6 +352,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // - 会话气泡（消息框）：像素 alpha 可见性（bubbleProbe）决定是否占位；
                     // - 控制按钮：窗口存在性即占位（obstaclesNear 已过滤 isOnscreen/alpha>0）。
                     let scr = Geometry.screenContaining(quartzCenterX: mascot.bounds.midX, mascot.bounds.midY)
+                    let primaryWindowOriginChanged = lastPrimaryWindowOrigin.map {
+                        $0 != mascot.bounds.origin
+                    } ?? false
                     let shown = FollowLayoutPass.placeDock(
                         mascot: mascot,
                         candidates: wins,
@@ -362,12 +366,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 avoiding: obstacles,
                                 visibleScreen: scr,
                                 movementChanged: d.shouldSetFrame,
+                                windowOriginChanged: primaryWindowOriginChanged,
                                 monotonicNow: followMonotonicNow(),
                                 evidence: runtimeEvidence
                             )
                         }
                     )
                     if shown {
+                        lastPrimaryWindowOrigin = mascot.bounds.origin
                         dock.showIfNeeded()
                         if detail.isVisible { detail.placeBelow(dockFrame: dock.frame, visibleScreen: scr) }
                     } else {
@@ -422,6 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             detail.close()
             stationaryAnchor = nil
             lastWID = nil
+            lastPrimaryWindowOrigin = nil
             bubbleProbe.reset()
             // 容器候选在场时 hidden tick 只表示「捕获在途/未接受」——reset 会作废在途捕获
             // 使通道饥饿（QA P0）；仅无候选（容器真消失）才 reset（身份churn由 wid-change

@@ -7249,6 +7249,21 @@ check("T-cp86 AppDelegate uses one-shot wiring, no shutdown callback, and keeps 
         && cpMainSource.contains("windowOriginChanged: windowOriginChanged")
         && cpMainSource.contains("lastPlacementWindowOrigin = container.bounds.origin")
         && cpMainSource.contains("runtimeEvidence?.flush()"), "")
+check("T-cp86b primary channel forwards window-origin changes and resets its origin state",
+      cpMainSource.contains("private var lastPrimaryWindowOrigin: CGPoint?")
+        && cpMainSource.contains(
+            "let primaryWindowOriginChanged = lastPrimaryWindowOrigin.map {\n"
+                + "                        $0 != mascot.bounds.origin\n"
+                + "                    } ?? false")
+        && cpMainSource.contains("windowOriginChanged: primaryWindowOriginChanged")
+        && cpMainSource.contains(
+            "if shown {\n"
+                + "                        lastPrimaryWindowOrigin = mascot.bounds.origin\n"
+                + "                        dock.showIfNeeded()")
+        && cpMainSource.contains(
+            "lastWID = nil\n"
+                + "            lastPrimaryWindowOrigin = nil\n"
+                + "            bubbleProbe.reset()"), "")
 
 print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")
 
