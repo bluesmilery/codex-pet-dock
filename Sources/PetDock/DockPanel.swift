@@ -1,6 +1,12 @@
 import Cocoa
 import QuartzCore
 
+extension ContainerPetHeuristics {
+    /// 可见底座的最终放置死区：捕获量化造成的 target 双轴位移均小于 6px 时保持当前 frame。
+    /// 真实位移会先穿过 bbox deadband 并越过此门限；已接纳的 movement/avoidance glide 不受影响。
+    static let placementDeadband: CGFloat = 6
+}
+
 /// 底座 frame 的 latest-only 插值状态。
 /// 只保存当前渲染值与一个在途 segment；没有 Timer、动画队列或预测目标。
 /// segment 分两类：movement（宠物窗口实质移动的拖动跟随，32ms 线性）与 avoidance（静止时
@@ -21,6 +27,9 @@ struct DockFrameInterpolator {
     var isAvoidanceSegmentActive: Bool {
         segmentKind == .avoidance && segmentStartedAt != nil
     }
+
+    /// 已接纳的 movement / avoidance 段必须完整推进，不能被后续 placement deadband 截停。
+    var isSegmentActive: Bool { segmentStartedAt != nil }
 
     mutating func reset() {
         renderedFrame = nil
@@ -326,6 +335,22 @@ final class DockPanel: NSObject {
         }
         let target = Self.integerPixelTarget(unsnappedTarget)
 
+        // 可见、静止且插值器已 settled 时，抑制双轴均小于 placement deadband 的最终 target。
+        // 该层只挡 capture quantization 造成的可见 micro-hop；真实移动先在 bbox deadband 累计，
+        // 到达这里时会越过门限。抑制时必须把插值器完整 snap 到实际 owner frame，不能只跳过
+        // setFrame，否则隐藏 target/rendered 状态会跨 round 漂移。换屏/无屏安全路径与任何已接纳
+        // 的 movement/avoidance segment 均绕过此 guard，保证 32ms/200ms glide 完整推进。
+        let ownerFrameBeforePlacement = panel.frame
+        let suppressPlacement = panel.isVisible
+            && !movementChanged
+            && hasVisibleScreen
+            && !screenChanged
+            && !frameInterpolator.isSegmentActive
+            && abs(target.origin.x - ownerFrameBeforePlacement.origin.x)
+                < ContainerPetHeuristics.placementDeadband
+            && abs(target.origin.y - ownerFrameBeforePlacement.origin.y)
+                < ContainerPetHeuristics.placementDeadband
+
         // 分类（movementChanged 驱动）：movementChanged（宠物窗口是否实质移动，来自
         // Follower.shouldSetFrame）是区分“移动”与“内容/障碍/锚变化”的权威信号——
         // 不再用障碍 count/range 分类（CS 锚变化时障碍 rect 与 adjustedPet.maxY 协变，
@@ -337,12 +362,20 @@ final class DockPanel: NSObject {
         // 3. movementChanged=false 且目标不变 → hold（在途段继续，由动画源/跟随节拍渲染）。
         // 安全路径（无屏/换屏/首显/隐藏/越界）经上方 reset 后两个入口均立即 snap 并失效动画源。
         let frame: NSRect
-        if movementChanged && hasVisibleScreen && !screenChanged {
+        let shouldWriteFrame: Bool
+        if suppressPlacement {
+            frame = frameInterpolator.snap(to: ownerFrameBeforePlacement)
+            shouldWriteFrame = false
+        } else if movementChanged && hasVisibleScreen && !screenChanged {
             frame = frameInterpolator.update(to: target, at: monotonicNow)
+            shouldWriteFrame = true
         } else {
             frame = frameInterpolator.updateAvoidance(to: target, at: monotonicNow)
+            shouldWriteFrame = true
         }
-        panel.setFrame(frame, display: true)
+        if shouldWriteFrame {
+            panel.setFrame(frame, display: true)
+        }
         // Owner read-back：setFrame 会做像素对齐等状态修正，请求值不等于最终 owner 状态；
         // dy telemetry 只消费写回后的真实 panel.frame（插值状态继续使用请求值，布局行为不变）。
         let ownerFrame = panel.frame

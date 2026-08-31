@@ -1124,6 +1124,185 @@ check("T-avo7b 生产组合按钮消失：渐进回基础位、最终精确、�
       "frames=\(avoProdVanishFrames)")
 print("\n[障碍平滑过渡] \(pass - avoPass) passed, \(fail - avoBase) failed")
 
+// ---- T-pd: placement-level deadband（可见 panel 的量化微跳抑制） ----
+// QA-run-12：bbox 8px deadband 已消除持续抖动，但 idle alpha bbox 偶发单边扩 8px，
+// 仍会把 dock target 推动 4px。这里直接穿过生产 DockPanel.placeBelow，并断言真实 panel.frame：
+// 静止 sub-6px target 不写 frame，插值器对齐当前 owner；达到 6px、权威 movementChanged
+// 或此前已接纳的在途 glide 均继续原路径。
+let pdBase = fail, pdPass = pass
+check("T-pd0 placementDeadband=6px（严格小于才抑制）",
+      ContainerPetHeuristics.placementDeadband == 6,
+      "actual=\(ContainerPetHeuristics.placementDeadband)")
+var pdClock: TimeInterval = 60
+var pdLinks: [TestAnimationDisplayLink] = []
+var pdTimers: [TestFollowTickTimer] = []
+func pdMakeDock() -> DockPanel {
+    DockPanel(
+        makeAnimationDisplayLink: { target, selector in
+            let link = TestAnimationDisplayLink(target: target, selector: selector)
+            pdLinks.append(link)
+            return link
+        },
+        makeAnimationTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            pdTimers.append(timer)
+            return timer
+        },
+        animationMonotonicNow: { pdClock }
+    )
+}
+func pdTarget(pet: CGRect, dock: DockPanel) -> NSRect {
+    let quartz = Geometry.safeDockFrame(
+        pet: pet,
+        avoiding: [],
+        dockSize: CGSize(width: dock.dockWidth, height: dock.dockHeight),
+        gap: dock.gap,
+        screen: avoScreen
+    ).frame!
+    return DockPanel.integerPixelTarget(Geometry.appKitRectFromQuartz(quartz))
+}
+
+// sub-6px 静止 target：反复 round 均保持原 owner frame，且不得启动渲染源。
+let pdSuppressDock = pdMakeDock()
+let pdSuppressInitialShown = pdSuppressDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdSuppressDock.showIfNeeded()
+let pdSuppressOriginal = pdSuppressDock.frame
+let pdSuppressLinksBefore = pdLinks.count
+var pdSuppressRoundsShown = pdSuppressInitialShown && pdSuppressDock.isVisible
+for (index, delta) in [CGFloat(4), 5, 3, 4].enumerated() {
+    pdClock = 60.1 + Double(index) * 0.1
+    pdSuppressRoundsShown = pdSuppressRoundsShown && pdSuppressDock.placeBelow(
+        petQuartzRect: avoPet.offsetBy(dx: delta, dy: delta),
+        visibleScreen: avoScreen,
+        movementChanged: false,
+        monotonicNow: pdClock)
+}
+check("T-pd1 可见panel静止sub-6px target反复抑制：frame不变/返回true/无动画源",
+      pdSuppressRoundsShown
+        && avoFrameNear(pdSuppressDock.frame, pdSuppressOriginal)
+        && pdLinks.count == pdSuppressLinksBefore
+        && pdTimers.isEmpty,
+      "visible=\(pdSuppressDock.isVisible) original=\(pdSuppressOriginal) "
+        + "actual=\(pdSuppressDock.frame) links=\(pdLinks.count - pdSuppressLinksBefore)")
+pdSuppressDock.hideIfNeeded()
+
+// 恰达 6px 必须接纳；接纳后的 200ms glide 即使剩余距离降到 sub-6px 也不得被截停。
+pdClock = 61
+let pdBoundaryDock = pdMakeDock()
+_ = pdBoundaryDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdBoundaryDock.showIfNeeded()
+let pdBoundaryOriginal = pdBoundaryDock.frame
+let pdBoundaryPet = avoPet.offsetBy(dx: 6, dy: 0)
+let pdBoundaryTarget = pdTarget(pet: pdBoundaryPet, dock: pdBoundaryDock)
+let pdBoundaryLinksBefore = pdLinks.count
+pdClock = 61.1
+let pdBoundaryShown = pdBoundaryDock.placeBelow(
+    petQuartzRect: pdBoundaryPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdClock = 61.2
+_ = pdBoundaryDock.placeBelow(
+    petQuartzRect: pdBoundaryPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+let pdBoundaryMid = pdBoundaryDock.frame
+pdClock = 61.21
+_ = pdBoundaryDock.placeBelow(
+    petQuartzRect: pdBoundaryPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdClock = 61.31
+pdLinks.last?.fire()
+check("T-pd2 target delta恰6px：接纳并完整走既有200ms glide",
+      pdBoundaryShown
+        && pdLinks.count == pdBoundaryLinksBefore + 1
+        && between(pdBoundaryMid.origin.x,
+                   pdBoundaryOriginal.origin.x + 1,
+                   pdBoundaryTarget.origin.x - 0.5)
+        && avoFrameNear(pdBoundaryDock.frame, pdBoundaryTarget)
+        && pdLinks.last?.invalidated == true,
+      "original=\(pdBoundaryOriginal) mid=\(pdBoundaryMid) "
+        + "final=\(pdBoundaryDock.frame) target=\(pdBoundaryTarget)")
+pdBoundaryDock.hideIfNeeded()
+
+// movementChanged 是权威信号：sub-6px 目标仍走 32ms 线性段，后续 stable round 继续该段。
+pdClock = 62
+let pdMovementDock = pdMakeDock()
+_ = pdMovementDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdMovementDock.showIfNeeded()
+let pdMovementOriginal = pdMovementDock.frame
+let pdMovementPet = avoPet.offsetBy(dx: 4, dy: 0)
+let pdMovementTarget = pdTarget(pet: pdMovementPet, dock: pdMovementDock)
+let pdMovementLinksBefore = pdLinks.count
+pdClock = 62.1
+let pdMovementShown = pdMovementDock.placeBelow(
+    petQuartzRect: pdMovementPet, visibleScreen: avoScreen,
+    movementChanged: true, monotonicNow: pdClock)
+pdClock = 62.116
+_ = pdMovementDock.placeBelow(
+    petQuartzRect: pdMovementPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+let pdMovementMid = pdMovementDock.frame
+pdClock = 62.14
+_ = pdMovementDock.placeBelow(
+    petQuartzRect: pdMovementPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+check("T-pd3 movementChanged=true绕过sub-6px guard并完成32ms linear glide",
+      pdMovementShown
+        && between(pdMovementMid.origin.x,
+                   pdMovementOriginal.origin.x + 0.5,
+                   pdMovementTarget.origin.x - 0.5)
+        && avoFrameNear(pdMovementDock.frame, pdMovementTarget)
+        && pdLinks.count == pdMovementLinksBefore,
+      "original=\(pdMovementOriginal) mid=\(pdMovementMid) "
+        + "final=\(pdMovementDock.frame) target=\(pdMovementTarget)")
+pdMovementDock.hideIfNeeded()
+
+// N 次 suppressed round 后的大位移必须从原始 rendered frame 起段，不得累积被抑制 target。
+pdClock = 63
+let pdNoDriftDock = pdMakeDock()
+_ = pdNoDriftDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdNoDriftDock.showIfNeeded()
+let pdNoDriftOriginal = pdNoDriftDock.frame
+let pdNoDriftLinksBefore = pdLinks.count
+for (index, delta) in [CGFloat(5), 2, 4, 5, 3].enumerated() {
+    pdClock = 63.1 + Double(index) * 0.1
+    _ = pdNoDriftDock.placeBelow(
+        petQuartzRect: avoPet.offsetBy(dx: delta, dy: 0),
+        visibleScreen: avoScreen,
+        movementChanged: false,
+        monotonicNow: pdClock)
+}
+let pdLargePet = avoPet.offsetBy(dx: 12, dy: 0)
+let pdLargeTarget = pdTarget(pet: pdLargePet, dock: pdNoDriftDock)
+pdClock = 63.7
+let pdLargeShown = pdNoDriftDock.placeBelow(
+    petQuartzRect: pdLargePet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdClock = 63.8
+pdLinks.last?.fire()
+let pdLargeMid = pdNoDriftDock.frame
+let pdLargeExpectedMid = avoLerp(
+    pdNoDriftOriginal,
+    pdLargeTarget,
+    CGFloat(DockFrameInterpolator.cubicBezierProgress(0.5)))
+pdClock = 63.91
+pdLinks.last?.fire()
+check("T-pd4 repeated suppressed rounds后large delta从原始frame起段（无累积漂移）",
+      pdLargeShown
+        && pdLinks.count == pdNoDriftLinksBefore + 1
+        && avoFrameNear(pdLargeMid, pdLargeExpectedMid)
+        && avoFrameNear(pdNoDriftDock.frame, pdLargeTarget),
+      "original=\(pdNoDriftOriginal) mid=\(pdLargeMid) "
+        + "expectedMid=\(pdLargeExpectedMid) final=\(pdNoDriftDock.frame)")
+pdNoDriftDock.hideIfNeeded()
+print("\n[placement deadband] \(pass - pdPass) passed, \(fail - pdBase) failed")
+
 
 // ---- T-p1: P1 回归（review-smooth 首轮 P1-1/P1-2；movementChanged 驱动分类）----
 // 症状：分类只认障碍 count/range 时，CS 锚变化（气泡展开/收起：CS 障碍 rect 与
