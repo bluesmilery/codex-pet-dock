@@ -3,7 +3,7 @@ import QuartzCore
 
 extension ContainerPetHeuristics {
     /// 可见底座的最终放置死区：捕获量化造成的 target 双轴位移均小于 6px 时保持当前 frame。
-    /// 真实位移会先穿过 bbox deadband 并越过此门限；已接纳的 movement/avoidance glide 不受影响。
+    /// 容器窗口 origin 变化会绕过此门限；已接纳的 movement/avoidance glide 不受影响。
     static let placementDeadband: CGFloat = 6
 }
 
@@ -307,6 +307,7 @@ final class DockPanel: NSObject {
         avoiding obstacles: [CGRect] = [],
         visibleScreen: NSScreen? = nil,
         movementChanged: Bool = false,
+        windowOriginChanged: Bool = false,
         monotonicNow: TimeInterval = ProcessInfo.processInfo.systemUptime,
         evidence: (any RuntimeEvidenceRecording)? = nil
     ) -> Bool {
@@ -335,14 +336,15 @@ final class DockPanel: NSObject {
         }
         let target = Self.integerPixelTarget(unsnappedTarget)
 
-        // 可见、静止且插值器已 settled 时，抑制双轴均小于 placement deadband 的最终 target。
-        // 该层只挡 capture quantization 造成的可见 micro-hop；真实移动先在 bbox deadband 累计，
-        // 到达这里时会越过门限。抑制时必须把插值器完整 snap 到实际 owner frame，不能只跳过
-        // setFrame，否则隐藏 target/rendered 状态会跨 round 漂移。换屏/无屏安全路径与任何已接纳
-        // 的 movement/avoidance segment 均绕过此 guard，保证 32ms/200ms glide 完整推进。
+        // 可见、容器窗口 origin 未变且插值器已 settled 时，抑制双轴均小于 placement deadband
+        // 的最终 target，不受 movementChanged 影响：idle sprite 的 bbox 尺寸动画会令 Follower
+        // 报 material change，但真实容器窗并未移动。抑制时必须把插值器完整 snap 到实际 owner
+        // frame，不能只跳过 setFrame，否则隐藏 target/rendered 状态会跨 round 漂移。窗口 origin
+        // 变化、换屏/无屏安全路径与任何已接纳的 movement/avoidance segment 均绕过此 guard，
+        // 保证真实拖拽及 32ms/200ms glide 完整推进。
         let ownerFrameBeforePlacement = panel.frame
         let suppressPlacement = panel.isVisible
-            && !movementChanged
+            && !windowOriginChanged
             && hasVisibleScreen
             && !screenChanged
             && !frameInterpolator.isSegmentActive
@@ -351,8 +353,8 @@ final class DockPanel: NSObject {
             && abs(target.origin.y - ownerFrameBeforePlacement.origin.y)
                 < ContainerPetHeuristics.placementDeadband
 
-        // 分类（movementChanged 驱动）：movementChanged（宠物窗口是否实质移动，来自
-        // Follower.shouldSetFrame）是区分“移动”与“内容/障碍/锚变化”的权威信号——
+        // 接纳后的插值分类（movementChanged 驱动）：Follower.shouldSetFrame 区分“移动”与
+        // “内容/障碍/锚变化”；是否接纳 sub-6px target 则由上方 windowOriginChanged guard 决定。
         // 不再用障碍 count/range 分类（CS 锚变化时障碍 rect 与 adjustedPet.maxY 协变，
         // count 与相对范围均不变，会误入移动路径被 snap；动画中 ±1px 锚微变同理截断在途段）。
         // 1. movementChanged=true → 32ms 线性 movement 段（终止在途 avoidance 段与动画源），

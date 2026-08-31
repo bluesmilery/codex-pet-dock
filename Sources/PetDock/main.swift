@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBar: StatusBar?
     private var stationaryAnchor: CGRect?
     private var lastWID: CGWindowID?
+    private var lastPlacementWindowOrigin: CGPoint?
     private var lastMaterialChangeAt: TimeInterval?
     private var dataTimer: Timer?           // 数据刷新（低频：退避间隔）
     private var hasCompletedFirstRefresh = false
@@ -377,19 +378,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // collector 内部 dirty 抑制 + 最小 0.5s 单调节流：无新证据的 tick 零写，
                     // 持续 identity 抖动在窗口内合并、到期由下一次既有 tick 写出）。
                     runtimeEvidence?.flush()
-                } else if viaContainerChannel, let rect = pet {
+                } else if viaContainerChannel, let rect = pet, let container = containerCandidate {
                     // 容器通道放置（R3）：旧障碍窗（气泡/控件/CS）在新宿主结构中已不存在，
                     // 且捕获 bbox 已含宠物+气泡内容 → 障碍恒为空。
                     let scr = Geometry.screenContaining(quartzCenterX: rect.midX, rect.midY)
+                    // 容器窗口 origin 是拖拽权威信号；sprite 在窗内 idle 动画只改变 alpha bbox，
+                    // 不得借 Follower 的 size-material-change 绕过 placement deadband。
+                    let windowOriginChanged = lastPlacementWindowOrigin.map {
+                        $0 != container.bounds.origin
+                    } ?? true
                     let shown = dock.placeBelow(
                         petQuartzRect: rect,
                         avoiding: [],
                         visibleScreen: scr,
                         movementChanged: d.shouldSetFrame,
+                        windowOriginChanged: windowOriginChanged,
                         monotonicNow: followMonotonicNow(),
                         evidence: runtimeEvidence
                     )
                     if shown {
+                        lastPlacementWindowOrigin = container.bounds.origin
                         dock.showIfNeeded()
                         if detail.isVisible { detail.placeBelow(dockFrame: dock.frame, visibleScreen: scr) }
                     } else {

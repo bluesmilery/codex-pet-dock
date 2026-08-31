@@ -1127,8 +1127,8 @@ print("\n[障碍平滑过渡] \(pass - avoPass) passed, \(fail - avoBase) failed
 // ---- T-pd: placement-level deadband（可见 panel 的量化微跳抑制） ----
 // QA-run-12：bbox 8px deadband 已消除持续抖动，但 idle alpha bbox 偶发单边扩 8px，
 // 仍会把 dock target 推动 4px。这里直接穿过生产 DockPanel.placeBelow，并断言真实 panel.frame：
-// 静止 sub-6px target 不写 frame，插值器对齐当前 owner；达到 6px、权威 movementChanged
-// 或此前已接纳的在途 glide 均继续原路径。
+// 同一窗口 origin 的 sub-6px target 不写 frame，插值器对齐当前 owner；达到 6px、窗口
+// origin 变化或此前已接纳的在途 glide 均继续原路径。movementChanged 只分类已接纳的移动。
 let pdBase = fail, pdPass = pass
 check("T-pd0 placementDeadband=6px（严格小于才抑制）",
       ContainerPetHeuristics.placementDeadband == 6,
@@ -1226,7 +1226,8 @@ check("T-pd2 target delta恰6px：接纳并完整走既有200ms glide",
         + "final=\(pdBoundaryDock.frame) target=\(pdBoundaryTarget)")
 pdBoundaryDock.hideIfNeeded()
 
-// movementChanged 是权威信号：sub-6px 目标仍走 32ms 线性段，后续 stable round 继续该段。
+// 窗口 origin 未变时，movementChanged 不得绕过 sub-6px guard（尺寸动画仍会令 Follower
+// 报 material change）；该轮必须保持 owner frame，且不能留下 32ms segment。
 pdClock = 62
 let pdMovementDock = pdMakeDock()
 _ = pdMovementDock.placeBelow(
@@ -1250,16 +1251,50 @@ pdClock = 62.14
 _ = pdMovementDock.placeBelow(
     petQuartzRect: pdMovementPet, visibleScreen: avoScreen,
     movementChanged: false, monotonicNow: pdClock)
-check("T-pd3 movementChanged=true绕过sub-6px guard并完成32ms linear glide",
+check("T-pd3 same-origin movementChanged=true的sub-6px target仍被抑制",
       pdMovementShown
-        && between(pdMovementMid.origin.x,
-                   pdMovementOriginal.origin.x + 0.5,
-                   pdMovementTarget.origin.x - 0.5)
-        && avoFrameNear(pdMovementDock.frame, pdMovementTarget)
+        && avoFrameNear(pdMovementMid, pdMovementOriginal)
+        && avoFrameNear(pdMovementDock.frame, pdMovementOriginal)
         && pdLinks.count == pdMovementLinksBefore,
       "original=\(pdMovementOriginal) mid=\(pdMovementMid) "
         + "final=\(pdMovementDock.frame) target=\(pdMovementTarget)")
 pdMovementDock.hideIfNeeded()
+
+// 容器窗口 origin 变化是拖拽权威信号：即使 target 只有4px，也必须绕过 guard，并沿用
+// movementChanged 对已接纳移动的 32ms linear 分类。
+pdClock = 62.5
+let pdWindowMoveDock = pdMakeDock()
+_ = pdWindowMoveDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdWindowMoveDock.showIfNeeded()
+let pdWindowMoveOriginal = pdWindowMoveDock.frame
+let pdWindowMovePet = avoPet.offsetBy(dx: 4, dy: 0)
+let pdWindowMoveTarget = pdTarget(pet: pdWindowMovePet, dock: pdWindowMoveDock)
+let pdWindowMoveLinksBefore = pdLinks.count
+pdClock = 62.6
+let pdWindowMoveShown = pdWindowMoveDock.placeBelow(
+    petQuartzRect: pdWindowMovePet, visibleScreen: avoScreen,
+    movementChanged: true, windowOriginChanged: true, monotonicNow: pdClock)
+pdClock = 62.616
+_ = pdWindowMoveDock.placeBelow(
+    petQuartzRect: pdWindowMovePet, visibleScreen: avoScreen,
+    movementChanged: false, windowOriginChanged: false, monotonicNow: pdClock)
+let pdWindowMoveMid = pdWindowMoveDock.frame
+pdClock = 62.64
+_ = pdWindowMoveDock.placeBelow(
+    petQuartzRect: pdWindowMovePet, visibleScreen: avoScreen,
+    movementChanged: false, windowOriginChanged: false, monotonicNow: pdClock)
+check("T-pd5 window-origin change绕过sub-6px guard并完成32ms linear glide",
+      pdWindowMoveShown
+        && between(pdWindowMoveMid.origin.x,
+                   pdWindowMoveOriginal.origin.x + 0.5,
+                   pdWindowMoveTarget.origin.x - 0.5)
+        && avoFrameNear(pdWindowMoveDock.frame, pdWindowMoveTarget)
+        && pdLinks.count == pdWindowMoveLinksBefore,
+      "original=\(pdWindowMoveOriginal) mid=\(pdWindowMoveMid) "
+        + "final=\(pdWindowMoveDock.frame) target=\(pdWindowMoveTarget)")
+pdWindowMoveDock.hideIfNeeded()
 
 // N 次 suppressed round 后的大位移必须从原始 rendered frame 起段，不得累积被抑制 target。
 pdClock = 63
@@ -6843,6 +6878,105 @@ check("T-cp91e cross-segment clamp records its exterior display boundary",
         captureWidth: width, captureHeight: height)
 }
 
+// Round-24 生产组合回归：同一容器窗口 origin 下，idle sprite 仅把 alpha bbox 单边扩 8px。
+// Probe 接纳该边界观察，Follower 因 size 变化给出 movementChanged=true；最终 DockPanel
+// owner 仍必须保持原 frame，且后续 follow tick 也不能推进一个被错误创建的 32ms segment。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(119_000))
+    // 靠近窗口右/上外边界使 tracked region 合法 clamp；该几何下源 bbox 单边 +8px 经
+    // 真实 region 重采样后仍达到 Probe 接纳边界，而 dock center 只变化约 5px。
+    let baselineWindowBBox = CGRect(x: 592, y: 0, width: 60, height: 80)
+    let desiredBBox = OSAllocatedUnfairLock(
+        initialState: baselineWindowBBox)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(
+                for: desiredBBox.withLock { $0 }, in: region, outputSize: request.outputSize))
+        })
+    let container = cpContainer(541)
+    let placementWindowOrigin = container.bounds.origin
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    let baselineOutcome = probe.locate(container: container)
+    if case .bounds(let baselineRect) = baselineOutcome {
+        let dock = DockPanel()
+        let baselineDecision = Follower.decide(
+            pet: baselineRect, stationaryAnchor: nil,
+            lastMaterialChangeAt: nil, now: clock.withLock { $0 })
+        _ = dock.placeBelow(
+            petQuartzRect: baselineRect, visibleScreen: avoScreen,
+            movementChanged: baselineDecision.shouldSetFrame,
+            windowOriginChanged: true,
+            monotonicNow: clock.withLock { $0 })
+        dock.showIfNeeded()
+        let ownerBeforeExpansion = dock.frame
+
+        desiredBBox.withLock { $0.size.width += 8 }
+        clock.withLock { $0 += ContainerPetHeuristics.movingCaptureInterval }
+        _ = probe.locate(container: container)
+        _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+        let expandedOutcome = probe.locate(container: container)
+        if case .bounds(let expandedRect) = expandedOutcome {
+            let expandedDecision = Follower.decide(
+                pet: expandedRect,
+                stationaryAnchor: baselineDecision.stationaryAnchor,
+                lastMaterialChangeAt: baselineDecision.lastMaterialChangeAt,
+                now: clock.withLock { $0 })
+            let shown = dock.placeBelow(
+                petQuartzRect: expandedRect, visibleScreen: avoScreen,
+                movementChanged: expandedDecision.shouldSetFrame,
+                windowOriginChanged: false,
+                monotonicNow: clock.withLock { $0 })
+            clock.withLock { $0 += 0.016 }
+            let followDecision = Follower.decide(
+                pet: expandedRect,
+                stationaryAnchor: expandedDecision.stationaryAnchor,
+                lastMaterialChangeAt: expandedDecision.lastMaterialChangeAt,
+                now: clock.withLock { $0 })
+            _ = dock.placeBelow(
+                petQuartzRect: expandedRect, visibleScreen: avoScreen,
+                movementChanged: followDecision.shouldSetFrame,
+                windowOriginChanged: false,
+                monotonicNow: clock.withLock { $0 })
+            let expandedTarget = pdTarget(pet: expandedRect, dock: dock)
+            let oneSidedEightPixelTrigger = desiredBBox.withLock {
+                $0.minX == baselineWindowBBox.minX
+                    && $0.minY == baselineWindowBBox.minY
+                    && $0.maxX == baselineWindowBBox.maxX + 8
+                    && $0.maxY == baselineWindowBBox.maxY
+            }
+            check("T-cp109 same-origin单边8px bbox扩张经Probe→Follower→DockPanel不移动owner",
+                  shown
+                    && container.bounds.origin == placementWindowOrigin
+                    && oneSidedEightPixelTrigger
+                    && abs(expandedRect.width - baselineRect.width - 8) < 2
+                    && expandedDecision.shouldSetFrame
+                    && abs(expandedTarget.origin.x - ownerBeforeExpansion.origin.x)
+                        < ContainerPetHeuristics.placementDeadband
+                    && abs(expandedTarget.origin.y - ownerBeforeExpansion.origin.y)
+                        < ContainerPetHeuristics.placementDeadband
+                    && avoFrameNear(dock.frame, ownerBeforeExpansion),
+                  "baseline=\(baselineRect) expanded=\(expandedRect) "
+                    + "movement=\(expandedDecision.shouldSetFrame) "
+                    + "ownerBefore=\(ownerBeforeExpansion) ownerAfter=\(dock.frame)")
+        } else {
+            check("T-cp109 same-origin单边8px bbox扩张经Probe→Follower→DockPanel不移动owner",
+                  false, "expanded=\(expandedOutcome)")
+        }
+        dock.hideIfNeeded()
+    } else {
+        check("T-cp109 same-origin单边8px bbox扩张经Probe→Follower→DockPanel不移动owner",
+              false, "baseline=\(baselineOutcome)")
+    }
+}
+
 do {
     let clock = OSAllocatedUnfairLock(initialState: TimeInterval(120_000))
     let requests = OSAllocatedUnfairLock(initialState: [ContainerCaptureRequest]())
@@ -7111,6 +7245,9 @@ check("T-cp86 AppDelegate uses one-shot wiring, no shutdown callback, and keeps 
       !cpMainSource.contains("transport: .managedStream")
         && !cpMainSource.contains("containerProbe.shutdown()")
         && !cpMainSource.contains("onStreamStartFailure:")
+        && cpMainSource.contains("private var lastPlacementWindowOrigin: CGPoint?")
+        && cpMainSource.contains("windowOriginChanged: windowOriginChanged")
+        && cpMainSource.contains("lastPlacementWindowOrigin = container.bounds.origin")
         && cpMainSource.contains("runtimeEvidence?.flush()"), "")
 
 print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")
