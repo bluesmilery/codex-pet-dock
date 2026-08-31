@@ -438,3 +438,24 @@ no-ff merged feature/cs-live-layer-anchor into local dev. Merge SHA 4061f03 is a
 ### Next Steps
 
 - Sensitive scan of merge-base..dev, then full gates, then version bump and GitHub Release after user confirmation of tag/push
+
+
+## Session 18: Release v0.6.0: pet-window-adaptation
+
+**Date**: 2026-08-31
+**Task**: Release v0.6.0: pet-window-adaptation
+**Branch**: `codex/pet-window-adaptation`
+
+### Summary
+
+Container-channel pet tracking for the post-update Codex host: 1Hz region-tracked one-shot capture, 8px bbox + 6px placement deadbands, cubic-Bezier glide; 26 review rounds + 13 QA runs; merged to dev and main, tagged v0.6.0, GitHub release published
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `<pre-rewrite-id>` | (see git log) |
+
+### Status
+
+[OK] **Completed**
