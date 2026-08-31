@@ -727,6 +727,7 @@ let fractionalUnsnappedTarget = Geometry.appKitRectFromQuartz(CGRect(
     height: noScreenInterpolator.dockHeight
 ))
 let integerTarget = DockPanel.integerPixelTarget(fractionalUnsnappedTarget)
+let integerTargetCenterError = abs(integerTarget.midX - fractionalPet.midX)
 let integerTargetDock = DockPanel()
 _ = integerTargetDock.placeBelow(
     petQuartzRect: fractionalPet,
@@ -735,11 +736,15 @@ _ = integerTargetDock.placeBelow(
     monotonicNow: 0
 )
 check("T-ip12 placeBelow 最终 target origin 整数像素 snapping",
-      integerTarget.origin.x == fractionalUnsnappedTarget.origin.x.rounded()
+      fractionalUnsnappedTarget.origin.x == 86.5
+        && integerTarget.origin.x == 87.0
+        && integerTarget.origin.x == fractionalUnsnappedTarget.origin.x.rounded()
         && integerTarget.origin.y == fractionalUnsnappedTarget.origin.y.rounded()
         && integerTarget.size == fractionalUnsnappedTarget.size
+        && integerTargetCenterError <= 0.5
         && rectNear(integerTargetDock.frame, integerTarget, tolerance: 0.001),
-      "unsnapped=\(fractionalUnsnappedTarget) target=\(integerTarget) owner=\(integerTargetDock.frame)")
+      "unsnapped=\(fractionalUnsnappedTarget) target=\(integerTarget) "
+        + "centerError=\(integerTargetCenterError) owner=\(integerTargetDock.frame)")
 print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) failed")
 
 // ---- T-avo: 障碍出现/消失平滑过渡（200ms ease-in-out + DockPanel 自有显示节拍渲染源） ----

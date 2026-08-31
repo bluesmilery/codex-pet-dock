@@ -162,7 +162,8 @@ final class DockPanel: NSObject {
     /// macOS 13 / display link 不可用时的 avoidance 动画渲染 fallback 周期（~60Hz）。
     static let avoidanceFallbackInterval: TimeInterval = 1.0 / 60.0
 
-    /// placeBelow 的最终 target 只对 origin 做整数像素对齐；尺寸合同保持 200x48。
+    /// placeBelow 的最终 target 只对 origin 做整数像素对齐；尺寸合同保持 200x48，
+    /// 水平 pet/dock 中心误差 <= 0.5px（origin 整数舍入的固有上界）。
     static func integerPixelTarget(_ frame: NSRect) -> NSRect {
         NSRect(
             x: frame.origin.x.rounded(),
