@@ -28,6 +28,9 @@ enum ContainerPetHeuristics {
     static let stableCaptureInterval: TimeInterval = 1.0
     /// bbox 变化后的快速节奏（窗内内容移动跟随）。
     static let movingCaptureInterval: TimeInterval = 0.1
+    /// 接纳 bbox 的全局像素死区：现场容器宽约 772px、捕获宽约 121px，故一个捕获像素
+    /// 约映射为 6.4 全局像素；8px 留出约 25% 余量压住 idle alpha bbox 的单像素量化噪声。
+    static let acceptDeadband: CGFloat = 8
     /// bbox 变化后快速节奏的保持时长。
     static let movingHoldDuration: TimeInterval = 2.0
     /// 捕获降采样最长边上限（镜像 BubbleVisibility 降采样模式，无 bubble 阈值耦合）。
@@ -216,6 +219,16 @@ enum ContainerPetChannel {
         let dx = lhs.minX - rhs.minX
         let dy = lhs.minY - rhs.minY
         return (dx * dx + dy * dy).squareRoot() > tolerance
+    }
+
+    /// 首观察总是接纳；之后任一 bbox 边相对上次交付值达到 8px 才成为新观察。
+    /// 比较 min/max 而非 origin/size，确保平移与单边尺寸变化使用同一合同。
+    static func shouldAcceptObservation(_ candidate: CGRect, comparedTo previous: CGRect?) -> Bool {
+        guard let previous else { return true }
+        return abs(candidate.minX - previous.minX) >= ContainerPetHeuristics.acceptDeadband
+            || abs(candidate.minY - previous.minY) >= ContainerPetHeuristics.acceptDeadband
+            || abs(candidate.maxX - previous.maxX) >= ContainerPetHeuristics.acceptDeadband
+            || abs(candidate.maxY - previous.maxY) >= ContainerPetHeuristics.acceptDeadband
     }
 
     /// 区域可能跨显示器；按 tracked region 的全局相交面积选择实际承载内容的显示器。
@@ -563,6 +576,16 @@ final class ContainerPetProbe: Sendable {
                     s.needsFullLocate = true
                     return (false, false, "validation")
                 }
+                // 空/失败/R15 保守保留分支均已在上方处理。有效候选若未越过全局像素死区，
+                // 保留上一份完整 cache/region/cadence 状态，不制造 observation edge 或 wake。
+                guard ContainerPetChannel.shouldAcceptObservation(
+                    observationRect, comparedTo: s.lastDeliveredRect
+                ) else {
+                    // deadband 只抑制观察提交；成功 full locate 或 region 边沿仍必须推进下一轮
+                    // 捕获路由，否则会卡在 full 模式或丢失边沿 fallback。
+                    s.needsFullLocate = needsFullLocateAfterAcceptance
+                    return (false, false, nil)
+                }
                 let firstObservation = s.cached == nil
                 let quantizationTolerance = max(
                     captureRegion.width / CGFloat(stats.captureWidth),
@@ -582,10 +605,8 @@ final class ContainerPetProbe: Sendable {
                 s.regionTracking = ContainerPetChannel.trackedRegion(
                     for: windowBBox, windowSize: scheduledBounds.size)
                 s.needsFullLocate = needsFullLocateAfterAcceptance
-                let changed = ContainerPetChannel.rectMateriallyChanged(
-                    s.lastDeliveredRect, observationRect, tolerance: quantizationTolerance)
-                if changed { s.lastDeliveredRect = observationRect }
-                return (changed, firstObservation, nil)
+                s.lastDeliveredRect = observationRect
+                return (true, firstObservation, nil)
             }
             if let reason = completion.failureReason {
                 Self.captureLogger.log("container capture failure reason=\(reason)")

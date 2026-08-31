@@ -719,6 +719,27 @@ check("T-ip11 RED 持续无screen移动每帧snap且不延续segment",
       abs(noScreenMovedFrame.origin.x - noScreenTargetB.origin.x) < 1.0
         && abs(noScreenStableFrame.origin.x - noScreenTargetB.origin.x) < 1.0,
       "moved=\(noScreenMovedFrame) stable=\(noScreenStableFrame) target=\(noScreenTargetB)")
+let fractionalPet = CGRect(x: 100.25, y: 100.25, width: 172.5, height: 179.5)
+let fractionalUnsnappedTarget = Geometry.appKitRectFromQuartz(CGRect(
+    x: fractionalPet.origin.x + (fractionalPet.width - noScreenInterpolator.dockWidth) / 2,
+    y: fractionalPet.maxY + noScreenInterpolator.gap,
+    width: noScreenInterpolator.dockWidth,
+    height: noScreenInterpolator.dockHeight
+))
+let integerTarget = DockPanel.integerPixelTarget(fractionalUnsnappedTarget)
+let integerTargetDock = DockPanel()
+_ = integerTargetDock.placeBelow(
+    petQuartzRect: fractionalPet,
+    visibleScreen: nil,
+    movementChanged: false,
+    monotonicNow: 0
+)
+check("T-ip12 placeBelow 最终 target origin 整数像素 snapping",
+      integerTarget.origin.x == fractionalUnsnappedTarget.origin.x.rounded()
+        && integerTarget.origin.y == fractionalUnsnappedTarget.origin.y.rounded()
+        && integerTarget.size == fractionalUnsnappedTarget.size
+        && rectNear(integerTargetDock.frame, integerTarget, tolerance: 0.001),
+      "unsnapped=\(fractionalUnsnappedTarget) target=\(integerTarget) owner=\(integerTargetDock.frame)")
 print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) failed")
 
 // ---- T-avo: 障碍出现/消失平滑过渡（200ms ease-in-out + DockPanel 自有显示节拍渲染源） ----
@@ -833,17 +854,17 @@ for avoOffset in [0.05, 0.1, 0.15, 0.2] {
 }
 let avoAppearExpected = [0.05, 0.1, 0.15, 0.2].map {
     avoLerp(avoBaseAppKit, avoAvoidAppKit,
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
 var avoAppearProgressiveOK = avoFrameNear(avoAppearFrames[0], avoBaseAppKit)
 for avoIdx in 0..<4 {
     avoAppearProgressiveOK = avoAppearProgressiveOK
         && avoFrameNear(avoAppearFrames[avoIdx + 1], avoAppearExpected[avoIdx])
 }
-check("T-avo1b 出现：ease-in-out 曲线帧(0.15625/0.5/0.84375/1)渐进且前半慢于线性",
+check("T-avo1b 出现：cubic-Bezier 曲线帧渐进且1/4点慢于线性",
       avoAppearProgressiveOK
-        && DockFrameInterpolator.smoothstep(0.25) > 0
-        && DockFrameInterpolator.smoothstep(0.25) < 0.25,
+        && DockFrameInterpolator.cubicBezierProgress(0.25) > 0
+        && DockFrameInterpolator.cubicBezierProgress(0.25) < 0.25,
       "frames=\(avoAppearFrames)")
 check("T-avo1c 出现：200ms 精确落终点且段完成 invalidate 链接",
       avoFrameNear(avoAppearFrames[4], avoAvoidAppKit)
@@ -863,7 +884,7 @@ for avoOffset in [0.05, 0.1, 0.15, 0.2] {
 }
 let avoVanishExpected = [0.05, 0.1, 0.15, 0.2].map {
     avoLerp(avoAvoidAppKit, avoBaseAppKit,
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
 check("T-avo2 消失：渐进回基础位且完成后 invalidate",
       avoFrameNear(avoVanishFrames[0], avoAvoidAppKit)
@@ -906,7 +927,7 @@ check("T-avo3 障碍纯平移：32ms movement 插值且不启动动画源",
         && avoLinks.count == 2 && avoTimers.isEmpty,
       "start=\(avoMoveStart) mid=\(avoMoveMid) final=\(avoMoveFinal)")
 
-// T-avo4 插值器数学（纯值）：smoothstep 单调、200ms 精确、无过冲、retarget/movement 覆盖/snap。
+// T-avo4 插值器数学（纯值）：cubic-Bezier 单调、200ms 精确、无过冲、retarget/movement 覆盖/snap。
 var avoMath = DockFrameInterpolator()
 _ = avoMath.snap(to: interpA)
 let avoMathStart = avoMath.updateAvoidance(to: interpB, at: 0)
@@ -916,9 +937,9 @@ let avoMathEnd = avoMath.frame(at: DockFrameInterpolator.avoidanceDuration)!
 let avoMathAfterEnd = avoMath.frame(at: DockFrameInterpolator.avoidanceDuration + 0.05)!
 let avoMathEaseExpected = [0.05, 0.1, 0.15].map {
     avoLerp(interpA, interpB,
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
-check("T-avo4a avoidance 数学：smoothstep 单调、200ms 精确到 target、无过冲",
+check("T-avo4a avoidance 数学：cubic-Bezier 单调、200ms 精确到 target、无过冲",
       rectNear(avoMathStart, interpA)
         && avoMathKindActive
         && (0..<3).allSatisfy { rectNear(avoMathEase[$0], avoMathEaseExpected[$0]) }
@@ -928,19 +949,24 @@ check("T-avo4a avoidance 数学：smoothstep 单调、200ms 精确到 target、�
         && rectNear(avoMathEnd, interpB) && avoMath.segmentStartedAt == nil && avoMath.segmentKind == nil
         && rectNear(avoMathAfterEnd, interpB),
       "ease=\(avoMathEase) end=\(avoMathEnd)")
-check("T-avo4b smoothstep：中点=线性中点、1/4点介于 step 与线性之间",
-      DockFrameInterpolator.smoothstep(0.5) == 0.5
-        && DockFrameInterpolator.smoothstep(0.25) > 0
-        && DockFrameInterpolator.smoothstep(0.25) < 0.25
-        && DockFrameInterpolator.smoothstep(0.75) > 0.75
-        && DockFrameInterpolator.smoothstep(0.75) < 1,
-      "s0.25=\(DockFrameInterpolator.smoothstep(0.25))")
+let avoBezierSamples = [0.0, 0.25, 0.5, 0.75, 1.0].map(
+    DockFrameInterpolator.cubicBezierProgress)
+check("T-avo4b cubic-Bezier(0.4,0,0.2,1)：采样单调、端点精确、1/4慢于线性",
+      avoBezierSamples.first == 0
+        && avoBezierSamples.last == 1
+        && zip(avoBezierSamples, avoBezierSamples.dropFirst()).allSatisfy(<)
+        && avoBezierSamples[1] < 0.25
+        && abs(avoBezierSamples[1] - 0.23658736) < 0.000_001
+        && abs(avoBezierSamples[2] - 0.77556131) < 0.000_001
+        && abs(avoBezierSamples[3] - 0.95936774) < 0.000_001,
+      "samples=\(avoBezierSamples)")
 let avoRetargetStarted = avoMath.updateAvoidance(to: interpC, at: 0.3)
 let avoRetargetFrom = avoMath.frame(at: 0.35)!
 let avoRetargetRestart = avoMath.updateAvoidance(to: interpA, at: 0.35)
 let avoRetargetKindActive = avoMath.segmentKind == .avoidance
 let avoRetargetMid = avoMath.frame(at: 0.45)!   // 0.1s/0.2s = 50% ease 中点
-let avoRetargetExpectedMid = avoLerp(avoRetargetFrom, interpA, CGFloat(DockFrameInterpolator.smoothstep(0.5)))
+let avoRetargetExpectedMid = avoLerp(
+    avoRetargetFrom, interpA, CGFloat(DockFrameInterpolator.cubicBezierProgress(0.5)))
 check("T-avo4c 动画中 avoidance retarget：从当前渲染帧起新段（latest-only）",
       rectNear(avoRetargetStarted, interpB) && rectNear(avoRetargetRestart, avoRetargetFrom)
         && rectNear(avoRetargetMid, avoRetargetExpectedMid)
@@ -1066,11 +1092,10 @@ let avoProdHi = max(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y)
 check("T-avo7a 生产组合按钮出现：渐进下移（≥3 中间帧严格递增）且最终精确",
       avoProdShown && avoProdObstacleCounts == [0, 1]
         && avoLinks.count == avoProdLinksBefore + 1
-        // 前三个中间帧必须严格处于两端内部（远离边界）；第四帧处于 95% 采样点，
-        // ease-in-out 尾段天然贴近目标（smoothstep(0.95)≈0.993），像素对齐后可能与
-        // lo+1 重合——只要求严格未达最终值（< hi 且 > lo），最终精确由 frames[5] 断言。
+        // 前三个中间帧必须严格处于两端内部；第四帧已进入 gentle-settle 尾段，
+        // owner 像素对齐后可与终点重合，segment 精确完成由 frames[5] 断言。
         && (1..<4).allSatisfy { avoProdFrames[$0].origin.y > avoProdLo + 1 && avoProdFrames[$0].origin.y < avoProdHi - 1 }
-        && avoProdFrames[4].origin.y > avoProdLo && avoProdFrames[4].origin.y < avoProdHi
+        && avoProdFrames[4].origin.y >= avoProdLo && avoProdFrames[4].origin.y <= avoProdHi
         && (1..<4).allSatisfy {
             abs(avoProdFrames[$0 + 1].origin.y - avoBaseAppKit.origin.y)
                 > abs(avoProdFrames[$0].origin.y - avoBaseAppKit.origin.y)
@@ -1193,7 +1218,7 @@ avoLinks.last?.fire()
 pavoCollapseFrames.append(pavoDock.frame)
 let pavoCollapseExpected = [0.05, 0.1, 0.15, 0.2].map {
     avoLerp(pavoAppKitDockFrame(y: 470), pavoAppKitDockFrame(y: 362),
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
 check("T-p1b 收起(P1-1):count1→1/range0→0/静止→渐进回基础位362(非snap)",
       pavoShapeLog.count == 2
@@ -1204,7 +1229,7 @@ check("T-p1b 收起(P1-1):count1→1/range0→0/静止→渐进回基础位362(�
         && (0..<4).allSatisfy { avoFrameNear(pavoCollapseFrames[$0 + 1], pavoCollapseExpected[$0]) }
         && (1..<4).allSatisfy {
             abs(pavoCollapseFrames[$0].origin.y - pavoAppKitDockFrame(y: 362).origin.y)
-                > abs(pavoCollapseFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 362).origin.y) + 4
+                > abs(pavoCollapseFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 362).origin.y)
         }
         && avoFrameNear(pavoCollapseFrames[4], pavoAppKitDockFrame(y: 362))
         && avoLinks.last?.invalidated == true,
@@ -1229,7 +1254,7 @@ for pavoOffset in [0.05, 0.1, 0.15, 0.21] {
 }
 let pavoExpandExpected = [0.05, 0.1, 0.15, 0.2].map {
     avoLerp(pavoAppKitDockFrame(y: 362), pavoAppKitDockFrame(y: 470),
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
 check("T-p1c 展开(P1-1反向):362→470渐进到位(非snap)",
       pavoShapeLog.count == 2
@@ -1238,7 +1263,7 @@ check("T-p1c 展开(P1-1反向):362→470渐进到位(非snap)",
         && (0..<4).allSatisfy { avoFrameNear(pavoExpandFrames[$0 + 1], pavoExpandExpected[$0]) }
         && (1..<4).allSatisfy {
             abs(pavoExpandFrames[$0].origin.y - pavoAppKitDockFrame(y: 470).origin.y)
-                > abs(pavoExpandFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 470).origin.y) + 4
+                > abs(pavoExpandFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 470).origin.y)
         }
         && avoFrameNear(pavoExpandFrames[4], pavoAppKitDockFrame(y: 470)),
       "shapes=\(pavoShapeLog) frames=\(pavoExpandFrames)")
@@ -1270,7 +1295,7 @@ _ = pav2Dock.placeBelow(petQuartzRect: avoPet.offsetBy(dx: 0, dy: 1), avoiding: 
                       visibleScreen: avoScreen, movementChanged: false, monotonicNow: 45.3)
 let pav2RetargetFrame = pav2Dock.frame
 let pav2ExpectedRetarget = avoLerp(avoAvoidAppKit, pav2Base281AppKit,
-                                 CGFloat(DockFrameInterpolator.smoothstep(0.5)))
+                                 CGFloat(DockFrameInterpolator.cubicBezierProgress(0.5)))
 var pav2Frames = [pav2RetargetFrame]
 var pav2Expected = [pav2ExpectedRetarget]
 for pav2Offset in [0.02, 0.06] {
@@ -1278,7 +1303,8 @@ for pav2Offset in [0.02, 0.06] {
     avoLinks.last?.fire()
     pav2Frames.append(pav2Dock.frame)
     pav2Expected.append(avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
-                              CGFloat(DockFrameInterpolator.smoothstep(pav2Offset / DockFrameInterpolator.avoidanceDuration))))
+                              CGFloat(DockFrameInterpolator.cubicBezierProgress(
+                                pav2Offset / DockFrameInterpolator.avoidanceDuration))))
 }
 avoClock = 45.38
 _ = pav2Dock.placeBelow(petQuartzRect: avoPet.offsetBy(dx: 0, dy: 1), avoiding: [],
@@ -1289,7 +1315,8 @@ for pav2Offset in [0.1] {
     avoLinks.last?.fire()
     pav2Frames.append(pav2Dock.frame)
     pav2Expected.append(avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
-                              CGFloat(DockFrameInterpolator.smoothstep(pav2Offset / DockFrameInterpolator.avoidanceDuration))))
+                              CGFloat(DockFrameInterpolator.cubicBezierProgress(
+                                pav2Offset / DockFrameInterpolator.avoidanceDuration))))
 }
 avoClock = 45.51   // 越过 45.3+0.2 的浮点表示边界；段完成精确落终点
 avoLinks.last?.fire()
@@ -1297,12 +1324,12 @@ pav2Frames.append(pav2Dock.frame)
 pav2Expected.append(pav2Base282AppKit)
 check("T-p1d (P1-2)回落动画中锚+1px→latest-only续接(无snap截断),hold不重置,最终精确",
       avoFrameNear(pav2MidFrame, avoLerp(avoAvoidAppKit, pav2Base281AppKit,
-                                       CGFloat(DockFrameInterpolator.smoothstep(0.4))))
+                                       CGFloat(DockFrameInterpolator.cubicBezierProgress(0.4))))
         && avoFrameNear(pav2RetargetFrame, pav2ExpectedRetarget)
         && abs(pav2RetargetFrame.origin.y - pav2Base282AppKit.origin.y) > 2
         && avoLinks.count == pav2RetargetLinksBefore
         && avoFrameNear(pav2HoldFrame, avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
-                                             CGFloat(DockFrameInterpolator.smoothstep(0.4))))
+                                             CGFloat(DockFrameInterpolator.cubicBezierProgress(0.4))))
         && (0..<5).allSatisfy { avoFrameNear(pav2Frames[$0], pav2Expected[$0]) }
         && avoFrameNear(pav2Frames[4], pav2Base282AppKit)
         && avoLinks.last?.invalidated == true,
@@ -6363,6 +6390,123 @@ do {
           "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
 }
 
+// Repair cycle 5：捕获降采样 772px→约121px，1 capture px≈6.4 global px；8px
+// acceptance deadband 必须压住一像素量化噪声，同时让真实位移累计越界后立即进入 0.1s tier。
+let cpDeadbandBase = CGRect(x: 140, y: 180, width: 80, height: 160)
+check("T-cp104 acceptDeadband=8px 且任一 min/max 边达到阈值即接纳",
+      ContainerPetHeuristics.acceptDeadband == 8
+        && !ContainerPetChannel.shouldAcceptObservation(
+            cpDeadbandBase.offsetBy(dx: 7.99, dy: 0), comparedTo: cpDeadbandBase)
+        && ContainerPetChannel.shouldAcceptObservation(
+            cpDeadbandBase.offsetBy(dx: 8, dy: 0), comparedTo: cpDeadbandBase)
+        && ContainerPetChannel.shouldAcceptObservation(
+            CGRect(x: cpDeadbandBase.minX, y: cpDeadbandBase.minY,
+                   width: cpDeadbandBase.width + 8, height: cpDeadbandBase.height),
+            comparedTo: cpDeadbandBase)
+        && ContainerPetChannel.shouldAcceptObservation(cpDeadbandBase, comparedTo: nil), "")
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(105_000))
+    let desiredBBox = OSAllocatedUnfairLock(
+        initialState: CGRect(x: 40, y: 80, width: 80, height: 160))
+    let edges = OSAllocatedUnfairLock(initialState: 0)
+    let enqueued = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let coalescer = FollowTickCoalescer(
+        enqueue: { item in
+            enqueued.withLock { $0 += 1 }
+            item.perform()
+        },
+        tick: { wakes.withLock { $0 += 1 } })
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(
+                for: desiredBBox.withLock { $0 }, in: region, outputSize: request.outputSize))
+        },
+        onObservationChanged: {
+            edges.withLock { $0 += 1 }
+            coalescer.requestWake()
+        })
+    let containerA = cpContainer(539)
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 1 && wakes.withLock { $0 } == 1
+    }
+    let baselineOutcome = probe.locate(container: containerA)
+    let baselineCache = probe.lock.withLock { $0.cached }
+
+    desiredBBox.withLock { $0.origin.x += 4 }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    check("T-cp105 sub-deadband bbox 保留旧 cache、无 edge/coalesced wake",
+          probe.locate(container: containerA) == baselineOutcome
+            && probe.lock.withLock { $0.cached == baselineCache }
+            && edges.withLock { $0 } == 1
+            && enqueued.withLock { $0 } == 1
+            && wakes.withLock { $0 } == 1,
+          "outcome=\(probe.locate(container: containerA)) edges=\(edges.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+
+    desiredBBox.withLock { $0.origin.x += 8 }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 2 && wakes.withLock { $0 } == 2
+    }
+    let superDeadbandOutcome = probe.locate(container: containerA)
+    check("T-cp106 super-deadband bbox 更新 cache/edge 并武装 moving tier",
+          superDeadbandOutcome != baselineOutcome
+            && probe.lock.withLock {
+                $0.cached != baselineCache && $0.movingUntil > clock.withLock { $0 }
+            }
+            && edges.withLock { $0 } == 2 && wakes.withLock { $0 } == 2,
+          "outcome=\(superDeadbandOutcome) edges=\(edges.withLock { $0 })")
+
+    desiredBBox.withLock { $0.origin.x += 12 }
+    clock.withLock { $0 += ContainerPetHeuristics.movingCaptureInterval }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 3 && wakes.withLock { $0 } == 3
+    }
+    let trackedOutcome = probe.locate(container: containerA)
+    check("T-cp107 真实移动越过8px后以0.1s tier继续更新",
+          trackedOutcome != superDeadbandOutcome
+            && edges.withLock { $0 } == 3 && wakes.withLock { $0 } == 3,
+          "before=\(superDeadbandOutcome) after=\(trackedOutcome)")
+
+    desiredBBox.withLock { $0.origin.x += 4 }
+    probe.reset()
+    clock.withLock { $0 += 1 }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 4 && wakes.withLock { $0 } == 4
+    }
+    let resetOutcome = probe.locate(container: containerA)
+    desiredBBox.withLock { $0.origin.x += 4 }
+    clock.withLock { $0 += 1 }
+    _ = probe.locate(container: cpContainer(540))
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 5 && wakes.withLock { $0 } == 5
+    }
+    let widOutcome = probe.locate(container: cpContainer(540))
+    check("T-cp108 reset/WID 新 episode 绕过 deadband 并接纳首观察",
+          resetOutcome != .empty && widOutcome != .empty
+            && resetOutcome != widOutcome
+            && edges.withLock { $0 } == 5 && wakes.withLock { $0 } == 5,
+          "reset=\(resetOutcome) wid=\(widOutcome) edges=\(edges.withLock { $0 })")
+}
+
 // ---- C8 option 1 cadence：region-tracked one-shot 稳定重捕为 1.0s（R7-amended，fake monotonic clock）。
 check("T-cp80 stableCaptureInterval=1.0(R7-amended)",
       ContainerPetHeuristics.stableCaptureInterval == 1.0, "")
@@ -6695,15 +6839,16 @@ do {
     let container = cpContainer(538)
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    let initialCachedRegion = probe.lock.withLock { $0.cachedCaptureRegion }
     clock.withLock { $0 += 0.33 }
     _ = probe.locate(container: container)
     _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
     let firstReturnedRegion = returnedRegion.withLock { $0 }
-    check("T-cp101 clamped cross-segment capture is accepted when bbox stays inside clamp",
+    check("T-cp101 clamped cross-segment sub-deadband bbox 保留旧 cache 且维持 region 模式",
           probe.lock.withLock {
-              $0.cachedCaptureRegion == firstReturnedRegion
+              $0.cachedCaptureRegion == initialCachedRegion
                 && !$0.needsFullLocate
-          } && requests.withLock {
+          } && firstReturnedRegion != nil && requests.withLock {
               guard case .region = $0.last?.round else { return false }
               return true
           }, "requests=\(requests.withLock { $0 })")
