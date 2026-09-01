@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/macos/quality-guidelines.md", "reason": "formal review of production-chain evidence, baseline validity, and P0/P1/P2 gates"}
+{"file": ".trellis/spec/macos/privacy-guidelines.md", "reason": "review telemetry and alpha-processing privacy boundaries"}
+{"file": ".trellis/spec/macos/appkit-conventions.md", "reason": "review main-thread placement and actual DockPanel frame ownership"}
+{"file": ".trellis/tasks/09-01-fix-dock-visibility-menu/research/ac-evidence-topology.md", "reason": "review every acceptance criterion against frozen candidate evidence"}
