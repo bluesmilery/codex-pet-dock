@@ -3,9 +3,9 @@ index c31b036..6932902 100644
 --- a/tests/main.swift
 +++ b/tests/main.swift
 @@ -7267,5 +7267,208 @@ check("T-cp86b primary channel forwards window-origin changes and resets its ori
- 
+
  print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")
- 
+
 +// ============================================================
 +// C8 菜单误跟随路由（09-01 fix-dock-visibility-menu）— baseline-only regression
 +// 症状：宿主新结构（无独立 Mascot，宠物在容器内）+ 右键菜单等临时小窗出现时，

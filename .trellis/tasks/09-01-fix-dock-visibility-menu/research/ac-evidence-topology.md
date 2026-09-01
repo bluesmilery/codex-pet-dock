@@ -9,7 +9,7 @@
 >
 > Baseline red provenance: the replayable, non-executable test-only artifact is
 > `research/baseline-red-tests-only.patch` (sha256
-> `7a625c070b14a1c6ba3dd3034a0369e28d28ab31f8fc2b5583ab0bae3ef95f04`), generated
+> `38d5e54e466d749ffdccc780bfac5d481de99c00554b19979059912fadc085a9`), generated
 > relative to the approved base and touching only `tests/main.swift` (+203 lines).
 > It contains no `PetSourceRouter` / `SelectionResult.source` usage. Do NOT apply the
 > current candidate `tests/main.swift` diff to the base — it compile-depends on the new
@@ -32,7 +32,10 @@
 ```text
 git worktree add --detach <tmp-baseline-gen> <pre-rewrite-id>
 # insert baseline-only C8 block into <tmp-baseline-gen>/tests/main.swift (old base tick order mirror,
-# no new API), then: git -C <tmp-baseline-gen> diff -- tests/main.swift > research/baseline-red-tests-only.patch
+# no new API), then generate the artifact with trailing whitespace stripped from the patch
+# file itself (keeps standard diff context; git diff --check clean; applied result byte-identical
+# to the unstripped diff):
+#   git -C <tmp-baseline-gen> diff -- tests/main.swift | sed 's/[[:space:]]*$//' > research/baseline-red-tests-only.patch
 git worktree add --detach <tmp-baseline-replay> <pre-rewrite-id>
 git -C <tmp-baseline-replay> apply --check research/baseline-red-tests-only.patch   # ok
 git -C <tmp-baseline-replay> apply research/baseline-red-tests-only.patch          # +203 lines, only tests/main.swift
@@ -40,10 +43,15 @@ cmp <tmp-baseline-gen>/tests/main.swift <tmp-baseline-replay>/tests/main.swift  
 make -C <tmp-baseline-replay> test-ui PYTHON=<project-python>
 ```
 
+`<project-python>` is a sanitized placeholder for the shared project virtualenv
+interpreter of the main working tree; this run used that project `.venv` exactly, and
+no absolute local path is recorded here.
+
 Actual replay result: **exit 2**; `=== 总计 557 passed, 2 failed ===`; failing checks:
 `T-mr0b 菜单打开` (frame `(660,420)` == menu-expected, selected=[nil,nil,541]) and
 `T-mr0c 菜单关闭` (frame jumps back to `(80,690)`); `T-mr0a` and all 556 pre-existing
-checks green. Both temp worktrees removed afterwards (`git worktree remove --force`,
+checks green. Re-verified unchanged (same counts and failing checks) after the
+whitespace-only artifact fix. Both temp worktrees removed afterwards (`git worktree remove --force`,
 dirty state was only the patch-applied `tests/main.swift`, byte-preserved in the artifact).
 
 ## Trigger provenance note
