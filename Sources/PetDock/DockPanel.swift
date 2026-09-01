@@ -1,6 +1,12 @@
 import Cocoa
 import QuartzCore
 
+extension ContainerPetHeuristics {
+    /// 可见底座的最终放置死区：捕获量化造成的 target 双轴位移均小于 6px 时保持当前 frame。
+    /// 容器窗口 origin 变化会绕过此门限；已接纳的 movement/avoidance glide 不受影响。
+    static let placementDeadband: CGFloat = 6
+}
+
 /// 底座 frame 的 latest-only 插值状态。
 /// 只保存当前渲染值与一个在途 segment；没有 Timer、动画队列或预测目标。
 /// segment 分两类：movement（宠物窗口实质移动的拖动跟随，32ms 线性）与 avoidance（静止时
@@ -22,6 +28,9 @@ struct DockFrameInterpolator {
         segmentKind == .avoidance && segmentStartedAt != nil
     }
 
+    /// 已接纳的 movement / avoidance 段必须完整推进，不能被后续 placement deadband 截停。
+    var isSegmentActive: Bool { segmentStartedAt != nil }
+
     mutating func reset() {
         renderedFrame = nil
         segmentStartFrame = nil
@@ -41,7 +50,7 @@ struct DockFrameInterpolator {
     }
 
     /// 取得当前 segment 的值；时间只接受单调时钟，进度始终 clamp 在 [0, 1]。
-    /// movement 段线性；avoidance 段 smoothstep ease-in-out；达到时长后精确落目标并清段。
+    /// movement 段线性；avoidance 段 cubic-Bezier ease-in-out；达到时长后精确落目标并清段。
     mutating func frame(at now: TimeInterval) -> NSRect? {
         guard renderedFrame != nil,
               let start = segmentStartFrame,
@@ -66,7 +75,7 @@ struct DockFrameInterpolator {
         }
         let elapsed = now - startedAt
         let rawProgress = min(max(elapsed / duration, 0), 1)
-        let progress = kind == .avoidance ? Self.smoothstep(rawProgress) : rawProgress
+        let progress = kind == .avoidance ? Self.cubicBezierProgress(rawProgress) : rawProgress
         let sampled = Self.interpolate(start: start, target: target, progress: progress)
         self.renderedFrame = sampled
         return sampled
@@ -117,9 +126,28 @@ struct DockFrameInterpolator {
         return current
     }
 
-    /// smoothstep ease-in-out（3p²−2p³），纯函数可测；t 已 clamp 在 [0, 1]。
-    static func smoothstep(_ t: Double) -> Double {
-        t * t * (3 - 2 * t)
+    /// 固定 cubic-Bezier(0.4, 0, 0.2, 1) 的 Y-for-X 采样。
+    /// x(u) 单调，使用固定 24 轮二分求参数 u；动画频率下成本可忽略且无状态、可复现。
+    static func cubicBezierProgress(_ t: Double) -> Double {
+        let x = min(max(t, 0), 1)
+        if x == 0 { return 0 }
+        if x == 1 { return 1 }
+        var lower = 0.0
+        var upper = 1.0
+        for _ in 0..<24 {
+            let u = (lower + upper) / 2
+            let oneMinusU = 1 - u
+            let sampledX = 3 * oneMinusU * oneMinusU * u * 0.4
+                + 3 * oneMinusU * u * u * 0.2
+                + u * u * u
+            if sampledX < x {
+                lower = u
+            } else {
+                upper = u
+            }
+        }
+        let u = (lower + upper) / 2
+        return 3 * (1 - u) * u * u + u * u * u
     }
 
     private static func interpolate(start: NSRect, target: NSRect, progress: Double) -> NSRect {
@@ -142,6 +170,17 @@ final class DockPanel: NSObject {
 
     /// macOS 13 / display link 不可用时的 avoidance 动画渲染 fallback 周期（~60Hz）。
     static let avoidanceFallbackInterval: TimeInterval = 1.0 / 60.0
+
+    /// placeBelow 的最终 target 只对 origin 做整数像素对齐；尺寸合同保持 200x48，
+    /// 水平 pet/dock 中心误差 <= 0.5px（origin 整数舍入的固有上界）。
+    static func integerPixelTarget(_ frame: NSRect) -> NSRect {
+        NSRect(
+            x: frame.origin.x.rounded(),
+            y: frame.origin.y.rounded(),
+            width: frame.width,
+            height: frame.height
+        )
+    }
 
     let dockHeight: CGFloat = 48
     let gap: CGFloat = 2
@@ -268,6 +307,7 @@ final class DockPanel: NSObject {
         avoiding obstacles: [CGRect] = [],
         visibleScreen: NSScreen? = nil,
         movementChanged: Bool = false,
+        windowOriginChanged: Bool = false,
         monotonicNow: TimeInterval = ProcessInfo.processInfo.systemUptime,
         evidence: (any RuntimeEvidenceRecording)? = nil
     ) -> Bool {
@@ -281,36 +321,63 @@ final class DockPanel: NSObject {
         }
         lastVisibleScreenID = screenID
 
-        let target: NSRect
+        let unsnappedTarget: NSRect
         if obstacles.isEmpty && visibleScreen == nil {
             let dw = dockWidth, dh = dockHeight
             let dx = pet.origin.x + (pet.width - dw) / 2          // 按 pet 中心对齐（dw 固定 200）
             let dy = pet.origin.y + pet.height + gap
-            target = Geometry.appKitRectFromQuartz(CGRect(x: dx, y: dy, width: dw, height: dh))
+            unsnappedTarget = Geometry.appKitRectFromQuartz(
+                CGRect(x: dx, y: dy, width: dw, height: dh))
         } else {
             let r = Geometry.safeDockFrame(pet: pet, avoiding: obstacles,
                                            dockSize: CGSize(width: dockWidth, height: dockHeight), gap: gap, screen: visibleScreen)
             guard let q = r.frame else { hideIfNeeded(); return false }
-            target = Geometry.appKitRectFromQuartz(q)
+            unsnappedTarget = Geometry.appKitRectFromQuartz(q)
         }
+        let target = Self.integerPixelTarget(unsnappedTarget)
 
-        // 分类（movementChanged 驱动）：movementChanged（宠物窗口是否实质移动，来自
-        // Follower.shouldSetFrame）是区分“移动”与“内容/障碍/锚变化”的权威信号——
+        // 可见、容器窗口 origin 未变且插值器已 settled 时，抑制双轴均小于 placement deadband
+        // 的最终 target，不受 movementChanged 影响：idle sprite 的 bbox 尺寸动画会令 Follower
+        // 报 material change，但真实容器窗并未移动。抑制时必须把插值器完整 snap 到实际 owner
+        // frame，不能只跳过 setFrame，否则隐藏 target/rendered 状态会跨 round 漂移。窗口 origin
+        // 变化、换屏/无屏安全路径与任何已接纳的 movement/avoidance segment 均绕过此 guard，
+        // 保证真实拖拽及 32ms/200ms glide 完整推进。
+        let ownerFrameBeforePlacement = panel.frame
+        let suppressPlacement = panel.isVisible
+            && !windowOriginChanged
+            && hasVisibleScreen
+            && !screenChanged
+            && !frameInterpolator.isSegmentActive
+            && abs(target.origin.x - ownerFrameBeforePlacement.origin.x)
+                < ContainerPetHeuristics.placementDeadband
+            && abs(target.origin.y - ownerFrameBeforePlacement.origin.y)
+                < ContainerPetHeuristics.placementDeadband
+
+        // 接纳后的插值分类（movementChanged 驱动）：Follower.shouldSetFrame 区分“移动”与
+        // “内容/障碍/锚变化”；是否接纳 sub-6px target 则由上方 windowOriginChanged guard 决定。
         // 不再用障碍 count/range 分类（CS 锚变化时障碍 rect 与 adjustedPet.maxY 协变，
         // count 与相对范围均不变，会误入移动路径被 snap；动画中 ±1px 锚微变同理截断在途段）。
         // 1. movementChanged=true → 32ms 线性 movement 段（终止在途 avoidance 段与动画源），
         //    覆盖拖动（含拖动中障碍平移、拖动中按钮出现，32ms 快速跟随优于 snap）；
-        // 2. movementChanged=false 且目标变化 → updateAvoidance 200ms smoothstep：无在途段
+        // 2. movementChanged=false 且目标变化 → updateAvoidance 200ms cubic-Bezier：无在途段
         //    起段+起动画源，有在途段 latest-only retarget 平滑续接（CS 锚变化自然落入）；
         // 3. movementChanged=false 且目标不变 → hold（在途段继续，由动画源/跟随节拍渲染）。
         // 安全路径（无屏/换屏/首显/隐藏/越界）经上方 reset 后两个入口均立即 snap 并失效动画源。
         let frame: NSRect
-        if movementChanged && hasVisibleScreen && !screenChanged {
+        let shouldWriteFrame: Bool
+        if suppressPlacement {
+            frame = frameInterpolator.snap(to: ownerFrameBeforePlacement)
+            shouldWriteFrame = false
+        } else if movementChanged && hasVisibleScreen && !screenChanged {
             frame = frameInterpolator.update(to: target, at: monotonicNow)
+            shouldWriteFrame = true
         } else {
             frame = frameInterpolator.updateAvoidance(to: target, at: monotonicNow)
+            shouldWriteFrame = true
         }
-        panel.setFrame(frame, display: true)
+        if shouldWriteFrame {
+            panel.setFrame(frame, display: true)
+        }
         // Owner read-back：setFrame 会做像素对齐等状态修正，请求值不等于最终 owner 状态；
         // dy telemetry 只消费写回后的真实 panel.frame（插值状态继续使用请求值，布局行为不变）。
         let ownerFrame = panel.frame

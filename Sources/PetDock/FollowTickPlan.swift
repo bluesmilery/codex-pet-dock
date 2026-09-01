@@ -452,4 +452,76 @@ enum FollowTickPlanner {
             petDisappeared: !input.petVisible
         )
     }
+
+    /// 容器回退通道在消失分支的 reset 门控（2026-08-28 QA P0 修复）。
+    /// 容器候选在场时，hidden tick 只表示「捕获在途或尚未被接受」——此时 reset 会递增
+    /// generation 并作废每次在途捕获，通道永远无法产出首个观察（饥饿）；WID 重用/宿主
+    /// 重启的身份失效已由 ContainerPetProbe 的 wid-change generation 语义承担。
+    /// 因此仅当本 tick 无可行容器候选（容器真消失）才允许 reset。
+    static func containerProbeReset(containerCandidatePresent: Bool) -> Bool {
+        !containerCandidatePresent
+    }
+}
+
+// MARK: - 宠物来源路由（R2/R3：strong Mascot → 容器 → 仅无容器时 generic → none）
+
+/// 一次 tick 的唯一宠物来源。生产 AppDelegate.tick 与测试必须消费同一结果，
+/// 不在各自分支里重复排序优先级。
+enum PetSourceRoute {
+    /// 主通道窗口：strong Mascot（走 FollowLayoutPass 气泡/控件/CS 链路），或无容器
+    /// 候选时保留的 generic 小窗口回退（旧宿主无 Mascot title 的兼容路径）。
+    case primary(WinCandidate)
+    /// 容器候选在场 → 容器通道；宠物矩形由 ContainerPetProbe 的已接受观察决定，
+    /// 尚未接受时保持 hidden 等待既有 observation callback 唤醒（不允许临时窗口接管）。
+    case container(WinCandidate)
+    /// 无可行来源 → 隐藏底座。
+    case none
+
+    /// 诊断标签（匿名枚举名，不含 wid/PID/title/坐标）。
+    var label: String {
+        switch self {
+        case .primary: return "primary"
+        case .container: return "container"
+        case .none: return "none"
+        }
+    }
+
+    /// --diagnose 最终通道文本（与运行时同优先级的脱敏来源枚举标签；不含 wid/PID/title/坐标）。
+    /// containerObservation 只区分容器观察已接受/在途，不改变路由本身。
+    func diagnoseChannel(source: PrimarySelectionSource, containerObservation: Bool) -> String {
+        switch self {
+        case .primary:
+            return source == .strongMascot ? "primary(strong Mascot)" : "primary(generic 几何回退)"
+        case .container where containerObservation:
+            return "container(合成宠物矩形已生成，坐标不记录)"
+        case .container:
+            return "container(捕获在途/未通过验证，生产保持 hidden 等待回调)"
+        case .none:
+            return "none"
+        }
+    }
+}
+
+/// 单一宠物来源解析器：候选快照 → 本 tick 唯一宠物来源。
+/// 右键菜单、子菜单等与宠物无关的临时窗口只会出现在 generic 几何回退里；容器候选
+/// 在场时它们既不能成为宠物矩形，也不能污染 lastWID 滞回（消费方按 route 写 lastWID）。
+enum PetSourceRouter {
+    static func resolve(
+        primary: SelectionResult,
+        containerCandidate: WinCandidate?
+    ) -> PetSourceRoute {
+        // 1. strong primary：独立 Mascot 身份永远优先（R1 主通道回归保护）。
+        if primary.source == .strongMascot, let window = primary.selected {
+            return .primary(window)
+        }
+        // 2. 容器候选在场 → 容器通道（R2/R3）：generic 几何回退（含临时菜单）不得接管。
+        if let container = containerCandidate {
+            return .container(container)
+        }
+        // 3. 仅无容器候选时保留 generic 回退（旧宿主无 Mascot title 的兼容路径）。
+        if primary.source == .genericWindow, let window = primary.selected {
+            return .primary(window)
+        }
+        return .none
+    }
 }

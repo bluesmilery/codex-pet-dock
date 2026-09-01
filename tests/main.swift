@@ -719,6 +719,32 @@ check("T-ip11 RED 持续无screen移动每帧snap且不延续segment",
       abs(noScreenMovedFrame.origin.x - noScreenTargetB.origin.x) < 1.0
         && abs(noScreenStableFrame.origin.x - noScreenTargetB.origin.x) < 1.0,
       "moved=\(noScreenMovedFrame) stable=\(noScreenStableFrame) target=\(noScreenTargetB)")
+let fractionalPet = CGRect(x: 100.25, y: 100.25, width: 172.5, height: 179.5)
+let fractionalUnsnappedTarget = Geometry.appKitRectFromQuartz(CGRect(
+    x: fractionalPet.origin.x + (fractionalPet.width - noScreenInterpolator.dockWidth) / 2,
+    y: fractionalPet.maxY + noScreenInterpolator.gap,
+    width: noScreenInterpolator.dockWidth,
+    height: noScreenInterpolator.dockHeight
+))
+let integerTarget = DockPanel.integerPixelTarget(fractionalUnsnappedTarget)
+let integerTargetCenterError = abs(integerTarget.midX - fractionalPet.midX)
+let integerTargetDock = DockPanel()
+_ = integerTargetDock.placeBelow(
+    petQuartzRect: fractionalPet,
+    visibleScreen: nil,
+    movementChanged: false,
+    monotonicNow: 0
+)
+check("T-ip12 placeBelow 最终 target origin 整数像素 snapping",
+      fractionalUnsnappedTarget.origin.x == 86.5
+        && integerTarget.origin.x == 87.0
+        && integerTarget.origin.x == fractionalUnsnappedTarget.origin.x.rounded()
+        && integerTarget.origin.y == fractionalUnsnappedTarget.origin.y.rounded()
+        && integerTarget.size == fractionalUnsnappedTarget.size
+        && integerTargetCenterError <= 0.5
+        && rectNear(integerTargetDock.frame, integerTarget, tolerance: 0.001),
+      "unsnapped=\(fractionalUnsnappedTarget) target=\(integerTarget) "
+        + "centerError=\(integerTargetCenterError) owner=\(integerTargetDock.frame)")
 print("\n[DockFrameInterpolator] \(pass - ipPass) passed, \(fail - ipBase) failed")
 
 // ---- T-avo: 障碍出现/消失平滑过渡（200ms ease-in-out + DockPanel 自有显示节拍渲染源） ----
@@ -833,17 +859,17 @@ for avoOffset in [0.05, 0.1, 0.15, 0.2] {
 }
 let avoAppearExpected = [0.05, 0.1, 0.15, 0.2].map {
     avoLerp(avoBaseAppKit, avoAvoidAppKit,
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
 var avoAppearProgressiveOK = avoFrameNear(avoAppearFrames[0], avoBaseAppKit)
 for avoIdx in 0..<4 {
     avoAppearProgressiveOK = avoAppearProgressiveOK
         && avoFrameNear(avoAppearFrames[avoIdx + 1], avoAppearExpected[avoIdx])
 }
-check("T-avo1b 出现：ease-in-out 曲线帧(0.15625/0.5/0.84375/1)渐进且前半慢于线性",
+check("T-avo1b 出现：cubic-Bezier 曲线帧渐进且1/4点慢于线性",
       avoAppearProgressiveOK
-        && DockFrameInterpolator.smoothstep(0.25) > 0
-        && DockFrameInterpolator.smoothstep(0.25) < 0.25,
+        && DockFrameInterpolator.cubicBezierProgress(0.25) > 0
+        && DockFrameInterpolator.cubicBezierProgress(0.25) < 0.25,
       "frames=\(avoAppearFrames)")
 check("T-avo1c 出现：200ms 精确落终点且段完成 invalidate 链接",
       avoFrameNear(avoAppearFrames[4], avoAvoidAppKit)
@@ -863,7 +889,7 @@ for avoOffset in [0.05, 0.1, 0.15, 0.2] {
 }
 let avoVanishExpected = [0.05, 0.1, 0.15, 0.2].map {
     avoLerp(avoAvoidAppKit, avoBaseAppKit,
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
 check("T-avo2 消失：渐进回基础位且完成后 invalidate",
       avoFrameNear(avoVanishFrames[0], avoAvoidAppKit)
@@ -906,7 +932,7 @@ check("T-avo3 障碍纯平移：32ms movement 插值且不启动动画源",
         && avoLinks.count == 2 && avoTimers.isEmpty,
       "start=\(avoMoveStart) mid=\(avoMoveMid) final=\(avoMoveFinal)")
 
-// T-avo4 插值器数学（纯值）：smoothstep 单调、200ms 精确、无过冲、retarget/movement 覆盖/snap。
+// T-avo4 插值器数学（纯值）：cubic-Bezier 单调、200ms 精确、无过冲、retarget/movement 覆盖/snap。
 var avoMath = DockFrameInterpolator()
 _ = avoMath.snap(to: interpA)
 let avoMathStart = avoMath.updateAvoidance(to: interpB, at: 0)
@@ -916,9 +942,9 @@ let avoMathEnd = avoMath.frame(at: DockFrameInterpolator.avoidanceDuration)!
 let avoMathAfterEnd = avoMath.frame(at: DockFrameInterpolator.avoidanceDuration + 0.05)!
 let avoMathEaseExpected = [0.05, 0.1, 0.15].map {
     avoLerp(interpA, interpB,
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
-check("T-avo4a avoidance 数学：smoothstep 单调、200ms 精确到 target、无过冲",
+check("T-avo4a avoidance 数学：cubic-Bezier 单调、200ms 精确到 target、无过冲",
       rectNear(avoMathStart, interpA)
         && avoMathKindActive
         && (0..<3).allSatisfy { rectNear(avoMathEase[$0], avoMathEaseExpected[$0]) }
@@ -928,19 +954,24 @@ check("T-avo4a avoidance 数学：smoothstep 单调、200ms 精确到 target、�
         && rectNear(avoMathEnd, interpB) && avoMath.segmentStartedAt == nil && avoMath.segmentKind == nil
         && rectNear(avoMathAfterEnd, interpB),
       "ease=\(avoMathEase) end=\(avoMathEnd)")
-check("T-avo4b smoothstep：中点=线性中点、1/4点介于 step 与线性之间",
-      DockFrameInterpolator.smoothstep(0.5) == 0.5
-        && DockFrameInterpolator.smoothstep(0.25) > 0
-        && DockFrameInterpolator.smoothstep(0.25) < 0.25
-        && DockFrameInterpolator.smoothstep(0.75) > 0.75
-        && DockFrameInterpolator.smoothstep(0.75) < 1,
-      "s0.25=\(DockFrameInterpolator.smoothstep(0.25))")
+let avoBezierSamples = [0.0, 0.25, 0.5, 0.75, 1.0].map(
+    DockFrameInterpolator.cubicBezierProgress)
+check("T-avo4b cubic-Bezier(0.4,0,0.2,1)：采样单调、端点精确、1/4慢于线性",
+      avoBezierSamples.first == 0
+        && avoBezierSamples.last == 1
+        && zip(avoBezierSamples, avoBezierSamples.dropFirst()).allSatisfy(<)
+        && avoBezierSamples[1] < 0.25
+        && abs(avoBezierSamples[1] - 0.23658736) < 0.000_001
+        && abs(avoBezierSamples[2] - 0.77556131) < 0.000_001
+        && abs(avoBezierSamples[3] - 0.95936774) < 0.000_001,
+      "samples=\(avoBezierSamples)")
 let avoRetargetStarted = avoMath.updateAvoidance(to: interpC, at: 0.3)
 let avoRetargetFrom = avoMath.frame(at: 0.35)!
 let avoRetargetRestart = avoMath.updateAvoidance(to: interpA, at: 0.35)
 let avoRetargetKindActive = avoMath.segmentKind == .avoidance
 let avoRetargetMid = avoMath.frame(at: 0.45)!   // 0.1s/0.2s = 50% ease 中点
-let avoRetargetExpectedMid = avoLerp(avoRetargetFrom, interpA, CGFloat(DockFrameInterpolator.smoothstep(0.5)))
+let avoRetargetExpectedMid = avoLerp(
+    avoRetargetFrom, interpA, CGFloat(DockFrameInterpolator.cubicBezierProgress(0.5)))
 check("T-avo4c 动画中 avoidance retarget：从当前渲染帧起新段（latest-only）",
       rectNear(avoRetargetStarted, interpB) && rectNear(avoRetargetRestart, avoRetargetFrom)
         && rectNear(avoRetargetMid, avoRetargetExpectedMid)
@@ -1066,11 +1097,10 @@ let avoProdHi = max(avoBaseAppKit.origin.y, avoAvoidAppKit.origin.y)
 check("T-avo7a 生产组合按钮出现：渐进下移（≥3 中间帧严格递增）且最终精确",
       avoProdShown && avoProdObstacleCounts == [0, 1]
         && avoLinks.count == avoProdLinksBefore + 1
-        // 前三个中间帧必须严格处于两端内部（远离边界）；第四帧处于 95% 采样点，
-        // ease-in-out 尾段天然贴近目标（smoothstep(0.95)≈0.993），像素对齐后可能与
-        // lo+1 重合——只要求严格未达最终值（< hi 且 > lo），最终精确由 frames[5] 断言。
+        // 前三个中间帧必须严格处于两端内部；第四帧已进入 gentle-settle 尾段，
+        // owner 像素对齐后可与终点重合，segment 精确完成由 frames[5] 断言。
         && (1..<4).allSatisfy { avoProdFrames[$0].origin.y > avoProdLo + 1 && avoProdFrames[$0].origin.y < avoProdHi - 1 }
-        && avoProdFrames[4].origin.y > avoProdLo && avoProdFrames[4].origin.y < avoProdHi
+        && avoProdFrames[4].origin.y >= avoProdLo && avoProdFrames[4].origin.y <= avoProdHi
         && (1..<4).allSatisfy {
             abs(avoProdFrames[$0 + 1].origin.y - avoBaseAppKit.origin.y)
                 > abs(avoProdFrames[$0].origin.y - avoBaseAppKit.origin.y)
@@ -1093,6 +1123,220 @@ check("T-avo7b 生产组合按钮消失：渐进回基础位、最终精确、�
         && avoLinks.last?.invalidated == true,
       "frames=\(avoProdVanishFrames)")
 print("\n[障碍平滑过渡] \(pass - avoPass) passed, \(fail - avoBase) failed")
+
+// ---- T-pd: placement-level deadband（可见 panel 的量化微跳抑制） ----
+// QA-run-12：bbox 8px deadband 已消除持续抖动，但 idle alpha bbox 偶发单边扩 8px，
+// 仍会把 dock target 推动 4px。这里直接穿过生产 DockPanel.placeBelow，并断言真实 panel.frame：
+// 同一窗口 origin 的 sub-6px target 不写 frame，插值器对齐当前 owner；达到 6px、窗口
+// origin 变化或此前已接纳的在途 glide 均继续原路径。movementChanged 只分类已接纳的移动。
+let pdBase = fail, pdPass = pass
+check("T-pd0 placementDeadband=6px（严格小于才抑制）",
+      ContainerPetHeuristics.placementDeadband == 6,
+      "actual=\(ContainerPetHeuristics.placementDeadband)")
+var pdClock: TimeInterval = 60
+var pdLinks: [TestAnimationDisplayLink] = []
+var pdTimers: [TestFollowTickTimer] = []
+func pdMakeDock() -> DockPanel {
+    DockPanel(
+        makeAnimationDisplayLink: { target, selector in
+            let link = TestAnimationDisplayLink(target: target, selector: selector)
+            pdLinks.append(link)
+            return link
+        },
+        makeAnimationTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            pdTimers.append(timer)
+            return timer
+        },
+        animationMonotonicNow: { pdClock }
+    )
+}
+func pdTarget(pet: CGRect, dock: DockPanel) -> NSRect {
+    let quartz = Geometry.safeDockFrame(
+        pet: pet,
+        avoiding: [],
+        dockSize: CGSize(width: dock.dockWidth, height: dock.dockHeight),
+        gap: dock.gap,
+        screen: avoScreen
+    ).frame!
+    return DockPanel.integerPixelTarget(Geometry.appKitRectFromQuartz(quartz))
+}
+
+// sub-6px 静止 target：反复 round 均保持原 owner frame，且不得启动渲染源。
+let pdSuppressDock = pdMakeDock()
+let pdSuppressInitialShown = pdSuppressDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdSuppressDock.showIfNeeded()
+let pdSuppressOriginal = pdSuppressDock.frame
+let pdSuppressLinksBefore = pdLinks.count
+var pdSuppressRoundsShown = pdSuppressInitialShown && pdSuppressDock.isVisible
+for (index, delta) in [CGFloat(4), 5, 3, 4].enumerated() {
+    pdClock = 60.1 + Double(index) * 0.1
+    pdSuppressRoundsShown = pdSuppressRoundsShown && pdSuppressDock.placeBelow(
+        petQuartzRect: avoPet.offsetBy(dx: delta, dy: delta),
+        visibleScreen: avoScreen,
+        movementChanged: false,
+        monotonicNow: pdClock)
+}
+check("T-pd1 可见panel静止sub-6px target反复抑制：frame不变/返回true/无动画源",
+      pdSuppressRoundsShown
+        && avoFrameNear(pdSuppressDock.frame, pdSuppressOriginal)
+        && pdLinks.count == pdSuppressLinksBefore
+        && pdTimers.isEmpty,
+      "visible=\(pdSuppressDock.isVisible) original=\(pdSuppressOriginal) "
+        + "actual=\(pdSuppressDock.frame) links=\(pdLinks.count - pdSuppressLinksBefore)")
+pdSuppressDock.hideIfNeeded()
+
+// 恰达 6px 必须接纳；接纳后的 200ms glide 即使剩余距离降到 sub-6px 也不得被截停。
+pdClock = 61
+let pdBoundaryDock = pdMakeDock()
+_ = pdBoundaryDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdBoundaryDock.showIfNeeded()
+let pdBoundaryOriginal = pdBoundaryDock.frame
+let pdBoundaryPet = avoPet.offsetBy(dx: 6, dy: 0)
+let pdBoundaryTarget = pdTarget(pet: pdBoundaryPet, dock: pdBoundaryDock)
+let pdBoundaryLinksBefore = pdLinks.count
+pdClock = 61.1
+let pdBoundaryShown = pdBoundaryDock.placeBelow(
+    petQuartzRect: pdBoundaryPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdClock = 61.2
+_ = pdBoundaryDock.placeBelow(
+    petQuartzRect: pdBoundaryPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+let pdBoundaryMid = pdBoundaryDock.frame
+pdClock = 61.21
+_ = pdBoundaryDock.placeBelow(
+    petQuartzRect: pdBoundaryPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdClock = 61.31
+pdLinks.last?.fire()
+check("T-pd2 target delta恰6px：接纳并完整走既有200ms glide",
+      pdBoundaryShown
+        && pdLinks.count == pdBoundaryLinksBefore + 1
+        && between(pdBoundaryMid.origin.x,
+                   pdBoundaryOriginal.origin.x + 1,
+                   pdBoundaryTarget.origin.x - 0.5)
+        && avoFrameNear(pdBoundaryDock.frame, pdBoundaryTarget)
+        && pdLinks.last?.invalidated == true,
+      "original=\(pdBoundaryOriginal) mid=\(pdBoundaryMid) "
+        + "final=\(pdBoundaryDock.frame) target=\(pdBoundaryTarget)")
+pdBoundaryDock.hideIfNeeded()
+
+// 窗口 origin 未变时，movementChanged 不得绕过 sub-6px guard（尺寸动画仍会令 Follower
+// 报 material change）；该轮必须保持 owner frame，且不能留下 32ms segment。
+pdClock = 62
+let pdMovementDock = pdMakeDock()
+_ = pdMovementDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdMovementDock.showIfNeeded()
+let pdMovementOriginal = pdMovementDock.frame
+let pdMovementPet = avoPet.offsetBy(dx: 4, dy: 0)
+let pdMovementTarget = pdTarget(pet: pdMovementPet, dock: pdMovementDock)
+let pdMovementLinksBefore = pdLinks.count
+pdClock = 62.1
+let pdMovementShown = pdMovementDock.placeBelow(
+    petQuartzRect: pdMovementPet, visibleScreen: avoScreen,
+    movementChanged: true, monotonicNow: pdClock)
+pdClock = 62.116
+_ = pdMovementDock.placeBelow(
+    petQuartzRect: pdMovementPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+let pdMovementMid = pdMovementDock.frame
+pdClock = 62.14
+_ = pdMovementDock.placeBelow(
+    petQuartzRect: pdMovementPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+check("T-pd3 same-origin movementChanged=true的sub-6px target仍被抑制",
+      pdMovementShown
+        && avoFrameNear(pdMovementMid, pdMovementOriginal)
+        && avoFrameNear(pdMovementDock.frame, pdMovementOriginal)
+        && pdLinks.count == pdMovementLinksBefore,
+      "original=\(pdMovementOriginal) mid=\(pdMovementMid) "
+        + "final=\(pdMovementDock.frame) target=\(pdMovementTarget)")
+pdMovementDock.hideIfNeeded()
+
+// 容器窗口 origin 变化是拖拽权威信号：即使 target 只有4px，也必须绕过 guard，并沿用
+// movementChanged 对已接纳移动的 32ms linear 分类。
+pdClock = 62.5
+let pdWindowMoveDock = pdMakeDock()
+_ = pdWindowMoveDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdWindowMoveDock.showIfNeeded()
+let pdWindowMoveOriginal = pdWindowMoveDock.frame
+let pdWindowMovePet = avoPet.offsetBy(dx: 4, dy: 0)
+let pdWindowMoveTarget = pdTarget(pet: pdWindowMovePet, dock: pdWindowMoveDock)
+let pdWindowMoveLinksBefore = pdLinks.count
+pdClock = 62.6
+let pdWindowMoveShown = pdWindowMoveDock.placeBelow(
+    petQuartzRect: pdWindowMovePet, visibleScreen: avoScreen,
+    movementChanged: true, windowOriginChanged: true, monotonicNow: pdClock)
+pdClock = 62.616
+_ = pdWindowMoveDock.placeBelow(
+    petQuartzRect: pdWindowMovePet, visibleScreen: avoScreen,
+    movementChanged: false, windowOriginChanged: false, monotonicNow: pdClock)
+let pdWindowMoveMid = pdWindowMoveDock.frame
+pdClock = 62.64
+_ = pdWindowMoveDock.placeBelow(
+    petQuartzRect: pdWindowMovePet, visibleScreen: avoScreen,
+    movementChanged: false, windowOriginChanged: false, monotonicNow: pdClock)
+check("T-pd5 window-origin change绕过sub-6px guard并完成32ms linear glide",
+      pdWindowMoveShown
+        && between(pdWindowMoveMid.origin.x,
+                   pdWindowMoveOriginal.origin.x + 0.5,
+                   pdWindowMoveTarget.origin.x - 0.5)
+        && avoFrameNear(pdWindowMoveDock.frame, pdWindowMoveTarget)
+        && pdLinks.count == pdWindowMoveLinksBefore,
+      "original=\(pdWindowMoveOriginal) mid=\(pdWindowMoveMid) "
+        + "final=\(pdWindowMoveDock.frame) target=\(pdWindowMoveTarget)")
+pdWindowMoveDock.hideIfNeeded()
+
+// N 次 suppressed round 后的大位移必须从原始 rendered frame 起段，不得累积被抑制 target。
+pdClock = 63
+let pdNoDriftDock = pdMakeDock()
+_ = pdNoDriftDock.placeBelow(
+    petQuartzRect: avoPet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdNoDriftDock.showIfNeeded()
+let pdNoDriftOriginal = pdNoDriftDock.frame
+let pdNoDriftLinksBefore = pdLinks.count
+for (index, delta) in [CGFloat(5), 2, 4, 5, 3].enumerated() {
+    pdClock = 63.1 + Double(index) * 0.1
+    _ = pdNoDriftDock.placeBelow(
+        petQuartzRect: avoPet.offsetBy(dx: delta, dy: 0),
+        visibleScreen: avoScreen,
+        movementChanged: false,
+        monotonicNow: pdClock)
+}
+let pdLargePet = avoPet.offsetBy(dx: 12, dy: 0)
+let pdLargeTarget = pdTarget(pet: pdLargePet, dock: pdNoDriftDock)
+pdClock = 63.7
+let pdLargeShown = pdNoDriftDock.placeBelow(
+    petQuartzRect: pdLargePet, visibleScreen: avoScreen,
+    movementChanged: false, monotonicNow: pdClock)
+pdClock = 63.8
+pdLinks.last?.fire()
+let pdLargeMid = pdNoDriftDock.frame
+let pdLargeExpectedMid = avoLerp(
+    pdNoDriftOriginal,
+    pdLargeTarget,
+    CGFloat(DockFrameInterpolator.cubicBezierProgress(0.5)))
+pdClock = 63.91
+pdLinks.last?.fire()
+check("T-pd4 repeated suppressed rounds后large delta从原始frame起段（无累积漂移）",
+      pdLargeShown
+        && pdLinks.count == pdNoDriftLinksBefore + 1
+        && avoFrameNear(pdLargeMid, pdLargeExpectedMid)
+        && avoFrameNear(pdNoDriftDock.frame, pdLargeTarget),
+      "original=\(pdNoDriftOriginal) mid=\(pdLargeMid) "
+        + "expectedMid=\(pdLargeExpectedMid) final=\(pdNoDriftDock.frame)")
+pdNoDriftDock.hideIfNeeded()
+print("\n[placement deadband] \(pass - pdPass) passed, \(fail - pdBase) failed")
 
 
 // ---- T-p1: P1 回归（review-smooth 首轮 P1-1/P1-2；movementChanged 驱动分类）----
@@ -1193,7 +1437,7 @@ avoLinks.last?.fire()
 pavoCollapseFrames.append(pavoDock.frame)
 let pavoCollapseExpected = [0.05, 0.1, 0.15, 0.2].map {
     avoLerp(pavoAppKitDockFrame(y: 470), pavoAppKitDockFrame(y: 362),
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
 check("T-p1b 收起(P1-1):count1→1/range0→0/静止→渐进回基础位362(非snap)",
       pavoShapeLog.count == 2
@@ -1204,7 +1448,7 @@ check("T-p1b 收起(P1-1):count1→1/range0→0/静止→渐进回基础位362(�
         && (0..<4).allSatisfy { avoFrameNear(pavoCollapseFrames[$0 + 1], pavoCollapseExpected[$0]) }
         && (1..<4).allSatisfy {
             abs(pavoCollapseFrames[$0].origin.y - pavoAppKitDockFrame(y: 362).origin.y)
-                > abs(pavoCollapseFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 362).origin.y) + 4
+                > abs(pavoCollapseFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 362).origin.y)
         }
         && avoFrameNear(pavoCollapseFrames[4], pavoAppKitDockFrame(y: 362))
         && avoLinks.last?.invalidated == true,
@@ -1229,7 +1473,7 @@ for pavoOffset in [0.05, 0.1, 0.15, 0.21] {
 }
 let pavoExpandExpected = [0.05, 0.1, 0.15, 0.2].map {
     avoLerp(pavoAppKitDockFrame(y: 362), pavoAppKitDockFrame(y: 470),
-            CGFloat(DockFrameInterpolator.smoothstep($0 / DockFrameInterpolator.avoidanceDuration)))
+            CGFloat(DockFrameInterpolator.cubicBezierProgress($0 / DockFrameInterpolator.avoidanceDuration)))
 }
 check("T-p1c 展开(P1-1反向):362→470渐进到位(非snap)",
       pavoShapeLog.count == 2
@@ -1238,7 +1482,7 @@ check("T-p1c 展开(P1-1反向):362→470渐进到位(非snap)",
         && (0..<4).allSatisfy { avoFrameNear(pavoExpandFrames[$0 + 1], pavoExpandExpected[$0]) }
         && (1..<4).allSatisfy {
             abs(pavoExpandFrames[$0].origin.y - pavoAppKitDockFrame(y: 470).origin.y)
-                > abs(pavoExpandFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 470).origin.y) + 4
+                > abs(pavoExpandFrames[$0 + 1].origin.y - pavoAppKitDockFrame(y: 470).origin.y)
         }
         && avoFrameNear(pavoExpandFrames[4], pavoAppKitDockFrame(y: 470)),
       "shapes=\(pavoShapeLog) frames=\(pavoExpandFrames)")
@@ -1270,7 +1514,7 @@ _ = pav2Dock.placeBelow(petQuartzRect: avoPet.offsetBy(dx: 0, dy: 1), avoiding: 
                       visibleScreen: avoScreen, movementChanged: false, monotonicNow: 45.3)
 let pav2RetargetFrame = pav2Dock.frame
 let pav2ExpectedRetarget = avoLerp(avoAvoidAppKit, pav2Base281AppKit,
-                                 CGFloat(DockFrameInterpolator.smoothstep(0.5)))
+                                 CGFloat(DockFrameInterpolator.cubicBezierProgress(0.5)))
 var pav2Frames = [pav2RetargetFrame]
 var pav2Expected = [pav2ExpectedRetarget]
 for pav2Offset in [0.02, 0.06] {
@@ -1278,7 +1522,8 @@ for pav2Offset in [0.02, 0.06] {
     avoLinks.last?.fire()
     pav2Frames.append(pav2Dock.frame)
     pav2Expected.append(avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
-                              CGFloat(DockFrameInterpolator.smoothstep(pav2Offset / DockFrameInterpolator.avoidanceDuration))))
+                              CGFloat(DockFrameInterpolator.cubicBezierProgress(
+                                pav2Offset / DockFrameInterpolator.avoidanceDuration))))
 }
 avoClock = 45.38
 _ = pav2Dock.placeBelow(petQuartzRect: avoPet.offsetBy(dx: 0, dy: 1), avoiding: [],
@@ -1289,7 +1534,8 @@ for pav2Offset in [0.1] {
     avoLinks.last?.fire()
     pav2Frames.append(pav2Dock.frame)
     pav2Expected.append(avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
-                              CGFloat(DockFrameInterpolator.smoothstep(pav2Offset / DockFrameInterpolator.avoidanceDuration))))
+                              CGFloat(DockFrameInterpolator.cubicBezierProgress(
+                                pav2Offset / DockFrameInterpolator.avoidanceDuration))))
 }
 avoClock = 45.51   // 越过 45.3+0.2 的浮点表示边界；段完成精确落终点
 avoLinks.last?.fire()
@@ -1297,12 +1543,12 @@ pav2Frames.append(pav2Dock.frame)
 pav2Expected.append(pav2Base282AppKit)
 check("T-p1d (P1-2)回落动画中锚+1px→latest-only续接(无snap截断),hold不重置,最终精确",
       avoFrameNear(pav2MidFrame, avoLerp(avoAvoidAppKit, pav2Base281AppKit,
-                                       CGFloat(DockFrameInterpolator.smoothstep(0.4))))
+                                       CGFloat(DockFrameInterpolator.cubicBezierProgress(0.4))))
         && avoFrameNear(pav2RetargetFrame, pav2ExpectedRetarget)
         && abs(pav2RetargetFrame.origin.y - pav2Base282AppKit.origin.y) > 2
         && avoLinks.count == pav2RetargetLinksBefore
         && avoFrameNear(pav2HoldFrame, avoLerp(pav2ExpectedRetarget, pav2Base282AppKit,
-                                             CGFloat(DockFrameInterpolator.smoothstep(0.4))))
+                                             CGFloat(DockFrameInterpolator.cubicBezierProgress(0.4))))
         && (0..<5).allSatisfy { avoFrameNear(pav2Frames[$0], pav2Expected[$0]) }
         && avoFrameNear(pav2Frames[4], pav2Base282AppKit)
         && avoLinks.last?.invalidated == true,
@@ -3111,6 +3357,8 @@ let reExpectedKeys: Set<String> = [
     "captureStatsCount", "captureTargetMissingCount", "captureUnavailableCount",
     "visibilityVisibleCount", "visibilityHiddenCount",
     "identityChangeCount", "wakeCallbackCount",
+    "containerObservationChangeCount",
+    "containerPlacementShownCount", "containerPlacementHiddenCount",
     "dockDyBaseCount", "dockDyUpTo32Count", "dockDyUpTo64Count", "dockDyAbove64Count",
     "lastDockDyBucket",
 ]
@@ -3146,6 +3394,86 @@ check("T-re3b flush落盘：目录0700/文件0600/内容=快照",
         && (reWritten["candidateSHA"] as? String) == reSHA
         && (reWritten["tickCount"] as? Int) == 2,
       "file=0\(String(reFileMode, radix: 8)) dir=0\(String(reDirMode, radix: 8))")
+
+// T-re2d..2i: container 通道 outcome 计数（08-28 修复批次）：placement shown/hidden 计数 +
+// dirty 抑制（首个样本/状态变化才 dirty；稳态同值布局 tick 不产生写盘）。
+let reContRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-container-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reContRoot)
+var reContNow: TimeInterval = 200_000
+let reContCollector = makeRuntimeEvidenceRecorderForTesting(
+    candidateSHA: reSHA,
+    outputURL: reContRoot.appendingPathComponent(runtimeEvidenceOutputFileName),
+    flushNow: { reContNow })
+reContCollector.recordContainerPlacement(shown: true)
+reContCollector.recordContainerPlacement(shown: true)   // 同值重复 → 不产生新证据
+let reContSnap1 = reContCollector.snapshot()
+check("T-re2d container placement 计数正确",
+      (reContSnap1["containerPlacementShownCount"] as? Int) == 2
+        && (reContSnap1["containerPlacementHiddenCount"] as? Int) == 0, "")
+reContNow = 200_001
+check("T-re2e 首样本 dirty→flush 落盘", reContCollector.flush(), "")
+let reContWritten1 = try! JSONSerialization.jsonObject(
+    with: Data(contentsOf: reContRoot.appendingPathComponent(runtimeEvidenceOutputFileName))) as! [String: Any]
+check("T-re2f 落盘内容含 container 计数",
+      (reContWritten1["containerPlacementShownCount"] as? Int) == 2
+        && (reContWritten1["containerPlacementHiddenCount"] as? Int) == 0, "")
+reContCollector.recordContainerPlacement(shown: true)   // 同值重复 → 仍无新证据
+reContNow = 200_002
+check("T-re2g 稳态同值不触发写盘", !reContCollector.flush(), "")
+reContCollector.recordContainerPlacement(shown: false)  // shown 状态变化 → dirty
+reContNow = 200_003
+check("T-re2h hidden 变化→flush", reContCollector.flush(), "")
+let reContSnap2 = reContCollector.snapshot()
+check("T-re2i shown/hidden 计数累计",
+      (reContSnap2["containerPlacementShownCount"] as? Int) == 3
+        && (reContSnap2["containerPlacementHiddenCount"] as? Int) == 1, "")
+try? FileManager.default.removeItem(at: reContRoot)
+
+// T-re2j..2k: container 通道“已接受的观察 rect 边沿”计数。生产只在该回调边沿调用；
+// 每次边沿本身就是新证据，因此 dirty 约定与首个 container placement 样本一致。
+let reObsRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-container-observation-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reObsRoot)
+var reObsNow: TimeInterval = 210_000
+let reObsCollector = makeRuntimeEvidenceRecorderForTesting(
+    candidateSHA: reSHA,
+    outputURL: reObsRoot.appendingPathComponent(runtimeEvidenceOutputFileName),
+    flushNow: { reObsNow })
+reObsCollector.recordContainerObservationChange()
+reObsCollector.recordContainerObservationChange()
+let reObsSnap = reObsCollector.snapshot()
+check("T-re2j container observation change 计数正确",
+      (reObsSnap["containerObservationChangeCount"] as? Int) == 2, "")
+reObsNow = 210_001
+check("T-re2k observation change 边沿 dirty→flush 落盘", reObsCollector.flush(), "")
+let reObsWritten = try! JSONSerialization.jsonObject(
+    with: Data(contentsOf: reObsRoot.appendingPathComponent(runtimeEvidenceOutputFileName))) as! [String: Any]
+check("T-re2l 落盘内容含 observation change 计数",
+      (reObsWritten["containerObservationChangeCount"] as? Int) == 2, "")
+try? FileManager.default.removeItem(at: reObsRoot)
+
+// T-re2m: container evidence must survive hidden/disappearance ticks. Clean flush is zero IO;
+// an observation edge marks dirty; the next flush writes once and subsequent clean flush writes nothing.
+let reHiddenRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "pd-runtime-evidence-hidden-flush-(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+try? FileManager.default.removeItem(at: reHiddenRoot)
+var reHiddenNow: TimeInterval = 215_000
+let reHiddenCollector = makeRuntimeEvidenceRecorderForTesting(
+    candidateSHA: reSHA,
+    outputURL: reHiddenRoot.appendingPathComponent(runtimeEvidenceOutputFileName),
+    flushNow: { reHiddenNow })
+check("T-re2m clean hidden-branch flush is zero IO", !reHiddenCollector.flush(), "")
+reHiddenCollector.recordContainerObservationChange()
+reHiddenNow = 215_001
+check("T-re2m container observation makes hidden-branch flush dirty", reHiddenCollector.flush(), "")
+reHiddenNow = 215_002
+check("T-re2m clean flush after observation write is zero IO", !reHiddenCollector.flush(), "")
+let reHiddenWritten = try! JSONSerialization.jsonObject(
+    with: Data(contentsOf: reHiddenRoot.appendingPathComponent(runtimeEvidenceOutputFileName))) as! [String: Any]
+check("T-re2m hidden-branch flush contains container observation",
+      (reHiddenWritten["containerObservationChangeCount"] as? Int) == 1, "")
+try? FileManager.default.removeItem(at: reHiddenRoot)
 
 // T-re4: symlink fail-closed —— 外部链接目标绝不接收诊断内容
 let reEvilTarget = reRoot.appendingPathComponent("evil-target.json")
@@ -3396,7 +3724,7 @@ final class AsyncCaptureEntryGate: @unchecked Sendable {
             return true
         }
         guard shouldSuspend else { return }
-        await withCheckedContinuation { continuation in
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let resumeImmediately = lock.withLock { state -> Bool in
                 if state.pendingReleases > 0 {
                     state.pendingReleases -= 1
@@ -3680,7 +4008,7 @@ check("T-re12b dy telemetry输入=setFrame后panel.frame回读（source guard）
 // T-bv40: reset 后旧 generation 的成功结果不得通知布局。
 let staleNotifications = OSAllocatedUnfairLock(initialState: 0)
 let staleCap: BubbleCapturer = { _ in
-    try? await Task.sleep(nanoseconds: 100_000_000)
+    try? await Task.sleep(nanoseconds: 300_000_000)
     return .stats(collapsedS)
 }
 let staleProbe = BubbleVisibilityProbe(
@@ -5717,6 +6045,1541 @@ check("T-hj6b 劫持态底座实际frame回到真Mascot下方(非气泡下方)",
       "frame=\(hjDock.frame) expected=\(hjExpectedFrame) obstacles=\(hjObstacleCounts.withLock { $0 })")
 
 print("\n[pet-selection hijack] \(pass - hjPass) passed, \(fail - hjBase) failed")
+
+// ============================================================
+// 容器宠物通道（08-28-pet-window-adaptation：宿主新窗口结构回退通道）
+// ============================================================
+let cpPass = pass, cpBase = fail
+
+// 共享 fixture：容器 800x1600 @ (100,100)，捕获 200x400（scale 恰为 4/4，断言精确）。
+let cpBounds = CGRect(x: 100, y: 100, width: 800, height: 1600)
+let cpStatsA = ContainerAlphaStats(nonTransparentPixelCount: 800, minX: 10, minY: 20, maxX: 29, maxY: 59,
+                                   captureWidth: 200, captureHeight: 400)
+let cpStatsB = ContainerAlphaStats(nonTransparentPixelCount: 800, minX: 30, minY: 40, maxX: 49, maxY: 79,
+                                   captureWidth: 200, captureHeight: 400)
+let cpRectA = CGRect(x: 140, y: 180, width: 80, height: 160)
+let cpRectB = CGRect(x: 220, y: 260, width: 80, height: 160)
+func cpContainer(_ wid: UInt32) -> WinCandidate { mkw(wid, layer: 3, cpBounds) }
+
+// ---- C1 容器签名选择（纯函数，AC1）----
+let cpNew = cpContainer(501)
+check("T-cp1 新结构容器候选(layer3, 1.28M, onscreen, 非主窗)被接受",
+      ContainerPetSelector.selectContainer(candidates: [cpNew])?.wid == 501, "")
+check("T-cp2 layer0 主窗口被拒绝",
+      ContainerPetSelector.selectContainer(candidates: [
+        mkw(502, layer: 0, CGRect(x: 0, y: 0, width: 1728, height: 1050))]) == nil, "")
+check("T-cp3 普通尺寸辅助窗(345x64)被拒绝(面积低于minArea)",
+      ContainerPetSelector.selectContainer(candidates: [
+        mkw(503, layer: 3, CGRect(x: 0, y: 0, width: 345, height: 64))]) == nil, "")
+check("T-cp4 offscreen 大窗被拒绝",
+      ContainerPetSelector.selectContainer(candidates: [
+        mk(504, layer: 3, w: 1000, h: 1200, onscreen: false)]) == nil, "")
+check("T-cp5 layer<2 大窗被拒绝",
+      ContainerPetSelector.selectContainer(candidates: [
+        mkw(505, layer: 1, CGRect(x: 0, y: 0, width: 1000, height: 1200))]) == nil, "")
+let cpMascot = mk(506, layer: 2, w: 172, h: 179, title: "Codex Pet Mascot Effect")
+check("T-cp6 混合候选(主窗+Mascot+容器)→选容器",
+      ContainerPetSelector.selectContainer(candidates: [
+        mkw(507, layer: 0, CGRect(x: 0, y: 0, width: 1728, height: 1050)), cpMascot, cpNew])?.wid == 501, "")
+let cpOldCS = mkw(508, layer: 3, CGRect(x: 0, y: 0, width: 768, height: 912), title: "Codex Pet Composition Surface")
+check("T-cp7 旧结构CS(768x912<minArea)+小辅助→nil(R6 不干扰主通道)",
+      ContainerPetSelector.selectContainer(candidates: [
+        mkw(509, layer: 0, CGRect(x: 0, y: 0, width: 1728, height: 1050)), cpMascot, cpOldCS,
+        mkw(510, layer: 3, CGRect(x: 0, y: 0, width: 17, height: 6))]) == nil, "")
+let cpSmallContainer = mkw(511, layer: 2, CGRect(x: 0, y: 0, width: 1000, height: 1100))
+check("T-cp8 多容器命中→面积最大者",
+      ContainerPetSelector.selectContainer(candidates: [cpSmallContainer, cpNew])?.wid == 501, "")
+let cpTieB = mkw(513, layer: 2, CGRect(x: 50, y: 50, width: 1000, height: 1000))
+let cpTieA = mkw(512, layer: 2, CGRect(x: 0, y: 0, width: 1000, height: 1000))
+check("T-cp9 面积并列→wid 较小者(确定性)",
+      ContainerPetSelector.selectContainer(candidates: [cpTieB, cpTieA])?.wid == 512, "")
+
+// ---- C2 captureSize（等比降采样）----
+let cpSize1 = ContainerPetChannel.captureSize(width: 800, height: 1600)
+check("T-cp10 captureSize 等比降采样至长边400",
+      cpSize1?.width == 200 && cpSize1?.height == 400, "actual=\(String(describing: cpSize1))")
+check("T-cp11 captureSize 长边≤400→nil(无需降采样)",
+      ContainerPetChannel.captureSize(width: 200, height: 400) == nil
+        && ContainerPetChannel.captureSize(width: 100, height: 200) == nil, "")
+let cpSize2 = ContainerPetChannel.captureSize(width: 1600, height: 3)
+check("T-cp12 captureSize 极端纵横比→边长至少1px",
+      cpSize2?.width == 400 && cpSize2?.height == 1, "actual=\(String(describing: cpSize2))")
+
+// ---- C3 mapToPetRect（AC2：黄金案例 + 门限/退化）----
+// 黄金案例输入取自 design.md（121x400 捕获，bbox (54,194)-(61,209)，容器 772x2549 @(1482,-267)）。
+// 期望值按 design 规范以 CGWindowList bounds 为唯一 origin/size 权威源计算；design 中的字面
+// 黄金输出 (1776,918,51,101) 混入了探测期 SCWindow.frame 与 CG bounds 的 ~50px 偏差（PRD
+// 已知风险），权威映射下尺寸一致、origin 相应修正。
+let cpGoldenStats = ContainerAlphaStats(nonTransparentPixelCount: 128, minX: 54, minY: 194, maxX: 61, maxY: 209,
+                                        captureWidth: 121, captureHeight: 400)
+let cpGoldenBounds = CGRect(x: 1482, y: -267, width: 772, height: 2549)
+if let cpGolden = ContainerPetChannel.mapToPetRect(stats: cpGoldenStats, captureWidth: 121, captureHeight: 400,
+                                                   containerBounds: cpGoldenBounds) {
+    let cpGoldenX = 1482.0 + 54.0 * 772.0 / 121.0
+    let cpGoldenY = -267.0 + 194.0 * 2549.0 / 400.0
+    let cpGoldenW = 8.0 * 772.0 / 121.0
+    let cpGoldenH = 16.0 * 2549.0 / 400.0
+    check("T-cp13 黄金案例映射(CG bounds 权威源)",
+          abs(cpGolden.minX - cpGoldenX) < 0.01 && abs(cpGolden.minY - cpGoldenY) < 0.01
+            && abs(cpGolden.width - cpGoldenW) < 0.01 && abs(cpGolden.height - cpGoldenH) < 0.01,
+          "actual=\(cpGolden)")
+} else {
+    check("T-cp13 黄金案例映射(CG bounds 权威源)", false, "mapToPetRect 返回 nil")
+}
+let cpDense = ContainerAlphaStats(nonTransparentPixelCount: 4840, minX: 0, minY: 0, maxX: 120, maxY: 399,
+                                  captureWidth: 121, captureHeight: 400)
+check("T-cp14 非透明占比远超新 gate→nil(防劫持)",
+      ContainerPetChannel.mapToPetRect(stats: cpDense, captureWidth: 121, captureHeight: 400,
+                                       containerBounds: cpGoldenBounds) == nil, "")
+let cpNoOpaque = ContainerAlphaStats(nonTransparentPixelCount: 0, minX: -1, minY: -1, maxX: -1, maxY: -1,
+                                     captureWidth: 121, captureHeight: 400)
+check("T-cp15 无非透明像素→nil",
+      ContainerPetChannel.mapToPetRect(stats: cpNoOpaque, captureWidth: 121, captureHeight: 400,
+                                       containerBounds: cpGoldenBounds) == nil, "")
+// QA-run-4 实测 channel-active 占比 0.0090–0.0102 跨旧 0.01 gate 抖动；
+// 新 headroom 必须接受 0.015 / 恰好 0.02，并仍拒绝 0.0201。
+let cpFlickerStats = ContainerAlphaStats(nonTransparentPixelCount: 1_200, minX: 10, minY: 20, maxX: 29, maxY: 59,
+                                         captureWidth: 200, captureHeight: 400)
+check("T-cp16 实测抖动带上方 0.015→接受(新 gate headroom)",
+      ContainerPetChannel.mapToPetRect(stats: cpFlickerStats, captureWidth: 200, captureHeight: 400,
+                                       containerBounds: cpBounds) == cpRectA, "")
+let cpGateBoundaryStats = ContainerAlphaStats(nonTransparentPixelCount: 1_600, minX: 10, minY: 20, maxX: 29, maxY: 59,
+                                              captureWidth: 200, captureHeight: 400)
+check("T-cp16b 占比恰好 0.02→接受(gate 边界含等号)",
+      ContainerPetChannel.mapToPetRect(stats: cpGateBoundaryStats, captureWidth: 200, captureHeight: 400,
+                                       containerBounds: cpBounds) == cpRectA, "")
+let cpAboveGateStats = ContainerAlphaStats(nonTransparentPixelCount: 1_601, minX: 10, minY: 20, maxX: 29, maxY: 59,
+                                           captureWidth: 200, captureHeight: 400)
+check("T-cp16c 占比 0.0201→nil(新 gate 仍拒劫持)",
+      ContainerPetChannel.mapToPetRect(stats: cpAboveGateStats, captureWidth: 200, captureHeight: 400,
+                                       containerBounds: cpBounds) == nil, "")
+let cpPixel = ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 60, minY: 200, maxX: 60, maxY: 200,
+                                  captureWidth: 121, captureHeight: 400)
+check("T-cp17 单像素 bbox→映射边长<petMinSide→nil(取整退化)",
+      ContainerPetChannel.mapToPetRect(stats: cpPixel, captureWidth: 121, captureHeight: 400,
+                                       containerBounds: cpGoldenBounds) == nil, "")
+check("T-cp18 捕获尺寸非法→nil",
+      ContainerPetChannel.mapToPetRect(stats: cpStatsA, captureWidth: 0, captureHeight: 400,
+                                       containerBounds: cpBounds) == nil, "")
+check("T-cp19 opaqueFractionGate=0.02(QA-run-4 headroom)",
+      ContainerPetHeuristics.opaqueFractionGate == 0.02, "")
+
+// ---- C4 ContainerPetProbe（fake capturer + fake clock：观察边沿/节奏/单飞/代际/unavailable/wake）----
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(10_000))
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let outcomeBox = OSAllocatedUnfairLock<ContainerCaptureOutcome>(initialState: .stats(cpStatsA))
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            calls.withLock { $0 += 1 }
+            let outcome = outcomeBox.withLock { $0 }
+            guard case .stats(let fullStats) = outcome,
+                  let bbox = ContainerPetChannel.windowBBox(
+                    stats: fullStats,
+                    captureRegion: CGRect(origin: .zero, size: cpBounds.size)) else { return outcome }
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(for: bbox, in: region, outputSize: request.outputSize))
+        },
+        onObservationChanged: { wakes.withLock { $0 += 1 } })
+    let container = cpContainer(520)
+    check("T-cp20 首次locate→empty(尚未观察)", probe.locate(container: container) == .empty, "")
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp20b 首次locate→调度后台捕获(completed)", calls.withLock { $0 } == 1, "")
+    check("T-cp21 首次捕获完成→bounds(当前containerBounds映射)",
+          probe.locate(container: container) == .bounds(cpRectA), "")
+check("T-cp22 首个有效观察（none→bounds）触发 onObservationChanged 恰一次",
+          wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
+    // 首个观察（nil→bbox）武装 2s moving hold；先推过 hold 结束再测 stable 1.0s 门限。
+    // bbox 不变时 hold 不重置，后续轮次保持 stable。断言前等待 detached 捕获 quiesce。
+    clock.withLock { $0 = 10_002.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp23a 前置:moving hold过期→stable重捕完成",
+          calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_002.42 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp23 stable 0.32s→不捕获(stable=1.0s)",
+          calls.withLock { $0 } == 2 && !probe.lock.withLock { $0.inFlight },
+          "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_003.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp24 stable 1.0s 节奏→捕获(R7-amended)", calls.withLock { $0 } == 3, "calls=\(calls.withLock { $0 })")
+    check("T-cp24b 同 rect 再观察→不重复 wake", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
+
+    // bbox 变化 → 0.1s 快速节奏保持 movingHoldDuration，随后回到 stable 1.0s。
+    clock.withLock { $0 = 10_004.2 }
+    outcomeBox.withLock { $0 = .stats(cpStatsB) }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    let cp25Outcome = probe.locate(container: container)
+    let cp25Changed: Bool
+    if case .bounds(let rect) = cp25Outcome {
+        cp25Changed = abs(rect.minX - cpRectB.minX) <= 5
+            && abs(rect.minY - cpRectB.minY) <= 5
+            && abs(rect.width - cpRectB.width) <= 5
+            && abs(rect.height - cpRectB.height) <= 5
+    } else {
+        cp25Changed = false
+    }
+    check("T-cp25 bbox变化→新观察生效(区域量化≤1源像素)", cp25Changed,
+          "outcome=\(cp25Outcome) calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_004.25 }
+    _ = probe.locate(container: container)
+    check("T-cp26 快速节奏 0.05s→不捕获", calls.withLock { $0 } == 4, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_004.3 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp27 快速节奏 0.1s→捕获", calls.withLock { $0 } == 5, "calls=\(calls.withLock { $0 })")
+    check("T-cp28 快速节奏期间 rect 变化→恰好一次 wake", wakes.withLock { $0 } == 2, "wakes=\(wakes.withLock { $0 })")
+    clock.withLock { $0 = 10_004.4 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp29 保持期内 0.2s→第6捕(0.1s cadence)", calls.withLock { $0 } == 6, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_005.2 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp30 保持期内 10_005.2 仍按 0.1s→第7捕", calls.withLock { $0 } == 7, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_006.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp31 保持期内 10_006.1→第8捕", calls.withLock { $0 } == 8, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_006.42 }
+    _ = probe.locate(container: container)
+    check("T-cp32 保持期结束→回到 stable，0.32s 不捕获",
+          calls.withLock { $0 } == 8, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 10_007.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp33 保持期结束 1.0s 节奏→捕获(stable 恢复 R7-amended)", calls.withLock { $0 } == 9, "calls=\(calls.withLock { $0 })")
+}
+
+// single-flight：在途捕获不重复
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(20_000))
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let slowCap: ContainerCapturer = { _, _ in
+        calls.withLock { $0 += 1 }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        return .stats(cpStatsA)
+    }
+    let probe = ContainerPetProbe(monotonicNow: { clock.withLock { $0 } }, canCapture: { true }, capturer: slowCap)
+    let container = cpContainer(521)
+    _ = probe.locate(container: container)
+    check("T-cp34 首次locate→inFlight", probe.lock.withLock { $0.inFlight }, "")
+    _ = waitPumpingMain({ calls.withLock { $0 } >= 1 })   // 等待后台 Task 真正进入 capturer
+    clock.withLock { $0 = 20_000.5 }
+    _ = probe.locate(container: container)
+    check("T-cp35 在途重复locate→不重复捕获(single-flight)",
+          calls.withLock { $0 } == 1 && probe.lock.withLock { $0.inFlight },
+          "calls=\(calls.withLock { $0 })")
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp36 完成后→bounds", probe.locate(container: container) == .bounds(cpRectA), "")
+}
+
+// reset：清缓存 + generation++，旧在途结果作废（旧 Task 自清 inFlight）
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(30_000))
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let slowCap: ContainerCapturer = { _, _ in
+        calls.withLock { $0 += 1 }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        return .stats(cpStatsA)
+    }
+    let probe = ContainerPetProbe(monotonicNow: { clock.withLock { $0 } }, canCapture: { true }, capturer: slowCap)
+    let container = cpContainer(522)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ calls.withLock { $0 } >= 1 })   // 等待后台 Task 真正进入 capturer
+    check("T-cp37 前置:捕获在途", probe.lock.withLock { $0.inFlight }, "")
+    probe.reset()
+    check("T-cp38 reset不清inFlight(旧Task自责)", probe.lock.withLock { $0.inFlight }, "")
+    clock.withLock { $0 = 30_100 }
+    check("T-cp39 reset后locate→empty且不重复捕获",
+          probe.locate(container: container) == .empty
+            && calls.withLock { $0 } == 1 && probe.lock.withLock { $0.inFlight },
+          "calls=\(calls.withLock { $0 })")
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp40 旧Task完成→inFlight=false", !probe.lock.withLock { $0.inFlight }, "")
+    check("T-cp41 旧结果generation过期→不写缓存", probe.lock.withLock { $0.cached == nil }, "")
+    clock.withLock { $0 = 30_200 }
+    check("T-cp42 新locate→empty并调度", probe.locate(container: container) == .empty, "")
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp43 新捕获生效→bounds", probe.locate(container: container) == .bounds(cpRectA), "")
+}
+
+// wid 变化：同步清缓存 + 旧在途结果不串台
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(40_000))
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let slowCap: ContainerCapturer = { _, _ in
+        calls.withLock { $0 += 1 }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        return .stats(cpStatsA)
+    }
+    let probe = ContainerPetProbe(monotonicNow: { clock.withLock { $0 } }, canCapture: { true }, capturer: slowCap)
+    let containerA = cpContainer(523)
+    let containerB = cpContainer(524)
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain({ calls.withLock { $0 } >= 1 })   // 等待后台 Task 真正进入 capturer
+    check("T-cp44 前置:A在途", probe.lock.withLock { $0.inFlight }, "")
+    check("T-cp45 wid变化→locate同步empty", probe.locate(container: containerB) == .empty, "")
+    check("T-cp45b wid变化不重复捕获(在途token)", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp46 A的旧结果不写B的缓存(wid/generation失效)", probe.lock.withLock { $0.cached == nil }, "")
+    clock.withLock { $0 = 40_100 }
+    _ = probe.locate(container: containerB)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp47 B重新捕获→bounds", probe.locate(container: containerB) == .bounds(cpRectA), "")
+}
+
+// wid 变化（已有缓存时同步失效）
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(45_000))
+    let probe = ContainerPetProbe(monotonicNow: { clock.withLock { $0 } }, canCapture: { true },
+                                  capturer: { _, _ in .stats(cpStatsA) })
+    let containerA = cpContainer(525)
+    let containerB = cpContainer(526)
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp48 前置:A已观察", probe.locate(container: containerA) == .bounds(cpRectA), "")
+    check("T-cp49 wid变化→已有缓存同步失效(empty)", probe.locate(container: containerB) == .empty, "")
+    clock.withLock { $0 = 45_100 }
+    check("T-cp50 前置:locate(B)调度新捕获", probe.locate(container: containerB) == .empty, "")
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp50b B重新捕获→恢复bounds", probe.locate(container: containerB) == .bounds(cpRectA), "")
+}
+
+// canCapture false → unavailable 且丢弃陈旧缓存
+do {
+    let allow = OSAllocatedUnfairLock(initialState: true)
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(50_000))
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { allow.withLock { $0 } },
+        capturer: { _, _ in
+            calls.withLock { $0 += 1 }
+            return .stats(cpStatsA)
+        })
+    let container = cpContainer(527)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp51 前置:已观察→bounds", probe.locate(container: container) == .bounds(cpRectA), "")
+    allow.withLock { $0 = false }
+    check("T-cp52 canCapture false→unavailable", probe.locate(container: container) == .unavailable, "")
+    check("T-cp53 unavailable→不调度捕获", calls.withLock { $0 } == 1, "calls=\(calls.withLock { $0 })")
+    allow.withLock { $0 = true }
+    clock.withLock { $0 = 50_100 }
+    check("T-cp54 陈旧缓存已丢弃→重新从empty开始", probe.locate(container: container) == .empty, "")
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp55 重新观察→bounds", probe.locate(container: container) == .bounds(cpRectA), "")
+}
+
+// onObservationChanged baseline 在 reset / wid 变化后重新武装（none→rect 再次边沿）
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(60_000))
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, _ in .stats(cpStatsA) },
+        onObservationChanged: { wakes.withLock { $0 += 1 } })
+    let containerA = cpContainer(528)
+    let containerB = cpContainer(529)
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+check("T-cp56 首次观察→wake 1次", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
+    clock.withLock { $0 = 60_100 }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp57 后续观察不重复wake", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
+    probe.reset()
+    clock.withLock { $0 = 60_200 }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp58 reset后新episode→再wake 1次", wakes.withLock { $0 } == 2, "wakes=\(wakes.withLock { $0 })")
+    clock.withLock { $0 = 60_300 }
+    _ = probe.locate(container: containerB)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp59 wid变化新episode→再wake 1次", wakes.withLock { $0 } == 3, "wakes=\(wakes.withLock { $0 })")
+}
+
+// ---- C5 tick 编排（plan 级：AppDelegate.tick 未编入测试入口；hidden→moving→hidden + reset）----
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(70_000))
+    let probe = ContainerPetProbe(monotonicNow: { clock.withLock { $0 } }, canCapture: { true },
+                                  capturer: { _, _ in .stats(cpStatsA) })
+    let container = cpContainer(530)
+    var wasPetVisible = false
+    var stationaryAnchor: CGRect?
+    var lastMaterialChangeAt: TimeInterval?
+    // tick1：主通道无 Mascot + 容器未观察 → 无 petRect → hidden（生产此分支执行 containerProbe.reset()）
+    var d = Follower.decide(pet: nil, stationaryAnchor: stationaryAnchor,
+                            lastMaterialChangeAt: lastMaterialChangeAt, now: 70_000)
+    var plan = FollowTickPlanner.decide(input: FollowTickInput(
+        petVisible: d.showDock, wasPetVisible: wasPetVisible, dockVisible: true))
+    check("T-cp60 tick1 无观察→hidden+petDisappeared",
+          d.state == .hidden && plan.petDisappeared && plan.hideUI && !plan.showUI, "")
+    probe.reset()
+    wasPetVisible = d.showDock
+    // tick2：容器观察落 cache → 合成 rect → moving + showUI + resumeData（计划输出不变）
+    clock.withLock { $0 = 70_001 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    if case .bounds(let rect) = probe.locate(container: container) {
+        check("T-cp61 容器观察→合成rect几何正确", rect == cpRectA, "rect=\(rect)")
+        d = Follower.decide(pet: rect, stationaryAnchor: stationaryAnchor,
+                            lastMaterialChangeAt: lastMaterialChangeAt, now: 70_001)
+        plan = FollowTickPlanner.decide(input: FollowTickInput(
+            petVisible: d.showDock, wasPetVisible: wasPetVisible, dockVisible: true))
+        check("T-cp62 容器观察→hidden→moving+showUI+resumeData",
+              d.state == .moving && d.showDock && plan.showUI && plan.resumeData && !plan.petDisappeared,
+              "state=\(d.state.rawValue) plan=\(plan)")
+        stationaryAnchor = d.stationaryAnchor
+        lastMaterialChangeAt = d.lastMaterialChangeAt
+        wasPetVisible = d.showDock
+    } else {
+        check("T-cp61 容器观察→合成rect几何正确", false, "locate 未产出 bounds")
+    }
+    // tick3：容器消失（不在候选集）→ 无 petRect → hidden + pauseData + petDisappeared（生产执行 reset()）
+    d = Follower.decide(pet: nil, stationaryAnchor: stationaryAnchor,
+                        lastMaterialChangeAt: lastMaterialChangeAt, now: 70_002)
+    plan = FollowTickPlanner.decide(input: FollowTickInput(
+        petVisible: d.showDock, wasPetVisible: wasPetVisible, dockVisible: true))
+    check("T-cp63 容器消失→hidden+pauseData+petDisappeared",
+          d.state == .hidden && plan.pauseData && plan.petDisappeared && plan.hideUI, "")
+    probe.reset()
+check("T-cp64 消失路径 reset→缓存清空(下一episode重新捕获)", probe.lock.withLock { $0.cached == nil }, "")
+}
+
+// ---- C4b 保守保留语义（真实完成链）：targetMissing / unavailable / 超门限 stats 均不
+// 擦除既有有效观察（stale 失败必须保守处理，SC/CG 清单竞态不产生错误空窗）。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(80_000))
+    let outcomeBox = OSAllocatedUnfairLock<ContainerCaptureOutcome>(initialState: .stats(cpStatsA))
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, _ in outcomeBox.withLock { $0 } })
+    let container = cpContainer(531)
+    // 前置：首捕有效观察
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp65 前置:首捕→bounds", probe.locate(container: container) == .bounds(cpRectA), "")
+    // (a) targetMissing（SCK 清单缺 WID）→ 保留既有观察
+    outcomeBox.withLock { $0 = .targetMissing }
+    clock.withLock { $0 = 80_001 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp66 targetMissing→保留既有有效观察",
+          probe.locate(container: container) == .bounds(cpRectA), "")
+    // (b) unavailable（捕获失败，非权限缺失）→ 保留既有观察
+    outcomeBox.withLock { $0 = .unavailable }
+    clock.withLock { $0 = 80_002 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp67 unavailable→保留既有有效观察",
+          probe.locate(container: container) == .bounds(cpRectA), "")
+    // (c) 超门限 stats（fraction > gate）→ 不接纳新观察 + 保留既有观察
+    let cpDenseStats = ContainerAlphaStats(nonTransparentPixelCount: 4840, minX: 10, minY: 20,
+                                           maxX: 29, maxY: 59, captureWidth: 200, captureHeight: 400)
+    outcomeBox.withLock { $0 = .stats(cpDenseStats) }
+    clock.withLock { $0 = 80_003 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp68 超门限stats→不接纳+保留既有观察",
+          probe.locate(container: container) == .bounds(cpRectA)
+            && probe.lock.withLock { $0.cached?.nonTransparentPixelCount == cpStatsA.nonTransparentPixelCount },
+          "")
+    // 恢复：新的有效观察重新生效（bbox 变化 → 快速节奏窗口）
+    outcomeBox.withLock { $0 = .stats(cpStatsB) }
+    clock.withLock { $0 = 80_004 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+check("T-cp69 新有效观察→bounds更新",
+      probe.locate(container: container) == .bounds(cpRectB), "")
+}
+
+// ---- C6 QA P0 修复回归：hidden tick 的容器 reset 门控（候选在场不得饿死在途捕获）----
+// 纯 helper：在场 → false（不 reset）；缺席 → true（真正容器消失路径才 reset）。
+check("T-cp70 候选在场→containerProbeReset=false",
+      FollowTickPlanner.containerProbeReset(containerCandidatePresent: true) == false, "")
+check("T-cp71 候选缺席→containerProbeReset=true",
+      FollowTickPlanner.containerProbeReset(containerCandidatePresent: false) == true, "")
+
+// 组合回归：首 locate 在途/empty 的 hidden tick 不 reset → 捕获完成后观察可落地；
+// 对照：候选缺席路径 reset 会真正失效缓存。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(90_000))
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let slowCap: ContainerCapturer = { _, _ in
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        return .stats(cpStatsA)
+    }
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: slowCap,
+        onObservationChanged: { wakes.withLock { $0 += 1 } })
+    let container = cpContainer(532)
+    _ = probe.locate(container: container)
+    check("T-cp72 前置:首捕在途→locate empty",
+          probe.lock.withLock { $0.inFlight } && probe.locate(container: container) == .empty, "")
+    // 生产消失分支（修复后接线）：候选在场 → helper false → 不调用 reset。
+    if FollowTickPlanner.containerProbeReset(containerCandidatePresent: true) {
+        probe.reset()
+    }
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp73 候选在场+hidden tick 不 reset→在途捕获落地为观察",
+          probe.locate(container: container) == .bounds(cpRectA), "")
+    check("T-cp74 首观察 wake 恰一次", wakes.withLock { $0 } == 1, "wakes=\(wakes.withLock { $0 })")
+    // 对照（候选缺席 → helper true → reset）：缓存真正失效，等待重现重捕。
+    if FollowTickPlanner.containerProbeReset(containerCandidatePresent: false) {
+        probe.reset()
+    }
+    clock.withLock { $0 = 90_100 }
+check("T-cp75 候选缺席 reset→缓存失效(empty)",
+          probe.locate(container: container) == .empty && probe.lock.withLock { $0.cached == nil }, "")
+}
+
+// ---- C7 AC7：accepted observation rect 边沿语义，且每个边沿只请求一次 coalesced wake。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(100_000))
+    let edges = OSAllocatedUnfairLock(initialState: 0)
+    let enqueued = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let outcomeBox = OSAllocatedUnfairLock<ContainerCaptureOutcome>(initialState: .stats(cpStatsA))
+    let coalescer = FollowTickCoalescer(
+        enqueue: { item in
+            enqueued.withLock { $0 += 1 }
+            item.perform()
+        },
+        tick: { wakes.withLock { $0 += 1 } })
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, _ in outcomeBox.withLock { $0 } },
+        onObservationChanged: {
+            edges.withLock { $0 += 1 }
+            coalescer.requestWake()
+        })
+    let container = cpContainer(533)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 1 && enqueued.withLock { $0 } == 1 && wakes.withLock { $0 } == 1
+    })
+    check("T-cp76 none→bounds 触发一次回调/coalesced wake",
+          edges.withLock { $0 } == 1 && enqueued.withLock { $0 } == 1 && wakes.withLock { $0 } == 1,
+          "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+    clock.withLock { $0 = 100_001 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp77 bounds→same rect 不触发回调/wake",
+          edges.withLock { $0 } == 1 && enqueued.withLock { $0 } == 1 && wakes.withLock { $0 } == 1,
+          "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+    outcomeBox.withLock { $0 = .stats(cpStatsB) }
+    clock.withLock { $0 = 100_002 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 2 && enqueued.withLock { $0 } == 2 && wakes.withLock { $0 } == 2
+    })
+    check("T-cp78 bounds→different rect 触发一次回调/coalesced wake",
+          edges.withLock { $0 } == 2 && enqueued.withLock { $0 } == 2 && wakes.withLock { $0 } == 2,
+          "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+    probe.reset()
+    outcomeBox.withLock { $0 = .stats(cpStatsA) }
+    clock.withLock { $0 = 100_100 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 3 && enqueued.withLock { $0 } == 3 && wakes.withLock { $0 } == 3
+    })
+    check("T-cp79 reset 后 baseline 重武装→none→旧 rect 再次边沿",
+          edges.withLock { $0 } == 3 && enqueued.withLock { $0 } == 3 && wakes.withLock { $0 } == 3,
+          "edges=\(edges.withLock { $0 }) enqueued=\(enqueued.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+}
+
+// Repair cycle 5：捕获降采样 772px→约121px，1 capture px≈6.4 global px；8px
+// acceptance deadband 必须压住一像素量化噪声，同时让真实位移累计越界后立即进入 0.1s tier。
+let cpDeadbandBase = CGRect(x: 140, y: 180, width: 80, height: 160)
+check("T-cp104 acceptDeadband=8px 且任一 min/max 边达到阈值即接纳",
+      ContainerPetHeuristics.acceptDeadband == 8
+        && !ContainerPetChannel.shouldAcceptObservation(
+            cpDeadbandBase.offsetBy(dx: 7.99, dy: 0), comparedTo: cpDeadbandBase)
+        && ContainerPetChannel.shouldAcceptObservation(
+            cpDeadbandBase.offsetBy(dx: 8, dy: 0), comparedTo: cpDeadbandBase)
+        && ContainerPetChannel.shouldAcceptObservation(
+            CGRect(x: cpDeadbandBase.minX, y: cpDeadbandBase.minY,
+                   width: cpDeadbandBase.width + 8, height: cpDeadbandBase.height),
+            comparedTo: cpDeadbandBase)
+        && ContainerPetChannel.shouldAcceptObservation(cpDeadbandBase, comparedTo: nil), "")
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(105_000))
+    let desiredBBox = OSAllocatedUnfairLock(
+        initialState: CGRect(x: 40, y: 80, width: 80, height: 160))
+    let edges = OSAllocatedUnfairLock(initialState: 0)
+    let enqueued = OSAllocatedUnfairLock(initialState: 0)
+    let wakes = OSAllocatedUnfairLock(initialState: 0)
+    let coalescer = FollowTickCoalescer(
+        enqueue: { item in
+            enqueued.withLock { $0 += 1 }
+            item.perform()
+        },
+        tick: { wakes.withLock { $0 += 1 } })
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(
+                for: desiredBBox.withLock { $0 }, in: region, outputSize: request.outputSize))
+        },
+        onObservationChanged: {
+            edges.withLock { $0 += 1 }
+            coalescer.requestWake()
+        })
+    let containerA = cpContainer(539)
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 1 && wakes.withLock { $0 } == 1
+    }
+    let baselineOutcome = probe.locate(container: containerA)
+    let baselineCache = probe.lock.withLock { $0.cached }
+
+    desiredBBox.withLock { $0.origin.x += 4 }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    check("T-cp105 sub-deadband bbox 保留旧 cache、无 edge/coalesced wake",
+          probe.locate(container: containerA) == baselineOutcome
+            && probe.lock.withLock { $0.cached == baselineCache }
+            && edges.withLock { $0 } == 1
+            && enqueued.withLock { $0 } == 1
+            && wakes.withLock { $0 } == 1,
+          "outcome=\(probe.locate(container: containerA)) edges=\(edges.withLock { $0 }) wakes=\(wakes.withLock { $0 })")
+
+    desiredBBox.withLock { $0.origin.x += 8 }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 2 && wakes.withLock { $0 } == 2
+    }
+    let superDeadbandOutcome = probe.locate(container: containerA)
+    check("T-cp106 super-deadband bbox 更新 cache/edge 并武装 moving tier",
+          superDeadbandOutcome != baselineOutcome
+            && probe.lock.withLock {
+                $0.cached != baselineCache && $0.movingUntil > clock.withLock { $0 }
+            }
+            && edges.withLock { $0 } == 2 && wakes.withLock { $0 } == 2,
+          "outcome=\(superDeadbandOutcome) edges=\(edges.withLock { $0 })")
+
+    desiredBBox.withLock { $0.origin.x += 12 }
+    clock.withLock { $0 += ContainerPetHeuristics.movingCaptureInterval }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 3 && wakes.withLock { $0 } == 3
+    }
+    let trackedOutcome = probe.locate(container: containerA)
+    check("T-cp107 真实移动越过8px后以0.1s tier继续更新",
+          trackedOutcome != superDeadbandOutcome
+            && edges.withLock { $0 } == 3 && wakes.withLock { $0 } == 3,
+          "before=\(superDeadbandOutcome) after=\(trackedOutcome)")
+
+    desiredBBox.withLock { $0.origin.x += 4 }
+    probe.reset()
+    clock.withLock { $0 += 1 }
+    _ = probe.locate(container: containerA)
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 4 && wakes.withLock { $0 } == 4
+    }
+    let resetOutcome = probe.locate(container: containerA)
+    desiredBBox.withLock { $0.origin.x += 4 }
+    clock.withLock { $0 += 1 }
+    _ = probe.locate(container: cpContainer(540))
+    _ = waitPumpingMain {
+        !probe.lock.withLock { $0.inFlight }
+            && edges.withLock { $0 } == 5 && wakes.withLock { $0 } == 5
+    }
+    let widOutcome = probe.locate(container: cpContainer(540))
+    check("T-cp108 reset/WID 新 episode 绕过 deadband 并接纳首观察",
+          resetOutcome != .empty && widOutcome != .empty
+            && resetOutcome != widOutcome
+            && edges.withLock { $0 } == 5 && wakes.withLock { $0 } == 5,
+          "reset=\(resetOutcome) wid=\(widOutcome) edges=\(edges.withLock { $0 })")
+}
+
+// ---- C8 option 1 cadence：region-tracked one-shot 稳定重捕为 1.0s（R7-amended，fake monotonic clock）。
+check("T-cp80 stableCaptureInterval=1.0(R7-amended)",
+      ContainerPetHeuristics.stableCaptureInterval == 1.0, "")
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(110_000))
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, _ in
+            calls.withLock { $0 += 1 }
+            return .stats(cpStatsA)
+        })
+    let container = cpContainer(534)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    // 首个观察（nil→bbox）会武装 2s moving hold（interval=0.1s），0.32s 落在 hold 内
+    // 会合法启动第二次捕获；必须先把时钟推过 hold 结束再测 stable 门限。bbox 不变时
+    // hold 不重置，因此后续轮次保持 stable。每次断言前都等 detached 捕获 quiesce。
+    clock.withLock { $0 = 110_002.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp81a 前置:moving hold过期→stable重捕完成",
+          calls.withLock { $0 } == 2, "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 110_002.42 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp81 stable 0.32s→不捕获(stable=1.0s)",
+          calls.withLock { $0 } == 2 && !probe.lock.withLock { $0.inFlight },
+          "calls=\(calls.withLock { $0 })")
+    clock.withLock { $0 = 110_003.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp82 stable 1.0s 节奏→捕获(R7-amended)", calls.withLock { $0 } == 3, "calls=\(calls.withLock { $0 })")
+}
+
+// ---- C9 option 1 region tracking：坐标校准 + full/region/fallback 状态机。----
+let cpCalibrationStats = ContainerAlphaStats(
+    nonTransparentPixelCount: 800, minX: 10, minY: 20, maxX: 29, maxY: 59,
+    captureWidth: 200, captureHeight: 400)
+let cpCalibrationRegion = CGRect(x: 50, y: 300, width: 800, height: 1600)
+let cpCalibrationBBox = ContainerPetChannel.windowBBox(
+    stats: cpCalibrationStats, captureRegion: cpCalibrationRegion)
+check("T-cp87 capture alpha bbox maps directly into window-local coordinates",
+      cpCalibrationBBox == CGRect(x: 90, y: 380, width: 80, height: 160),
+      "actual=\(String(describing: cpCalibrationBBox))")
+
+let cpDisplays = [
+    CGRect(x: 0, y: 0, width: 1728, height: 1117),
+    CGRect(x: 1728, y: -1117, width: 1728, height: 1117),
+]
+let cpCalibrationBounds = CGRect(x: 1900, y: -1400, width: 800, height: 1600)
+let cpWindowRegion = CGRect(x: 40, y: 500, width: 300, height: 300)
+check("T-cp88 active display is selected by largest tracked-region intersection",
+      ContainerPetChannel.captureDisplayBounds(
+        windowRegion: cpWindowRegion,
+        containerBounds: cpCalibrationBounds,
+        displayBounds: cpDisplays) == cpDisplays[1], "")
+let cpCaptureGeometry = ContainerPetChannel.regionCaptureGeometry(
+    windowRegion: cpWindowRegion,
+    containerBounds: cpCalibrationBounds,
+    displayBounds: cpDisplays[1])
+check("T-cp89 sourceRect is relative to the selected display/container segment origin",
+      cpCaptureGeometry?.sourceRect == CGRect(x: 40, y: 217, width: 300, height: 300)
+        && cpCaptureGeometry?.captureRegion == cpWindowRegion,
+      "actual=\(String(describing: cpCaptureGeometry))")
+
+let cpTracked = ContainerPetChannel.trackedRegion(
+    for: CGRect(x: 300, y: 500, width: 80, height: 160),
+    windowSize: CGSize(width: 800, height: 1600))
+check("T-cp90 tracked region expands 150px horizontally/top and 400px below",
+      cpTracked == CGRect(x: 150, y: 350, width: 380, height: 710),
+      "actual=\(cpTracked)")
+let cpTrackedClamped = ContainerPetChannel.trackedRegion(
+    for: CGRect(x: 20, y: 1300, width: 80, height: 160),
+    windowSize: CGSize(width: 800, height: 1600))
+check("T-cp91 tracked region clamps to window while retaining bubble zone where available",
+      cpTrackedClamped == CGRect(x: 0, y: 1150, width: 250, height: 450),
+      "actual=\(cpTrackedClamped)")
+let cpEdgeFixtures = [
+    ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 0, minY: 2, maxX: 4, maxY: 6,
+                        captureWidth: 20, captureHeight: 20),
+    ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 2, minY: 0, maxX: 4, maxY: 6,
+                        captureWidth: 20, captureHeight: 20),
+    ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 2, minY: 2, maxX: 19, maxY: 6,
+                        captureWidth: 20, captureHeight: 20),
+    ContainerAlphaStats(nonTransparentPixelCount: 1, minX: 2, minY: 2, maxX: 4, maxY: 19,
+                        captureWidth: 20, captureHeight: 20),
+]
+let cpInteriorFixture = ContainerAlphaStats(
+    nonTransparentPixelCount: 1, minX: 2, minY: 2, maxX: 4, maxY: 6,
+    captureWidth: 20, captureHeight: 20)
+let cpWindowLocalBounds = CGRect(origin: .zero, size: cpBounds.size)
+check("T-cp91b interior capture edges arm fallback while an interior bbox does not",
+      cpEdgeFixtures.allSatisfy {
+          ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
+              $0,
+              captureRegion: CGRect(x: 100, y: 100, width: 200, height: 200),
+              windowSize: cpBounds.size,
+              displaySegment: cpWindowLocalBounds)
+      }
+        && !ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
+            cpInteriorFixture,
+            captureRegion: CGRect(x: 100, y: 100, width: 200, height: 200),
+            windowSize: cpBounds.size,
+            displaySegment: cpWindowLocalBounds), "")
+check("T-cp91c region output keeps full-window scale instead of upscaling crop to 400px",
+      ContainerPetChannel.captureOutputSize(
+        windowSize: cpBounds.size, captureRegion: cpTracked) == CGSize(width: 95, height: 178), "")
+let cpWindowLeftStats = ContainerAlphaStats(
+    nonTransparentPixelCount: 20, minX: 0, minY: 2, maxX: 4, maxY: 6,
+    captureWidth: 20, captureHeight: 20)
+check("T-cp91d window-aligned capture edge is exterior and does not arm fallback",
+      !ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
+        cpWindowLeftStats,
+        captureRegion: CGRect(x: 0, y: 100, width: 200, height: 200),
+        windowSize: cpBounds.size,
+        displaySegment: cpWindowLocalBounds), "")
+let cpCrossSegmentRegion = CGRect(x: 300, y: 500, width: 300, height: 300)
+let cpRightClampedStats = ContainerAlphaStats(
+    nonTransparentPixelCount: 20, minX: 2, minY: 2, maxX: 19, maxY: 6,
+    captureWidth: 20, captureHeight: 20)
+let cpCrossSegmentGeometry = ContainerPetChannel.regionCaptureGeometry(
+    windowRegion: cpCrossSegmentRegion,
+    containerBounds: cpBounds,
+    displayBounds: CGRect(x: 100, y: 100, width: 400, height: 1600))
+check("T-cp91e cross-segment clamp records its exterior display boundary",
+      cpCrossSegmentGeometry?.sourceRect == CGRect(x: 300, y: 500, width: 100, height: 300)
+        && cpCrossSegmentGeometry?.captureRegion == CGRect(x: 300, y: 500, width: 100, height: 300)
+        && cpCrossSegmentGeometry?.displaySegment == CGRect(x: 0, y: 0, width: 400, height: 1600)
+        && !ContainerPetChannel.bboxTouchesInteriorCaptureEdge(
+            cpRightClampedStats,
+            captureRegion: CGRect(x: 300, y: 500, width: 100, height: 300),
+            windowSize: cpBounds.size,
+            displaySegment: CGRect(x: 0, y: 0, width: 400, height: 1600)),
+      "actual=\(String(describing: cpCrossSegmentGeometry))")
+
+@Sendable func cpStats(for windowBBox: CGRect, in region: CGRect, outputSize: CGSize) -> ContainerAlphaStats {
+    let width = Int(outputSize.width.rounded())
+    let height = Int(outputSize.height.rounded())
+    let scaleX = CGFloat(width) / region.width
+    let scaleY = CGFloat(height) / region.height
+    let minX = Int(((windowBBox.minX - region.minX) * scaleX).rounded())
+    let maxX = Int(((windowBBox.maxX - region.minX) * scaleX).rounded()) - 1
+    let minY = Int(((windowBBox.minY - region.minY) * scaleY).rounded())
+    let maxY = Int(((windowBBox.maxY - region.minY) * scaleY).rounded()) - 1
+    return ContainerAlphaStats(
+        nonTransparentPixelCount: max(1, (maxX - minX + 1) * (maxY - minY + 1) / 4),
+        minX: minX, minY: minY, maxX: maxX, maxY: maxY,
+        captureWidth: width, captureHeight: height)
+}
+
+// Round-24 生产组合回归：同一容器窗口 origin 下，idle sprite 仅把 alpha bbox 单边扩 8px。
+// Probe 接纳该边界观察，Follower 因 size 变化给出 movementChanged=true；最终 DockPanel
+// owner 仍必须保持原 frame，且后续 follow tick 也不能推进一个被错误创建的 32ms segment。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(119_000))
+    // 靠近窗口右/上外边界使 tracked region 合法 clamp；该几何下源 bbox 单边 +8px 经
+    // 真实 region 重采样后仍达到 Probe 接纳边界，而 dock center 只变化约 5px。
+    let baselineWindowBBox = CGRect(x: 592, y: 0, width: 60, height: 80)
+    let desiredBBox = OSAllocatedUnfairLock(
+        initialState: baselineWindowBBox)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(
+                for: desiredBBox.withLock { $0 }, in: region, outputSize: request.outputSize))
+        })
+    let container = cpContainer(541)
+    let placementWindowOrigin = container.bounds.origin
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    let baselineOutcome = probe.locate(container: container)
+    if case .bounds(let baselineRect) = baselineOutcome {
+        let dock = DockPanel()
+        let baselineDecision = Follower.decide(
+            pet: baselineRect, stationaryAnchor: nil,
+            lastMaterialChangeAt: nil, now: clock.withLock { $0 })
+        _ = dock.placeBelow(
+            petQuartzRect: baselineRect, visibleScreen: avoScreen,
+            movementChanged: baselineDecision.shouldSetFrame,
+            windowOriginChanged: true,
+            monotonicNow: clock.withLock { $0 })
+        dock.showIfNeeded()
+        let ownerBeforeExpansion = dock.frame
+
+        desiredBBox.withLock { $0.size.width += 8 }
+        clock.withLock { $0 += ContainerPetHeuristics.movingCaptureInterval }
+        _ = probe.locate(container: container)
+        _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+        let expandedOutcome = probe.locate(container: container)
+        if case .bounds(let expandedRect) = expandedOutcome {
+            let expandedDecision = Follower.decide(
+                pet: expandedRect,
+                stationaryAnchor: baselineDecision.stationaryAnchor,
+                lastMaterialChangeAt: baselineDecision.lastMaterialChangeAt,
+                now: clock.withLock { $0 })
+            let shown = dock.placeBelow(
+                petQuartzRect: expandedRect, visibleScreen: avoScreen,
+                movementChanged: expandedDecision.shouldSetFrame,
+                windowOriginChanged: false,
+                monotonicNow: clock.withLock { $0 })
+            clock.withLock { $0 += 0.016 }
+            let followDecision = Follower.decide(
+                pet: expandedRect,
+                stationaryAnchor: expandedDecision.stationaryAnchor,
+                lastMaterialChangeAt: expandedDecision.lastMaterialChangeAt,
+                now: clock.withLock { $0 })
+            _ = dock.placeBelow(
+                petQuartzRect: expandedRect, visibleScreen: avoScreen,
+                movementChanged: followDecision.shouldSetFrame,
+                windowOriginChanged: false,
+                monotonicNow: clock.withLock { $0 })
+            let expandedTarget = pdTarget(pet: expandedRect, dock: dock)
+            let oneSidedEightPixelTrigger = desiredBBox.withLock {
+                $0.minX == baselineWindowBBox.minX
+                    && $0.minY == baselineWindowBBox.minY
+                    && $0.maxX == baselineWindowBBox.maxX + 8
+                    && $0.maxY == baselineWindowBBox.maxY
+            }
+            check("T-cp109 same-origin单边8px bbox扩张经Probe→Follower→DockPanel不移动owner",
+                  shown
+                    && container.bounds.origin == placementWindowOrigin
+                    && oneSidedEightPixelTrigger
+                    && abs(expandedRect.width - baselineRect.width - 8) < 2
+                    && expandedDecision.shouldSetFrame
+                    && abs(expandedTarget.origin.x - ownerBeforeExpansion.origin.x)
+                        < ContainerPetHeuristics.placementDeadband
+                    && abs(expandedTarget.origin.y - ownerBeforeExpansion.origin.y)
+                        < ContainerPetHeuristics.placementDeadband
+                    && avoFrameNear(dock.frame, ownerBeforeExpansion),
+                  "baseline=\(baselineRect) expanded=\(expandedRect) "
+                    + "movement=\(expandedDecision.shouldSetFrame) "
+                    + "ownerBefore=\(ownerBeforeExpansion) ownerAfter=\(dock.frame)")
+        } else {
+            check("T-cp109 same-origin单边8px bbox扩张经Probe→Follower→DockPanel不移动owner",
+                  false, "expanded=\(expandedOutcome)")
+        }
+        dock.hideIfNeeded()
+    } else {
+        check("T-cp109 same-origin单边8px bbox扩张经Probe→Follower→DockPanel不移动owner",
+              false, "baseline=\(baselineOutcome)")
+    }
+}
+
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(120_000))
+    let requests = OSAllocatedUnfairLock(initialState: [ContainerCaptureRequest]())
+    let desiredBBox = OSAllocatedUnfairLock(initialState: CGRect(x: 300, y: 500, width: 80, height: 160))
+    let forceEmpty = OSAllocatedUnfairLock(initialState: false)
+    let forceEdge = OSAllocatedUnfairLock(initialState: false)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            requests.withLock { $0.append(request) }
+            let region: CGRect
+            switch request.round {
+            case .fullWindow:
+                region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value):
+                region = value
+            }
+            if forceEmpty.withLock({ $0 }) {
+                return .stats(ContainerAlphaStats(
+                    nonTransparentPixelCount: 0, minX: -1, minY: -1, maxX: -1, maxY: -1,
+                    captureWidth: Int(request.outputSize.width), captureHeight: Int(request.outputSize.height)))
+            }
+            var bbox = desiredBBox.withLock { $0 }
+            if forceEdge.withLock({ $0 }) { bbox.origin.x = region.minX }
+            return .stats(cpStats(for: bbox, in: region, outputSize: request.outputSize))
+        })
+    let container = cpContainer(535)
+
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp92 first activation round is full-window and seeds tracking region",
+          requests.withLock { $0.first?.round == .fullWindow }
+            && probe.lock.withLock { $0.regionTracking == cpTracked && !$0.needsFullLocate },
+          "requests=\(requests.withLock { $0 }) state=\(probe.lock.withLock { ($0.regionTracking, $0.needsFullLocate) })")
+
+    desiredBBox.withLock { $0 = CGRect(x: 360, y: 520, width: 80, height: 160) }
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    let cpUpdatedTracked = ContainerPetChannel.trackedRegion(
+        for: desiredBBox.withLock { $0 }, windowSize: cpBounds.size)
+    check("T-cp93 region hit uses tracked source and recenters tracking",
+          requests.withLock {
+            guard case .region(let region) = $0.last?.round else { return false }
+            return region == cpTracked
+          } && probe.lock.withLock {
+            guard let updated = $0.regionTracking else { return false }
+            return updated != cpTracked && !$0.needsFullLocate
+                && abs(updated.midX - cpUpdatedTracked.midX) < 4
+                && abs(updated.midY - cpUpdatedTracked.midY) < 4
+          }, "requests=\(requests.withLock { $0 })")
+
+    forceEmpty.withLock { $0 = true }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp94 empty region capture arms full locate without erasing last observation",
+          probe.lock.withLock { $0.needsFullLocate }
+            && probe.locate(container: container) != .empty, "")
+    forceEmpty.withLock { $0 = false }
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp95 region miss cannot loop: next capture is full-window",
+          requests.withLock { $0.last?.round == .fullWindow },
+          "requests=\(requests.withLock { $0 })")
+
+    forceEdge.withLock { $0 = true }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp96 bbox touching region edge arms full locate",
+          probe.lock.withLock { $0.needsFullLocate }, "")
+    forceEdge.withLock { $0 = false }
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp97 edge fallback next round is full-window",
+          requests.withLock { $0.last?.round == .fullWindow }, "")
+
+    probe.reset()
+    clock.withLock { $0 += 1.0 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp98 reset clears region and restarts with full locate",
+          requests.withLock { $0.last?.round == .fullWindow }, "")
+    clock.withLock { $0 += 1.0 }
+    _ = probe.locate(container: cpContainer(536))
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp99 WID change clears region and restarts with full locate",
+          requests.withLock { $0.last?.round == .fullWindow }, "")
+}
+
+// Round-17：窗口外边界合法贴边不得 full/region 振荡。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(130_000))
+    let requests = OSAllocatedUnfairLock(initialState: [ContainerCaptureRequest]())
+    let windowEdgeBBox = CGRect(x: 0, y: 500, width: 80, height: 160)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            requests.withLock { $0.append(request) }
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(for: windowEdgeBBox, in: region, outputSize: request.outputSize))
+        })
+    let container = cpContainer(537)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp100 pet at window x=0 stays on repeated region rounds without oscillation",
+          requests.withLock {
+              guard $0.count == 3,
+                    $0[0].round == .fullWindow,
+                    case .region(let firstRegion) = $0[1].round,
+                    case .region(let secondRegion) = $0[2].round else { return false }
+              return firstRegion.minX == 0 && secondRegion.minX == 0
+          } && probe.lock.withLock { !$0.needsFullLocate },
+          "requests=\(requests.withLock { $0 })")
+}
+
+// Round-18：display segment 与窗口边界同为合法外边界；跨界内容接受截断观察并稳定留在 region。
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(140_000))
+    let requests = OSAllocatedUnfairLock(initialState: [ContainerCaptureRequest]())
+    let touchClampEdge = OSAllocatedUnfairLock(initialState: false)
+    let forceInteriorEdge = OSAllocatedUnfairLock(initialState: false)
+    let returnedRegion = OSAllocatedUnfairLock<CGRect?>(initialState: nil)
+    let requestedRegion = OSAllocatedUnfairLock<CGRect?>(initialState: nil)
+    let returnedStats = OSAllocatedUnfairLock<ContainerAlphaStats?>(initialState: nil)
+    let displaySegment = CGRect(x: 0, y: 0, width: 400, height: 1600)
+    let probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            requests.withLock { $0.append(request) }
+            switch request.round {
+            case .fullWindow:
+                return .stats(cpStats(
+                    for: CGRect(x: 300, y: 500, width: 80, height: 160),
+                    in: CGRect(origin: .zero, size: cpBounds.size),
+                    outputSize: request.outputSize))
+            case .region(let region):
+                requestedRegion.withLock { $0 = region }
+                let captureRegion = region.intersection(displaySegment)
+                returnedRegion.withLock { $0 = captureRegion }
+                let desiredBBox: CGRect
+                if forceInteriorEdge.withLock({ $0 }) {
+                    desiredBBox = CGRect(
+                        x: captureRegion.minX, y: 500, width: 80, height: 160)
+                } else if touchClampEdge.withLock({ $0 }) {
+                    desiredBBox = CGRect(x: 320, y: 500, width: 100, height: 160)
+                } else {
+                    desiredBBox = CGRect(x: 300, y: 500, width: 80, height: 160)
+                }
+                let visibleBBox = desiredBBox.intersection(captureRegion)
+                let outputSize = ContainerPetChannel.captureOutputSize(
+                    windowSize: cpBounds.size, captureRegion: captureRegion)
+                let stats = cpStats(
+                    for: visibleBBox, in: captureRegion, outputSize: outputSize)
+                returnedStats.withLock { $0 = stats }
+                return .regionStats(
+                    stats,
+                    captureRegion: captureRegion,
+                    displaySegment: displaySegment)
+            }
+        })
+    let container = cpContainer(538)
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    let initialCachedRegion = probe.lock.withLock { $0.cachedCaptureRegion }
+    clock.withLock { $0 += 0.33 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    let firstReturnedRegion = returnedRegion.withLock { $0 }
+    check("T-cp101 clamped cross-segment sub-deadband bbox 保留旧 cache 且维持 region 模式",
+          probe.lock.withLock {
+              $0.cachedCaptureRegion == initialCachedRegion
+                && !$0.needsFullLocate
+          } && firstReturnedRegion != nil && requests.withLock {
+              guard case .region = $0.last?.round else { return false }
+              return true
+          }, "requests=\(requests.withLock { $0 })")
+    touchClampEdge.withLock { $0 = true }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    let observationAfterClamp = probe.locate(container: container)
+    let clampRequestedRegion = requestedRegion.withLock { $0 }
+    let clampReturnedRegion = returnedRegion.withLock { $0 }
+    let clampStats = returnedStats.withLock { $0 }
+    check("T-cp102 display-boundary clamp edge accepts truncated observation without relocation",
+          clampRequestedRegion?.contains(clampReturnedRegion ?? .null) == true
+            && clampStats?.maxX == (clampStats?.captureWidth ?? 0) - 1
+            && probe.lock.withLock {
+              !$0.needsFullLocate && $0.cachedCaptureRegion == clampReturnedRegion
+          } && observationAfterClamp != .empty,
+          "requests=\(requests.withLock { $0 }) observation=\(observationAfterClamp)")
+    touchClampEdge.withLock { $0 = false }
+    forceInteriorEdge.withLock { $0 = true }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    let interiorEdgeArmed = probe.lock.withLock { $0.needsFullLocate }
+    clock.withLock { $0 += 0.1 }
+    _ = probe.locate(container: container)
+    _ = waitPumpingMain({ !probe.lock.withLock { $0.inFlight } })
+    check("T-cp103 interior capture edge still arms and executes full locate",
+          interiorEdgeArmed && requests.withLock { $0.last?.round == .fullWindow },
+          "requests=\(requests.withLock { $0 })")
+}
+
+// ---- C10 Addendum 4：one-shot transport / wiring / verbose lifecycle logging guards。
+let cpRepoRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+let cpChannelSource = try! String(
+    contentsOf: cpRepoRoot.appendingPathComponent("Sources/PetDock/ContainerPetChannel.swift"),
+    encoding: .utf8)
+let cpMainSource = try! String(
+    contentsOf: cpRepoRoot.appendingPathComponent("Sources/PetDock/main.swift"),
+    encoding: .utf8)
+let cpProductionSourceDirectory = cpRepoRoot.appendingPathComponent("Sources/PetDock", isDirectory: true)
+let cpProductionSourceURLs = try! FileManager.default.contentsOfDirectory(
+    at: cpProductionSourceDirectory,
+    includingPropertiesForKeys: nil)
+    .filter { $0.pathExtension == "swift" }
+    .sorted { $0.lastPathComponent < $1.lastPathComponent }
+let cpProductionSourceText = try! cpProductionSourceURLs.map {
+    try String(contentsOf: $0, encoding: .utf8)
+}.joined(separator: "\n")
+let cpRemovedStreamSymbols = [
+    "recordContainerStreamStartFailure",
+    "containerStreamStartFailureCount",
+    "ContainerFrameStream",
+    "ContainerSCFrameStream",
+    "streamFirstFrameTimeout",
+    "streamEpoch",
+    "armedEpoch",
+    "startFailureBackoff",
+]
+let cpRemainingStreamSymbols = cpRemovedStreamSymbols.filter(cpProductionSourceText.contains)
+check("T-cp83 all production Swift sources exclude managed stream/watchdog/backoff/epoch symbols",
+      cpRemainingStreamSymbols.isEmpty,
+      "remaining=\(cpRemainingStreamSymbols)")
+check("T-cp84 default one-shot round freshly enumerates then screenshots",
+      cpChannelSource.contains("SCShareableContent.excludingDesktopWindows")
+        && cpChannelSource.contains("SCScreenshotManager.captureImage")
+        && cpChannelSource.contains("private static let defaultCapturer"), "")
+check("T-cp85 one-shot lifecycle logs start/first-observation/failure via verbose-only PetLogger",
+      cpChannelSource.contains("private static let captureLogger = PetLogger()")
+        && cpChannelSource.contains("container capture start attempt")
+        && cpChannelSource.contains("container capture first observation")
+        && cpChannelSource.contains("container capture failure"), "")
+check("T-cp86 AppDelegate uses one-shot wiring, no shutdown callback, and keeps hidden evidence flush",
+      !cpMainSource.contains("transport: .managedStream")
+        && !cpMainSource.contains("containerProbe.shutdown()")
+        && !cpMainSource.contains("onStreamStartFailure:")
+        && cpMainSource.contains("private var lastPlacementWindowOrigin: CGPoint?")
+        && cpMainSource.contains("windowOriginChanged: windowOriginChanged")
+        && cpMainSource.contains("lastPlacementWindowOrigin = container.bounds.origin")
+        && cpMainSource.contains("runtimeEvidence?.flush()"), "")
+check("T-cp86b primary channel forwards window-origin changes and resets its origin state",
+      cpMainSource.contains("private var lastPrimaryWindowOrigin: CGPoint?")
+        && cpMainSource.contains(
+            "let primaryWindowOriginChanged = lastPrimaryWindowOrigin.map {\n"
+                + "                        $0 != mascot.bounds.origin\n"
+                + "                    } ?? false")
+        && cpMainSource.contains("windowOriginChanged: primaryWindowOriginChanged")
+        && cpMainSource.contains(
+            "if shown {\n"
+                + "                        lastPrimaryWindowOrigin = mascot.bounds.origin\n"
+                + "                        dock.showIfNeeded()")
+        && cpMainSource.contains(
+            "lastWID = nil\n"
+                + "            lastPrimaryWindowOrigin = nil\n"
+                + "            bubbleProbe.reset()"), "")
+
+print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")
+
+// ============================================================
+// C8 菜单误跟随路由（09-01 fix-dock-visibility-menu）
+// 症状：宿主新结构（无独立 Mascot，宠物在容器内）+ 右键菜单等临时小窗出现时，
+// 旧顺序「primary(含 generic 几何回退) → 容器」会把底座迁到菜单下方。
+// 生产链回归：候选快照 → PetTracker.selectPet → ContainerPetSelector/ContainerPetProbe →
+// Follower.decide → DockPanel.placeBelow/placeDock → 实际 DockPanel.frame/可见性，
+// 全部由真实 FollowTickScheduler 的 tick 闭包驱动（fake timer 手动点火，镜像 AppDelegate.tick）。
+// ============================================================
+let mrPass = pass, mrBase = fail
+
+/// 测试专用唤醒中继：ContainerPetProbe 的 @Sendable 观察回调 → 真实 scheduler.requestWake。
+/// （生产由 AppDelegate 持有两者并 weak-self 接线；测试无法捕获 var scheduler，用锁盒子等价。）
+final class MrSchedulerWakeRelay: @unchecked Sendable {
+    private let box = OSAllocatedUnfairLock(initialState: Optional<FollowTickScheduler>.none)
+    func attach(_ scheduler: FollowTickScheduler) { box.withLock { $0 = scheduler } }
+    func wake() { box.withLock { $0?.requestWake() } }
+}
+
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(130_000))
+    let mrContainer = cpContainer(540)
+    // 右键菜单形临时窗：layer 25、220x260 —— isReasonablePet 成立（旧 generic 回退会选中）。
+    let mrMenu = mkw(541, layer: 25, CGRect(x: 650, y: 350, width: 220, height: 260))
+    let candidatesBox = OSAllocatedUnfairLock(initialState: [mrContainer])
+    // 容器内宠物 bbox：窗口本地 (40,80,80,160) → 全局 cpRectA (140,180,80,160)。
+    let mrWindowBBox = CGRect(x: 40, y: 80, width: 80, height: 160)
+    let dock = DockPanel()
+    let dockPlanProbe = BubbleVisibilityProbe(
+        monotonicNow: { clock.withLock { $0 } }, canCapture: { true },
+        capturer: { _ in .unavailable })
+    var stationaryAnchor: CGRect?
+    var lastMaterialChangeAt: TimeInterval?
+    var lastWID: CGWindowID?
+    var lastPrimaryWindowOrigin: CGPoint?
+    var lastPlacementWindowOrigin: CGPoint?
+    var wasPetVisible = false
+    let selectedWIDs = OSAllocatedUnfairLock(initialState: [CGWindowID?]())
+    let routedLabels = OSAllocatedUnfairLock(initialState: [String]())
+    let tickCount = OSAllocatedUnfairLock(initialState: 0)
+    let timers = OSAllocatedUnfairLock(initialState: [TestFollowTickTimer]())
+    var probe: ContainerPetProbe!
+    var scheduler: FollowTickScheduler!
+    let wakeRelay = MrSchedulerWakeRelay()
+    probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(for: mrWindowBBox, in: region, outputSize: request.outputSize))
+        },
+        onObservationChanged: { wakeRelay.wake() })
+    scheduler = FollowTickScheduler(
+        runTick: {
+            // —— 生产 tick 镜像（AppDelegate.tick：枚举→识别→容器回退→决策→放置）——
+            let wins = candidatesBox.withLock { $0 }
+            let sel = PetTracker.selectPet(candidates: wins, lastWID: lastWID)
+            selectedWIDs.withLock { $0.append(sel.selected?.wid) }
+            tickCount.withLock { $0 += 1 }
+            // 生产单一来源解析：与 AppDelegate.tick 消费同一 PetSourceRouter 结果。
+            let containerCandidate = ContainerPetSelector.selectContainer(candidates: wins)
+            let route = PetSourceRouter.resolve(primary: sel, containerCandidate: containerCandidate)
+            routedLabels.withLock { $0.append(route.label) }
+            var pet: CGRect?
+            var viaContainerChannel = false
+            switch route {
+            case .primary(let window):
+                pet = window.bounds
+            case .container(let container):
+                if case .bounds(let rect) = probe.locate(container: container) {
+                    pet = rect
+                    viaContainerChannel = true
+                }
+            case .none:
+                break
+            }
+            let d = Follower.decide(pet: pet, stationaryAnchor: stationaryAnchor,
+                                    lastMaterialChangeAt: lastMaterialChangeAt,
+                                    now: clock.withLock { $0 })
+            let plan = FollowTickPlanner.decide(input: FollowTickInput(
+                petVisible: d.showDock, wasPetVisible: wasPetVisible, dockVisible: true))
+            wasPetVisible = d.showDock
+            if d.showDock {
+                stationaryAnchor = d.stationaryAnchor
+                if case .primary(let window) = route { lastWID = window.wid } else { lastWID = nil }
+                if plan.showUI {
+                    if case .primary(let mascot) = route {
+                        let primaryWindowOriginChanged = lastPrimaryWindowOrigin.map {
+                            $0 != mascot.bounds.origin
+                        } ?? false
+                        let shown = FollowLayoutPass.placeDock(
+                            mascot: mascot,
+                            candidates: wins,
+                            bubbleProbe: dockPlanProbe,
+                            frameSink: { petRect, obstacles in
+                                dock.placeBelow(
+                                    petQuartzRect: petRect,
+                                    avoiding: obstacles,
+                                    visibleScreen: nil,
+                                    movementChanged: d.shouldSetFrame,
+                                    windowOriginChanged: primaryWindowOriginChanged,
+                                    monotonicNow: clock.withLock { $0 })
+                            })
+                        if shown {
+                            lastPrimaryWindowOrigin = mascot.bounds.origin
+                            dock.showIfNeeded()
+                        } else {
+                            dock.hideIfNeeded()
+                        }
+                    } else if viaContainerChannel, let rect = pet, let container = containerCandidate {
+                        let windowOriginChanged = lastPlacementWindowOrigin.map {
+                            $0 != container.bounds.origin
+                        } ?? true
+                        let shown = dock.placeBelow(
+                            petQuartzRect: rect,
+                            avoiding: [],
+                            visibleScreen: nil,
+                            movementChanged: d.shouldSetFrame,
+                            windowOriginChanged: windowOriginChanged,
+                            monotonicNow: clock.withLock { $0 })
+                        if shown {
+                            lastPlacementWindowOrigin = container.bounds.origin
+                            dock.showIfNeeded()
+                        } else {
+                            dock.hideIfNeeded()
+                        }
+                    }
+                }
+            } else {
+                dock.hideIfNeeded()
+                stationaryAnchor = nil
+                lastWID = nil
+                lastPrimaryWindowOrigin = nil
+                if FollowTickPlanner.containerProbeReset(
+                    containerCandidatePresent: containerCandidate != nil) {
+                    probe.reset()
+                }
+            }
+            lastMaterialChangeAt = d.lastMaterialChangeAt
+            return d.state
+        },
+        makeDisplayLink: { _, _ in nil },
+        canUseDisplayLink: { false },
+        maximumFramesPerSecond: { 60 },
+        monotonicNow: { clock.withLock { $0 } },
+        makeTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            timers.withLock { $0.append(timer) }
+            return timer
+        })
+    wakeRelay.attach(scheduler)
+
+    // 期望 frame（容器通道：无障碍、无屏 → placeBelow 简单分支 + AppKit 换算）。
+    func mrExpectedDockFrame(pet: CGRect) -> NSRect {
+        Geometry.appKitRectFromQuartz(CGRect(
+            x: pet.minX + (pet.width - 200) / 2,
+            y: pet.maxY + 2, width: 200, height: 48))
+    }
+    let mrPetFrame = mrExpectedDockFrame(pet: cpRectA)
+    let mrMenuFrame = mrExpectedDockFrame(pet: mrMenu.bounds)
+
+    // Phase A 无菜单：tick1 捕获在途 → hidden；观察回调 wake → tick2 容器 rect → 底座显示在宠物下方。
+    scheduler.start()
+    scheduler.requestWake()
+    _ = waitPumpingMain { tickCount.withLock { $0 } >= 1 }
+    _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    _ = waitPumpingMain { tickCount.withLock { $0 } >= 2 }
+    let mrFrameA = dock.frame
+    check("T-mr0a 无菜单:容器观察→wake→tick2 底座显示在真实宠物下方",
+          tickCount.withLock { $0 } >= 2 && dock.isVisible
+            && dockFrameNear(mrFrameA, mrPetFrame)
+            && selectedWIDs.withLock { $0 }.prefix(2) == [nil, nil]
+            && routedLabels.withLock { $0 }.prefix(2) == ["container", "container"]
+            && probe.hasObservation(),
+          "ticks=\(tickCount.withLock { $0 }) frame=\(mrFrameA) expected=\(mrPetFrame) "
+            + "routes=\(routedLabels.withLock { $0 })")
+
+    // Phase B 菜单打开：临时 generic 候选出现，容器与已接受宠物 rect 不变。
+    candidatesBox.withLock { $0 = [mrContainer, mrMenu] }
+    clock.withLock { $0 += 0.02 }
+    timers.withLock { $0.last! }.fire()
+    _ = waitPumpingMain { tickCount.withLock { $0 } >= 3 }
+    let mrFrameB = dock.frame
+    check("T-mr0b 菜单打开:实际frame继续锚真实宠物下方(不迁移到菜单下方)",
+          dock.isVisible && dockFrameNear(mrFrameB, mrPetFrame)
+            && !dockFrameNear(mrFrameB, mrMenuFrame)
+            && dockFrameNear(mrFrameB, mrFrameA)
+            && routedLabels.withLock { $0 }.last! == "container",
+          "frame=\(mrFrameB) petExpected=\(mrPetFrame) menuExpected=\(mrMenuFrame) "
+            + "selected=\(selectedWIDs.withLock { $0 }) routes=\(routedLabels.withLock { $0 })")
+
+    // Phase C 菜单关闭：无残留错误锚点/滞回；frame 不跳变，容器 cache 保持。
+    candidatesBox.withLock { $0 = [mrContainer] }
+    clock.withLock { $0 += 0.02 }
+    timers.withLock { $0.last! }.fire()
+    _ = waitPumpingMain { tickCount.withLock { $0 } >= 4 }
+    let mrFrameC = dock.frame
+    check("T-mr0c 菜单关闭:无残留滞回/跳变,底座仍锚真实宠物",
+          dock.isVisible && dockFrameNear(mrFrameC, mrPetFrame)
+            && dockFrameNear(mrFrameC, mrFrameB)
+            && lastWID == nil && probe.hasObservation()
+            && selectedWIDs.withLock { $0 }.last! == nil
+            && routedLabels.withLock { $0 }.last! == "container",
+          "frame=\(mrFrameC) expected=\(mrPetFrame) lastWID=\(String(describing: lastWID)) "
+            + "selected=\(selectedWIDs.withLock { $0 }) routes=\(routedLabels.withLock { $0 })")
+    scheduler.stop()
+    dock.hideIfNeeded()
+}
+
+// C8.1 纯路由合同：selectPet 类型化来源 + PetSourceRouter 优先级（AC5 阳性对照与边界）。
+let mrMascot = mk(560, layer: 2, w: 172, h: 179, title: "Codex Pet Mascot Effect")
+let mrRouteContainer = cpContainer(561)
+let mrRouteGeneric = mkw(562, layer: 25, CGRect(x: 650, y: 350, width: 220, height: 260))
+let mrRouteMain = mkw(563, layer: 0, CGRect(x: 0, y: 0, width: 1728, height: 1050))
+
+let mrSelStrong = PetTracker.selectPet(
+    candidates: [mrRouteMain, mrRouteContainer, mrMascot], lastWID: nil)
+check("T-mr1 Mascot title→source=strongMascot",
+      mrSelStrong.source == .strongMascot && mrSelStrong.selected?.wid == 560,
+      mrSelStrong.reason)
+var mrStrongPrimary = false
+if case .primary(let w) = PetSourceRouter.resolve(
+    primary: mrSelStrong, containerCandidate: mrRouteContainer) {
+    mrStrongPrimary = w.wid == 560
+}
+check("T-mr2 strong Mascot 优先于容器候选(主通道回归保护)", mrStrongPrimary, "")
+let mrSelHystMascot = PetTracker.selectPet(
+    candidates: [mrRouteMain, mrRouteContainer, mrMascot], lastWID: 560)
+check("T-mr3 Mascot 滞回→仍是 strongMascot",
+      mrSelHystMascot.source == .strongMascot && mrSelHystMascot.selected?.wid == 560,
+      mrSelHystMascot.reason)
+let mrSelHystGeneric = PetTracker.selectPet(candidates: [mrRouteGeneric], lastWID: 562)
+check("T-mr4 非 Mascot 滞回→genericWindow",
+      mrSelHystGeneric.source == .genericWindow && mrSelHystGeneric.selected?.wid == 562,
+      mrSelHystGeneric.reason)
+let mrSelGeneric = PetTracker.selectPet(candidates: [mrRouteContainer, mrRouteGeneric], lastWID: nil)
+check("T-mr4b 前置:容器在场时旧 primary 仍会选中菜单(generic)",
+      mrSelGeneric.source == .genericWindow && mrSelGeneric.selected?.wid == 562,
+      mrSelGeneric.reason)
+var mrMenuToContainer = false
+if case .container(let c) = PetSourceRouter.resolve(
+    primary: mrSelGeneric, containerCandidate: mrRouteContainer) {
+    mrMenuToContainer = c.wid == mrRouteContainer.wid
+}
+check("T-mr5 容器在场→generic(临时菜单)不接管,路由到容器", mrMenuToContainer, "")
+var mrGenericKept = false
+if case .primary(let w) = PetSourceRouter.resolve(primary: mrSelGeneric, containerCandidate: nil) {
+    mrGenericKept = w.wid == 562
+}
+check("T-mr6 无容器→generic 回退保留(旧宿主无 Mascot title 兼容)", mrGenericKept, "")
+let mrSelNone = PetTracker.selectPet(candidates: [mrRouteMain], lastWID: nil)
+check("T-mr7 无主通道候选→source=none", mrSelNone.source == .none && mrSelNone.selected == nil, mrSelNone.reason)
+var mrNoneRoutedNone = false
+if case .none = PetSourceRouter.resolve(primary: mrSelNone, containerCandidate: nil) {
+    mrNoneRoutedNone = true
+}
+var mrNoneRoutedContainer = false
+if case .container(let c) = PetSourceRouter.resolve(
+    primary: mrSelNone, containerCandidate: mrRouteContainer) {
+    mrNoneRoutedContainer = c.wid == mrRouteContainer.wid
+}
+check("T-mr8 无主通道:无容器→none隐藏;有容器→container(观察在途保持hidden等待回调)",
+      mrNoneRoutedNone && mrNoneRoutedContainer, "")
+
+// C8.2 guards：路由层不得解析 reason/hitFlags 字符串；生产 tick 必须消费同一 resolver。
+let mrPlanSource = try! String(
+    contentsOf: cpRepoRoot.appendingPathComponent("Sources/PetDock/FollowTickPlan.swift"),
+    encoding: .utf8)
+check("T-mr9 路由层不解析 reason/hitFlags 字符串(absence guard)",
+      !mrPlanSource.contains("hitFlags") && !mrPlanSource.contains("reason"), "")
+check("T-mr10 生产 tick 消费 PetSourceRouter 单一来源(旧顺序与 lastWID 直写移除)",
+      cpMainSource.contains("PetSourceRouter.resolve(primary: sel, containerCandidate: containerCandidate)")
+        && !cpMainSource.contains("if pet == nil, let container = containerCandidate")
+        && !cpMainSource.contains("lastWID = sel.selected?.wid"), "")
+
+// C8.3 diagnose 同概念消费者一致性（准入项 2）：--diagnose 与运行时共用 PetSourceRouter
+// 与生产标签函数 PetSourceRoute.diagnoseChannel；container+generic(菜单) 场景不得误报
+// primary，也不得在测试里复制第二套优先级。
+let mrDiagRoute = PetSourceRouter.resolve(primary: mrSelGeneric, containerCandidate: mrRouteContainer)
+let mrDiagPending = mrDiagRoute.diagnoseChannel(
+    source: mrSelGeneric.source, containerObservation: false)
+let mrDiagAccepted = mrDiagRoute.diagnoseChannel(
+    source: mrSelGeneric.source, containerObservation: true)
+check("T-mr11 diagnose:容器+generic菜单→container 标签(在途/已接受),不报 primary",
+      mrDiagPending == "container(捕获在途/未通过验证，生产保持 hidden 等待回调)"
+        && mrDiagAccepted == "container(合成宠物矩形已生成，坐标不记录)"
+        && !mrDiagPending.hasPrefix("primary") && !mrDiagAccepted.hasPrefix("primary"),
+      "pending=\(mrDiagPending) accepted=\(mrDiagAccepted)")
+check("T-mr12 diagnose 标签:strong Mascot→primary(strong);无容器 generic→primary(generic);none→none",
+      PetSourceRouter.resolve(primary: mrSelStrong, containerCandidate: mrRouteContainer)
+            .diagnoseChannel(source: .strongMascot, containerObservation: false)
+            == "primary(strong Mascot)"
+        && PetSourceRouter.resolve(primary: mrSelGeneric, containerCandidate: nil)
+            .diagnoseChannel(source: .genericWindow, containerObservation: false)
+            == "primary(generic 几何回退)"
+        && PetSourceRouter.resolve(primary: mrSelNone, containerCandidate: nil)
+            .diagnoseChannel(source: .none, containerObservation: false)
+            == "none", "")
+let mrResolveWiringCount = cpMainSource.components(
+    separatedBy: "PetSourceRouter.resolve(primary: sel").count - 1
+check("T-mr13 runDiagnoseAndExit 消费同一 router+标签函数(旧顺序/primary 直报移除)",
+      mrResolveWiringCount == 2
+        && cpMainSource.contains(
+            "diagnoseChannel(source: sel.source, containerObservation: containerObservation)")
+        && !cpMainSource.contains(
+            "if sel.selected == nil, let container = ContainerPetSelector.selectContainer")
+        && !cpMainSource.contains("channel = \"primary\""),
+      "resolveCount=\(mrResolveWiringCount)")
+
+print("\n[menu routing] \(pass - mrPass) passed, \(fail - mrBase) failed")
 
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)

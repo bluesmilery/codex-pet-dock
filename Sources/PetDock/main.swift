@@ -28,6 +28,42 @@ func runDiagnoseAndExit() -> Never {
     out += "\n=== 识别结果（union 通道，候选 \(union.count)，运行模式使用）===\n"
     out += DiagnosticFormatter.selectionSummary(sel) + "\n"
 
+    // 容器回退通道（R5，宿主 2026-08-28 新窗口结构）：几何签名命中 + 捕获验证结果 +
+    // 最终选择通道。只输出形状/枚举摘要（DiagnosticFormatter 口径），不记录 wid/坐标等
+    // 用户内容；合成矩形坐标同样不落盘。
+    out += "\n=== 容器回退通道（几何签名 + 捕获验证）===\n"
+    let containerMatches = ContainerPetSelector.matches(candidates: union)
+    out += "签名: onscreen+非主窗+layer>=\(ContainerPetHeuristics.minLayer)"
+        + "+area>=\(Int(ContainerPetHeuristics.minArea))，"
+        + "捕获验证: 非透明占比<=\(ContainerPetHeuristics.opaqueFractionGate)\n"
+    out += "命中容器候选: \(containerMatches.count)\n"
+    for (i, w) in containerMatches.enumerated() {
+        out += "[\(i)] \(DiagnosticFormatter.candidateSummary(w))\n"
+    }
+    // 单一来源路由（与生产 AppDelegate.tick 消费同一 PetSourceRouter）：strong Mascot →
+    // 容器 → 仅无容器时 generic。只有 container route 才做一次性探测；generic 临时窗
+    // （右键菜单）在场时不得误报 primary，也不得跳过容器探测。
+    let containerCandidate = ContainerPetSelector.selectContainer(candidates: union)
+    let route = PetSourceRouter.resolve(primary: sel, containerCandidate: containerCandidate)
+    var containerObservation = false
+    if case .container(let container) = route {
+        // 一次性诊断探测：不接 scheduler；用单调时钟计时轮询等待单飞后台捕获（上限 ~3s；
+        // 权限缺失时 locate 直接 .unavailable，无需等待）。后台捕获不依赖主 runloop，
+        // 轮询用线程让步即可；本文件禁墙钟 API（T-sch4f source guard）。
+        let diagnoseNow: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+        let probe = ContainerPetProbe(monotonicNow: diagnoseNow)
+        if probe.locate(container: container) != .unavailable {
+            let diagnoseStartedAt = diagnoseNow()
+            while !probe.hasObservation(), diagnoseNow() - diagnoseStartedAt < 3 {
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+        }
+        if case .bounds = probe.locate(container: container) {
+            containerObservation = true
+        }
+    }
+    out += "最终选择通道: \(route.diagnoseChannel(source: sel.source, containerObservation: containerObservation))\n"
+
     out += "\n=== 屏幕统计（AppKit）===\n"
     out += "screenCount=\(NSScreen.screens.count)\n"
 
@@ -67,12 +103,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         evidence: runtimeEvidence,
         onVisibilityChange: followScheduler.visibilityChangeCallback
     )
+    private lazy var containerProbe = ContainerPetProbe(
+        monotonicNow: followMonotonicNow,
+        onObservationChanged: { [weak self] in
+            // 先记录脱敏边沿计数，再请求合并唤醒；evidence 关闭时仅剩一次 wake 请求开销。
+            self?.runtimeEvidence?.recordContainerObservationChange()
+            self?.followScheduler.requestWake()
+        })
     private let settings = Settings()
     private var themeStore: ThemeStore?
     private var externalThemes: [ThemeSpec] = []
     private var statusBar: StatusBar?
     private var stationaryAnchor: CGRect?
     private var lastWID: CGWindowID?
+    private var lastPrimaryWindowOrigin: CGPoint?
+    private var lastPlacementWindowOrigin: CGPoint?
     private var lastMaterialChangeAt: TimeInterval?
     private var dataTimer: Timer?           // 数据刷新（低频：退避间隔）
     private var hasCompletedFirstRefresh = false
@@ -243,7 +288,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func tick() -> FollowState {
         let wins = PetTracker.unionCandidates()
         let sel = PetTracker.selectPet(candidates: wins, lastWID: lastWID)
-        let pet = sel.selected?.bounds
+        // 单一宠物来源解析（R2/R3）：strong Mascot → 容器 → 仅无容器时 generic 回退 → none。
+        // 右键菜单等临时小窗只会命中 generic 几何回退；容器候选在场时不得接管（捕获在途时
+        // 保持 hidden，等待既有 observation callback 唤醒），也不得污染 lastWID 滞回。
+        let containerCandidate = ContainerPetSelector.selectContainer(candidates: wins)
+        let route = PetSourceRouter.resolve(primary: sel, containerCandidate: containerCandidate)
+        var pet: CGRect?
+        var viaContainerChannel = false
+        switch route {
+        case .primary(let window):
+            pet = window.bounds
+        case .container(let container):
+            // 容器回退通道（R2）：从内存 alpha bbox 合成宠物矩形；Mascot 窗口恢复时
+            // strong primary 在下一次 route 解析直接接管。
+            if case .bounds(let rect) = containerProbe.locate(container: container) {
+                pet = rect
+                viaContainerChannel = true
+            }
+        case .none:
+            break
+        }
         let d = Follower.decide(
             pet: pet,
             stationaryAnchor: stationaryAnchor,
@@ -284,14 +348,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if petVisible {
             stationaryAnchor = d.stationaryAnchor
-            lastWID = sel.selected?.wid
+            // lastWID 只跟随 primary 路由：容器通道保持 nil，generic 临时窗（菜单）不得写入滞回。
+            if case .primary(let window) = route { lastWID = window.wid } else { lastWID = nil }
             if plan.showUI {
                 renderSnapshot()
-                if let mascot = sel.selected {
+                if case .primary(let mascot) = route {
                     // 障碍避让（每 tick 基于当前帧宠物+可见辅助窗几何重算唯一期望 frame，不复用上帧偏移）：
                     // - 会话气泡（消息框）：像素 alpha 可见性（bubbleProbe）决定是否占位；
                     // - 控制按钮：窗口存在性即占位（obstaclesNear 已过滤 isOnscreen/alpha>0）。
                     let scr = Geometry.screenContaining(quartzCenterX: mascot.bounds.midX, mascot.bounds.midY)
+                    let primaryWindowOriginChanged = lastPrimaryWindowOrigin.map {
+                        $0 != mascot.bounds.origin
+                    } ?? false
                     let shown = FollowLayoutPass.placeDock(
                         mascot: mascot,
                         candidates: wins,
@@ -303,12 +371,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 avoiding: obstacles,
                                 visibleScreen: scr,
                                 movementChanged: d.shouldSetFrame,
+                                windowOriginChanged: primaryWindowOriginChanged,
                                 monotonicNow: followMonotonicNow(),
                                 evidence: runtimeEvidence
                             )
                         }
                     )
                     if shown {
+                        lastPrimaryWindowOrigin = mascot.bounds.origin
                         dock.showIfNeeded()
                         if detail.isVisible { detail.placeBelow(dockFrame: dock.frame, visibleScreen: scr) }
                     } else {
@@ -318,6 +388,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // 诊断聚合只在既有完整布局 tick 末尾评估落盘（无独立计时/捕获；
                     // collector 内部 dirty 抑制 + 最小 0.5s 单调节流：无新证据的 tick 零写，
                     // 持续 identity 抖动在窗口内合并、到期由下一次既有 tick 写出）。
+                    runtimeEvidence?.flush()
+                } else if viaContainerChannel, let rect = pet, let container = containerCandidate {
+                    // 容器通道放置（R3）：旧障碍窗（气泡/控件/CS）在新宿主结构中已不存在，
+                    // 且捕获 bbox 已含宠物+气泡内容 → 障碍恒为空。
+                    let scr = Geometry.screenContaining(quartzCenterX: rect.midX, rect.midY)
+                    // 容器窗口 origin 是拖拽权威信号；sprite 在窗内 idle 动画只改变 alpha bbox，
+                    // 不得借 Follower 的 size-material-change 绕过 placement deadband。
+                    let windowOriginChanged = lastPlacementWindowOrigin.map {
+                        $0 != container.bounds.origin
+                    } ?? true
+                    let shown = dock.placeBelow(
+                        petQuartzRect: rect,
+                        avoiding: [],
+                        visibleScreen: scr,
+                        movementChanged: d.shouldSetFrame,
+                        windowOriginChanged: windowOriginChanged,
+                        monotonicNow: followMonotonicNow(),
+                        evidence: runtimeEvidence
+                    )
+                    if shown {
+                        lastPlacementWindowOrigin = container.bounds.origin
+                        dock.showIfNeeded()
+                        if detail.isVisible { detail.placeBelow(dockFrame: dock.frame, visibleScreen: scr) }
+                    } else {
+                        dock.hideIfNeeded()
+                        detail.close()
+                    }
+                    // 容器通道 outcome 证据：QA 经 --runtime-evidence 区分容器观察驱动的
+                    // placement（默认关闭，零开销）。
+                    runtimeEvidence?.recordContainerPlacement(shown: shown)
+                    // 与主通道一致：完整布局 tick 末尾评估证据落盘（容器通道 QA 需要
+                    // runtime outcome 证据，不能滞留缓冲）。
                     runtimeEvidence?.flush()
                 }
             } else {
@@ -331,12 +433,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             detail.close()
             stationaryAnchor = nil
             lastWID = nil
+            lastPrimaryWindowOrigin = nil
             bubbleProbe.reset()
+            // 容器候选在场时 hidden tick 只表示「捕获在途/未接受」——reset 会作废在途捕获
+            // 使通道饥饿（QA P0）；仅无候选（容器真消失）才 reset（身份churn由 wid-change
+            // generation 语义承担）。
+            if FollowTickPlanner.containerProbeReset(containerCandidatePresent: containerCandidate != nil) {
+                containerProbe.reset()
+            }
+            // Hidden/disappearance must still flush dirty container evidence; flush()
+            // returns without IO when recorder state is clean.
+            runtimeEvidence?.flush()
         }
         lastMaterialChangeAt = d.lastMaterialChangeAt
 
         log("follow state=\(d.state.rawValue) pet=\(petVisible) show=\(plan.showUI) setFrame=\(d.shouldSetFrame) "
-            + "selected=\(sel.selected != nil)")
+            + "route=\(route.label)")
         return d.state
     }
 

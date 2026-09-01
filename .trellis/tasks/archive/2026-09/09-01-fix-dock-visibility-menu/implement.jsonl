@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/macos/appkit-conventions.md", "reason": "AppKit main-thread, window geometry, and final frame owner contracts"}
+{"file": ".trellis/spec/macos/quality-guidelines.md", "reason": "baseline-first production-chain evidence, exact-SHA gates, and real-device boundaries"}
+{"file": ".trellis/spec/macos/privacy-guidelines.md", "reason": "alpha-only in-memory capture and sanitized runtime evidence constraints"}
+{"file": ".trellis/tasks/09-01-fix-dock-visibility-menu/research/ac-evidence-topology.md", "reason": "task-specific symptom-to-production-owner evidence map"}

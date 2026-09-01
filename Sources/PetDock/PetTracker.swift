@@ -75,8 +75,22 @@ struct WinCandidate: Sendable {
     }
 }
 
+/// 主通道选择来源的类型化可信度。R3（菜单误跟随修复）：来源路由按
+/// strong Mascot → 容器 → 仅无容器时 generic 回退解析唯一宠物来源，消费方不得解析
+/// reason / hitFlags 字符串判断来源。
+enum PrimarySelectionSource: Equatable, Sendable {
+    /// 独立 Mascot 身份：title 含 Mascot，或滞回沿用的窗口本身就是 Mascot（R1 主通道）。
+    case strongMascot
+    /// 通用几何回退（高 layer / 尺寸合理候选 / 非 Mascot 滞回）。容器候选在场时不得接管。
+    case genericWindow
+    /// 无主通道选择。
+    case none
+}
+
 struct SelectionResult {
     let selected: WinCandidate?
+    /// 本次的类型化来源（与 selected 同步：strong/generic ⇒ selected 非 nil）。
+    let source: PrimarySelectionSource
     let reason: String
     let hitFlags: [String]
     let allCandidates: [WinCandidate]
@@ -173,8 +187,11 @@ enum PetTracker {
         // 永久锁定该窗口；不满足则落入后续规则链（title 规则找回真 Mascot）。
         if let last = lastWID, let w = nonMain.first(where: { $0.wid == last }),
            w.isReasonablePet || w.title.localizedCaseInsensitiveContains("Mascot") {
+            let source: PrimarySelectionSource = w.title.localizedCaseInsensitiveContains("Mascot")
+                ? .strongMascot : .genericWindow
             return SelectionResult(
                 selected: w,
+                source: source,
                 reason: "滞回：沿用上次选中 wid=\(last) (\(Int(w.bounds.width))x\(Int(w.bounds.height)), layer=\(w.layer))",
                 hitFlags: ["hysteresis:lastWID=\(last)"],
                 allCandidates: candidates
@@ -188,6 +205,7 @@ enum PetTracker {
         if let best = mascot.min(by: { $0.area < $1.area }) {
             return SelectionResult(
                 selected: best,
+                source: .strongMascot,
                 reason: "title 含 'Mascot'（吉祥物本体），取面积最小者 (\(Int(best.bounds.width))x\(Int(best.bounds.height)), layer=\(best.layer))",
                 hitFlags: ["title~Mascot"],
                 allCandidates: candidates
@@ -202,6 +220,7 @@ enum PetTracker {
         }).first {
             return SelectionResult(
                 selected: best,
+                source: .genericWindow,
                 reason: "layer=\(best.layer) 浮层候选中取面积最小者 (\(Int(best.bounds.width))x\(Int(best.bounds.height)))",
                 hitFlags: ["layer>0", "layer=\(best.layer)"],
                 allCandidates: candidates
@@ -213,6 +232,7 @@ enum PetTracker {
         if let best = petShaped.min(by: { $0.area < $1.area }) {
             return SelectionResult(
                 selected: best,
+                source: .genericWindow,
                 reason: "尺寸符合宠物范围，取面积最小者 (\(Int(best.bounds.width))x\(Int(best.bounds.height)))",
                 hitFlags: ["petShaped", "area=\(Int(best.area))"],
                 allCandidates: candidates
@@ -221,12 +241,12 @@ enum PetTracker {
 
         // R5 无候选
         if visible.isEmpty {
-            return SelectionResult(selected: nil, reason: "无可见窗口", hitFlags: ["no-visible"], allCandidates: candidates)
+            return SelectionResult(selected: nil, source: .none, reason: "无可见窗口", hitFlags: ["no-visible"], allCandidates: candidates)
         }
         if nonMain.isEmpty {
-            return SelectionResult(selected: nil, reason: "所有可见窗口均判为主窗口，不选（避免误绑主聊天窗口）", hitFlags: ["no-pet:all-main"], allCandidates: candidates)
+            return SelectionResult(selected: nil, source: .none, reason: "所有可见窗口均判为主窗口，不选（避免误绑主聊天窗口）", hitFlags: ["no-pet:all-main"], allCandidates: candidates)
         }
-        return SelectionResult(selected: nil, reason: "无非主窗口候选符合宠物特征", hitFlags: ["no-pet:nonmain-notshaped"], allCandidates: candidates)
+        return SelectionResult(selected: nil, source: .none, reason: "无非主窗口候选符合宠物特征", hitFlags: ["no-pet:nonmain-notshaped"], allCandidates: candidates)
     }
 
     /// 运行模式使用的候选集：PID 通道 ∪ ownerName 关键词通道（按 wid 去重）。
