@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
-- **Last Active**: 2026-08-28
+- **Total Sessions**: 18
+- **Last Active**: 2026-09-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~440 | Active |
+| `journal-1.md` | ~464 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-09-01 | 修复底座消失与菜单误跟随 | `<pre-rewrite-id>`, `<pre-rewrite-id>`, `<pre-rewrite-id>`, `<pre-rewrite-id>` | `feature/pet-window-adaptation` |
 | 17 | 2026-08-28 | Merge CS live-layer anchor into local dev for release | `4061f0311a8eda7a2917c6f96015f6f08265830d` | `dev` |
 | 16 | 2026-08-27 | Park CS live-layer anchor on feature/cs-live-layer-anchor | `85d83529fbc76ff1da4f2dfa9f690a1c4b3a709c` | `feature/cs-live-layer-anchor` |
 | 15 | 2026-08-26 | English-only commit messages: rule + full-history rewrite | `e6f5e80401f1115b69105447f41f53d23a36a5b6` | `dev` |

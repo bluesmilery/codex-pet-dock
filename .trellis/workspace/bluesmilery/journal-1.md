@@ -438,3 +438,27 @@ no-ff merged feature/cs-live-layer-anchor into local dev. Merge SHA 4061f03 is a
 ### Next Steps
 
 - Sensitive scan of merge-base..dev, then full gates, then version bump and GitHub Release after user confirmation of tag/push
+
+
+## Session 18: 修复底座消失与菜单误跟随
+
+**Date**: 2026-09-01
+**Task**: 修复底座消失与菜单误跟随
+**Branch**: `feature/pet-window-adaptation`
+
+### Summary
+
+在容器宠物存在时以类型化来源路由压制通用菜单窗口，保持底座稳定锚定真实宠物；完成可重放基线红测、独立 Review、签名候选、CPU 采样及用户三态验收。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `<pre-rewrite-id>` | (see git log) |
+| `<pre-rewrite-id>` | (see git log) |
+| `<pre-rewrite-id>` | (see git log) |
+| `<pre-rewrite-id>` | (see git log) |
+
+### Status
+
+[OK] **Completed**
