@@ -90,7 +90,7 @@ uv sync --dev     # 按 uv.lock 创建 Python 3.12 的 .venv，并安装 pytest
 在仓库根目录执行：
 
 ```sh
-make build        # swift build -c release，产出 .build/release/PetDock
+make build        # swift build -c release，产出 $TMPDIR/petdock-release-<worktree>/release/PetDock（仓库内不留 .build/ 产物）
 make app          # 组装 build/PetDock.app；本机存在 'PetDock Local Development' 证书时自动稳定签名，否则构建失败（Identifier=io.github.bluesmilery.codexpetdock）
 make run          # 构建 app、启动（日志写入 Application Support/PetDock/Logs 私有目录）
 make diagnose     # 构建并跑一次脱敏诊断（写入 Diagnostics/diagnose.txt 私有文件）

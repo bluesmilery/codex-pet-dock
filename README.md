@@ -91,7 +91,7 @@ uv sync --dev     # creates .venv with Python 3.12 and pytest from uv.lock
 `pyproject.toml`, `uv.lock`, and `.python-version` pin Python 3.12. `.venv/` stays local and is gitignored. `make docs-check`, `make test-docs`, and `make test-privacy` use `.venv/bin/python` when present, otherwise `python3`.
 
 ```sh
-make build        # swift build -c release, produces .build/release/PetDock
+make build        # swift build -c release into $TMPDIR/petdock-release-<worktree>/release/PetDock; leaves no .build/ products in the repo
 make app          # assembles build/PetDock.app; signs with the local 'PetDock Local Development' certificate, fails when it is unavailable (Identifier=io.github.bluesmilery.codexpetdock)
 make run          # builds the app and launches it (private log under Application Support/PetDock/Logs)
 make diagnose     # builds and runs a one-shot redacted diagnostic (private Diagnostics/diagnose.txt)

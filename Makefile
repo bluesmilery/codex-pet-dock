@@ -48,6 +48,7 @@ diagnose: app
 
 clean:
 	swift package clean
+	rm -rf "$(PD_RELEASE_SCRATCH)"
 	rm -rf build
 
 clean-logs:
