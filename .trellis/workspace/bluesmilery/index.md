@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
+- **Total Sessions**: 21
 - **Last Active**: 2026-09-01
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~506 | Active |
+| `journal-1.md` | ~541 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,8 +29,9 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
-| 20 | 2026-09-01 | 修复底座消失与菜单误跟随 | `<pre-rewrite-id>`, `<pre-rewrite-id>`, `<pre-rewrite-id>`, `<pre-rewrite-id>` | `feature/pet-window-adaptation` |
-| 19 | 2026-09-01 | Release v0.5.0 wrap-up: pet-window-adaptation shipped | `<pre-rewrite-id>` | `main` |
+| 21 | 2026-09-01 | Replace public v0.5.0: merge pet-window-adaptation into dev | `a1e1dd7fcc15ee76a3166b61f388750b49acdf40` | `dev` |
+| 20 | 2026-09-01 | 修复底座消失与菜单误跟随 | `1f1c4aca5d842fc90769aa2089247e25883e6b63`, `b2ce2813d92aefe66fab7d9896a53fc3a4cea408`, `1c3daee2f651989a9b7162595b7d4c51213c8d20`, `4184d8c440e9aea80d5ba87ebbeafca90369ed34` | `feature/pet-window-adaptation` |
+| 19 | 2026-09-01 | Release v0.5.0 wrap-up: pet-window-adaptation shipped | `da488b1` | `main` |
 | 18 | 2026-08-31 | Release v0.6.0: pet-window-adaptation | `<pre-rewrite-id>` | `codex/pet-window-adaptation` |
 | 17 | 2026-08-28 | Merge CS live-layer anchor into local dev for release | `4061f0311a8eda7a2917c6f96015f6f08265830d` | `dev` |
 | 16 | 2026-08-27 | Park CS live-layer anchor on feature/cs-live-layer-anchor | `85d83529fbc76ff1da4f2dfa9f690a1c4b3a709c` | `feature/cs-live-layer-anchor` |

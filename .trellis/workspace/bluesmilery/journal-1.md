@@ -475,7 +475,7 @@ v0.5.0 released (pet-window adaptation for the post-update Codex host): version 
 
 | Hash | Message |
 |------|---------|
-| `<pre-rewrite-id>` | (see git log) |
+| `da488b1` | (see git log) |
 
 ### Status
 
@@ -496,11 +496,46 @@ v0.5.0 released (pet-window adaptation for the post-update Codex host): version 
 
 | Hash | Message |
 |------|---------|
-| `<pre-rewrite-id>` | (see git log) |
-| `<pre-rewrite-id>` | (see git log) |
-| `<pre-rewrite-id>` | (see git log) |
-| `<pre-rewrite-id>` | (see git log) |
+| `1f1c4aca5d842fc90769aa2089247e25883e6b63` | (see git log) |
+| `b2ce2813d92aefe66fab7d9896a53fc3a4cea408` | (see git log) |
+| `1c3daee2f651989a9b7162595b7d4c51213c8d20` | (see git log) |
+| `4184d8c440e9aea80d5ba87ebbeafca90369ed34` | (see git log) |
 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: Replace public v0.5.0: merge pet-window-adaptation into dev
+
+**Date**: 2026-09-01
+**Task**: Replace public v0.5.0: merge pet-window-adaptation into dev
+**Branch**: `dev`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
+
+- no-ff merged feature/pet-window-adaptation into dev; merge SHA a1e1dd7 is a new candidate and no prior Review/QA evidence is inherited
+- privacy rewrites scrubbed a real interpreter path, real host calibration geometry, a historical QA PID, and every in-range-introduced dangling, will-dangle, or malformed partial commit-id citation across the full publish range (stable placeholders); citations already public in the range-start tree are left for a separate cleanup decision
+- hand-combined diverged workspace journals: sessions from both sides preserved, the dock-visibility fix session renumbered to 20, and current-chain hash references restored to the rewritten chain
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a1e1dd7fcc15ee76a3166b61f388750b49acdf40` | (see git log) |
+
+### Testing
+
+- [OK] not re-run yet; rewritten SHA is a new candidate per release.md sections 1.3 and 4
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- final per-commit tree privacy scan, full gates, independent Review round 3 and QA on the exact SHA, then replace the public v0.5.0 tag/release under explicit user authorization
