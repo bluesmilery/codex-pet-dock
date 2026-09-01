@@ -293,16 +293,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func tick() -> FollowState {
         let wins = PetTracker.unionCandidates()
         let sel = PetTracker.selectPet(candidates: wins, lastWID: lastWID)
-        var pet = sel.selected?.bounds
-        // 容器回退通道（R2）：主通道无 Mascot 时，选宿主大容器窗并从内存 alpha bbox 合成
-        // 宠物矩形。lastWID 保持 nil（sel.selected == nil），Mascot 窗口恢复时主通道直接接管。
-        var viaContainerChannel = false
+        // 单一宠物来源解析（R2/R3）：strong Mascot → 容器 → 仅无容器时 generic 回退 → none。
+        // 右键菜单等临时小窗只会命中 generic 几何回退；容器候选在场时不得接管（捕获在途时
+        // 保持 hidden，等待既有 observation callback 唤醒），也不得污染 lastWID 滞回。
         let containerCandidate = ContainerPetSelector.selectContainer(candidates: wins)
-        if pet == nil, let container = containerCandidate {
+        let route = PetSourceRouter.resolve(primary: sel, containerCandidate: containerCandidate)
+        var pet: CGRect?
+        var viaContainerChannel = false
+        switch route {
+        case .primary(let window):
+            pet = window.bounds
+        case .container(let container):
+            // 容器回退通道（R2）：从内存 alpha bbox 合成宠物矩形；Mascot 窗口恢复时
+            // strong primary 在下一次 route 解析直接接管。
             if case .bounds(let rect) = containerProbe.locate(container: container) {
                 pet = rect
                 viaContainerChannel = true
             }
+        case .none:
+            break
         }
         let d = Follower.decide(
             pet: pet,
@@ -344,10 +353,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if petVisible {
             stationaryAnchor = d.stationaryAnchor
-            lastWID = sel.selected?.wid
+            // lastWID 只跟随 primary 路由：容器通道保持 nil，generic 临时窗（菜单）不得写入滞回。
+            if case .primary(let window) = route { lastWID = window.wid } else { lastWID = nil }
             if plan.showUI {
                 renderSnapshot()
-                if let mascot = sel.selected {
+                if case .primary(let mascot) = route {
                     // 障碍避让（每 tick 基于当前帧宠物+可见辅助窗几何重算唯一期望 frame，不复用上帧偏移）：
                     // - 会话气泡（消息框）：像素 alpha 可见性（bubbleProbe）决定是否占位；
                     // - 控制按钮：窗口存在性即占位（obstaclesNear 已过滤 isOnscreen/alpha>0）。
@@ -443,7 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastMaterialChangeAt = d.lastMaterialChangeAt
 
         log("follow state=\(d.state.rawValue) pet=\(petVisible) show=\(plan.showUI) setFrame=\(d.shouldSetFrame) "
-            + "selected=\(sel.selected != nil)")
+            + "route=\(route.label)")
         return d.state
     }
 

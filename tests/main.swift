@@ -7267,5 +7267,285 @@ check("T-cp86b primary channel forwards window-origin changes and resets its ori
 
 print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")
 
+// ============================================================
+// C8 菜单误跟随路由（09-01 fix-dock-visibility-menu）
+// 症状：宿主新结构（无独立 Mascot，宠物在容器内）+ 右键菜单等临时小窗出现时，
+// 旧顺序「primary(含 generic 几何回退) → 容器」会把底座迁到菜单下方。
+// 生产链回归：候选快照 → PetTracker.selectPet → ContainerPetSelector/ContainerPetProbe →
+// Follower.decide → DockPanel.placeBelow/placeDock → 实际 DockPanel.frame/可见性，
+// 全部由真实 FollowTickScheduler 的 tick 闭包驱动（fake timer 手动点火，镜像 AppDelegate.tick）。
+// ============================================================
+let mrPass = pass, mrBase = fail
+
+/// 测试专用唤醒中继：ContainerPetProbe 的 @Sendable 观察回调 → 真实 scheduler.requestWake。
+/// （生产由 AppDelegate 持有两者并 weak-self 接线；测试无法捕获 var scheduler，用锁盒子等价。）
+final class MrSchedulerWakeRelay: @unchecked Sendable {
+    private let box = OSAllocatedUnfairLock(initialState: Optional<FollowTickScheduler>.none)
+    func attach(_ scheduler: FollowTickScheduler) { box.withLock { $0 = scheduler } }
+    func wake() { box.withLock { $0?.requestWake() } }
+}
+
+do {
+    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(130_000))
+    let mrContainer = cpContainer(540)
+    // 右键菜单形临时窗：layer 25、220x260 —— isReasonablePet 成立（旧 generic 回退会选中）。
+    let mrMenu = mkw(541, layer: 25, CGRect(x: 650, y: 350, width: 220, height: 260))
+    let candidatesBox = OSAllocatedUnfairLock(initialState: [mrContainer])
+    // 容器内宠物 bbox：窗口本地 (40,80,80,160) → 全局 cpRectA (140,180,80,160)。
+    let mrWindowBBox = CGRect(x: 40, y: 80, width: 80, height: 160)
+    let dock = DockPanel()
+    let dockPlanProbe = BubbleVisibilityProbe(
+        monotonicNow: { clock.withLock { $0 } }, canCapture: { true },
+        capturer: { _ in .unavailable })
+    var stationaryAnchor: CGRect?
+    var lastMaterialChangeAt: TimeInterval?
+    var lastWID: CGWindowID?
+    var lastPrimaryWindowOrigin: CGPoint?
+    var lastPlacementWindowOrigin: CGPoint?
+    var wasPetVisible = false
+    let selectedWIDs = OSAllocatedUnfairLock(initialState: [CGWindowID?]())
+    let routedLabels = OSAllocatedUnfairLock(initialState: [String]())
+    let tickCount = OSAllocatedUnfairLock(initialState: 0)
+    let timers = OSAllocatedUnfairLock(initialState: [TestFollowTickTimer]())
+    var probe: ContainerPetProbe!
+    var scheduler: FollowTickScheduler!
+    let wakeRelay = MrSchedulerWakeRelay()
+    probe = ContainerPetProbe(
+        monotonicNow: { clock.withLock { $0 } },
+        canCapture: { true },
+        capturer: { _, request in
+            let region: CGRect
+            switch request.round {
+            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
+            case .region(let value): region = value
+            }
+            return .stats(cpStats(for: mrWindowBBox, in: region, outputSize: request.outputSize))
+        },
+        onObservationChanged: { wakeRelay.wake() })
+    scheduler = FollowTickScheduler(
+        runTick: {
+            // —— 生产 tick 镜像（AppDelegate.tick：枚举→识别→容器回退→决策→放置）——
+            let wins = candidatesBox.withLock { $0 }
+            let sel = PetTracker.selectPet(candidates: wins, lastWID: lastWID)
+            selectedWIDs.withLock { $0.append(sel.selected?.wid) }
+            tickCount.withLock { $0 += 1 }
+            // 生产单一来源解析：与 AppDelegate.tick 消费同一 PetSourceRouter 结果。
+            let containerCandidate = ContainerPetSelector.selectContainer(candidates: wins)
+            let route = PetSourceRouter.resolve(primary: sel, containerCandidate: containerCandidate)
+            routedLabels.withLock { $0.append(route.label) }
+            var pet: CGRect?
+            var viaContainerChannel = false
+            switch route {
+            case .primary(let window):
+                pet = window.bounds
+            case .container(let container):
+                if case .bounds(let rect) = probe.locate(container: container) {
+                    pet = rect
+                    viaContainerChannel = true
+                }
+            case .none:
+                break
+            }
+            let d = Follower.decide(pet: pet, stationaryAnchor: stationaryAnchor,
+                                    lastMaterialChangeAt: lastMaterialChangeAt,
+                                    now: clock.withLock { $0 })
+            let plan = FollowTickPlanner.decide(input: FollowTickInput(
+                petVisible: d.showDock, wasPetVisible: wasPetVisible, dockVisible: true))
+            wasPetVisible = d.showDock
+            if d.showDock {
+                stationaryAnchor = d.stationaryAnchor
+                if case .primary(let window) = route { lastWID = window.wid } else { lastWID = nil }
+                if plan.showUI {
+                    if case .primary(let mascot) = route {
+                        let primaryWindowOriginChanged = lastPrimaryWindowOrigin.map {
+                            $0 != mascot.bounds.origin
+                        } ?? false
+                        let shown = FollowLayoutPass.placeDock(
+                            mascot: mascot,
+                            candidates: wins,
+                            bubbleProbe: dockPlanProbe,
+                            frameSink: { petRect, obstacles in
+                                dock.placeBelow(
+                                    petQuartzRect: petRect,
+                                    avoiding: obstacles,
+                                    visibleScreen: nil,
+                                    movementChanged: d.shouldSetFrame,
+                                    windowOriginChanged: primaryWindowOriginChanged,
+                                    monotonicNow: clock.withLock { $0 })
+                            })
+                        if shown {
+                            lastPrimaryWindowOrigin = mascot.bounds.origin
+                            dock.showIfNeeded()
+                        } else {
+                            dock.hideIfNeeded()
+                        }
+                    } else if viaContainerChannel, let rect = pet, let container = containerCandidate {
+                        let windowOriginChanged = lastPlacementWindowOrigin.map {
+                            $0 != container.bounds.origin
+                        } ?? true
+                        let shown = dock.placeBelow(
+                            petQuartzRect: rect,
+                            avoiding: [],
+                            visibleScreen: nil,
+                            movementChanged: d.shouldSetFrame,
+                            windowOriginChanged: windowOriginChanged,
+                            monotonicNow: clock.withLock { $0 })
+                        if shown {
+                            lastPlacementWindowOrigin = container.bounds.origin
+                            dock.showIfNeeded()
+                        } else {
+                            dock.hideIfNeeded()
+                        }
+                    }
+                }
+            } else {
+                dock.hideIfNeeded()
+                stationaryAnchor = nil
+                lastWID = nil
+                lastPrimaryWindowOrigin = nil
+                if FollowTickPlanner.containerProbeReset(
+                    containerCandidatePresent: containerCandidate != nil) {
+                    probe.reset()
+                }
+            }
+            lastMaterialChangeAt = d.lastMaterialChangeAt
+            return d.state
+        },
+        makeDisplayLink: { _, _ in nil },
+        canUseDisplayLink: { false },
+        maximumFramesPerSecond: { 60 },
+        monotonicNow: { clock.withLock { $0 } },
+        makeTimer: { interval, repeats, callback in
+            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
+            timers.withLock { $0.append(timer) }
+            return timer
+        })
+    wakeRelay.attach(scheduler)
+
+    // 期望 frame（容器通道：无障碍、无屏 → placeBelow 简单分支 + AppKit 换算）。
+    func mrExpectedDockFrame(pet: CGRect) -> NSRect {
+        Geometry.appKitRectFromQuartz(CGRect(
+            x: pet.minX + (pet.width - 200) / 2,
+            y: pet.maxY + 2, width: 200, height: 48))
+    }
+    let mrPetFrame = mrExpectedDockFrame(pet: cpRectA)
+    let mrMenuFrame = mrExpectedDockFrame(pet: mrMenu.bounds)
+
+    // Phase A 无菜单：tick1 捕获在途 → hidden；观察回调 wake → tick2 容器 rect → 底座显示在宠物下方。
+    scheduler.start()
+    scheduler.requestWake()
+    _ = waitPumpingMain { tickCount.withLock { $0 } >= 1 }
+    _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
+    _ = waitPumpingMain { tickCount.withLock { $0 } >= 2 }
+    let mrFrameA = dock.frame
+    check("T-mr0a 无菜单:容器观察→wake→tick2 底座显示在真实宠物下方",
+          tickCount.withLock { $0 } >= 2 && dock.isVisible
+            && dockFrameNear(mrFrameA, mrPetFrame)
+            && selectedWIDs.withLock { $0 }.prefix(2) == [nil, nil]
+            && routedLabels.withLock { $0 }.prefix(2) == ["container", "container"]
+            && probe.hasObservation(),
+          "ticks=\(tickCount.withLock { $0 }) frame=\(mrFrameA) expected=\(mrPetFrame) "
+            + "routes=\(routedLabels.withLock { $0 })")
+
+    // Phase B 菜单打开：临时 generic 候选出现，容器与已接受宠物 rect 不变。
+    candidatesBox.withLock { $0 = [mrContainer, mrMenu] }
+    clock.withLock { $0 += 0.02 }
+    timers.withLock { $0.last! }.fire()
+    _ = waitPumpingMain { tickCount.withLock { $0 } >= 3 }
+    let mrFrameB = dock.frame
+    check("T-mr0b 菜单打开:实际frame继续锚真实宠物下方(不迁移到菜单下方)",
+          dock.isVisible && dockFrameNear(mrFrameB, mrPetFrame)
+            && !dockFrameNear(mrFrameB, mrMenuFrame)
+            && dockFrameNear(mrFrameB, mrFrameA)
+            && routedLabels.withLock { $0 }.last! == "container",
+          "frame=\(mrFrameB) petExpected=\(mrPetFrame) menuExpected=\(mrMenuFrame) "
+            + "selected=\(selectedWIDs.withLock { $0 }) routes=\(routedLabels.withLock { $0 })")
+
+    // Phase C 菜单关闭：无残留错误锚点/滞回；frame 不跳变，容器 cache 保持。
+    candidatesBox.withLock { $0 = [mrContainer] }
+    clock.withLock { $0 += 0.02 }
+    timers.withLock { $0.last! }.fire()
+    _ = waitPumpingMain { tickCount.withLock { $0 } >= 4 }
+    let mrFrameC = dock.frame
+    check("T-mr0c 菜单关闭:无残留滞回/跳变,底座仍锚真实宠物",
+          dock.isVisible && dockFrameNear(mrFrameC, mrPetFrame)
+            && dockFrameNear(mrFrameC, mrFrameB)
+            && lastWID == nil && probe.hasObservation()
+            && selectedWIDs.withLock { $0 }.last! == nil
+            && routedLabels.withLock { $0 }.last! == "container",
+          "frame=\(mrFrameC) expected=\(mrPetFrame) lastWID=\(String(describing: lastWID)) "
+            + "selected=\(selectedWIDs.withLock { $0 }) routes=\(routedLabels.withLock { $0 })")
+    scheduler.stop()
+    dock.hideIfNeeded()
+}
+
+// C8.1 纯路由合同：selectPet 类型化来源 + PetSourceRouter 优先级（AC5 阳性对照与边界）。
+let mrMascot = mk(560, layer: 2, w: 172, h: 179, title: "Codex Pet Mascot Effect")
+let mrRouteContainer = cpContainer(561)
+let mrRouteGeneric = mkw(562, layer: 25, CGRect(x: 650, y: 350, width: 220, height: 260))
+let mrRouteMain = mkw(563, layer: 0, CGRect(x: 0, y: 0, width: 1728, height: 1050))
+
+let mrSelStrong = PetTracker.selectPet(
+    candidates: [mrRouteMain, mrRouteContainer, mrMascot], lastWID: nil)
+check("T-mr1 Mascot title→source=strongMascot",
+      mrSelStrong.source == .strongMascot && mrSelStrong.selected?.wid == 560,
+      mrSelStrong.reason)
+var mrStrongPrimary = false
+if case .primary(let w) = PetSourceRouter.resolve(
+    primary: mrSelStrong, containerCandidate: mrRouteContainer) {
+    mrStrongPrimary = w.wid == 560
+}
+check("T-mr2 strong Mascot 优先于容器候选(主通道回归保护)", mrStrongPrimary, "")
+let mrSelHystMascot = PetTracker.selectPet(
+    candidates: [mrRouteMain, mrRouteContainer, mrMascot], lastWID: 560)
+check("T-mr3 Mascot 滞回→仍是 strongMascot",
+      mrSelHystMascot.source == .strongMascot && mrSelHystMascot.selected?.wid == 560,
+      mrSelHystMascot.reason)
+let mrSelHystGeneric = PetTracker.selectPet(candidates: [mrRouteGeneric], lastWID: 562)
+check("T-mr4 非 Mascot 滞回→genericWindow",
+      mrSelHystGeneric.source == .genericWindow && mrSelHystGeneric.selected?.wid == 562,
+      mrSelHystGeneric.reason)
+let mrSelGeneric = PetTracker.selectPet(candidates: [mrRouteContainer, mrRouteGeneric], lastWID: nil)
+check("T-mr4b 前置:容器在场时旧 primary 仍会选中菜单(generic)",
+      mrSelGeneric.source == .genericWindow && mrSelGeneric.selected?.wid == 562,
+      mrSelGeneric.reason)
+var mrMenuToContainer = false
+if case .container(let c) = PetSourceRouter.resolve(
+    primary: mrSelGeneric, containerCandidate: mrRouteContainer) {
+    mrMenuToContainer = c.wid == mrRouteContainer.wid
+}
+check("T-mr5 容器在场→generic(临时菜单)不接管,路由到容器", mrMenuToContainer, "")
+var mrGenericKept = false
+if case .primary(let w) = PetSourceRouter.resolve(primary: mrSelGeneric, containerCandidate: nil) {
+    mrGenericKept = w.wid == 562
+}
+check("T-mr6 无容器→generic 回退保留(旧宿主无 Mascot title 兼容)", mrGenericKept, "")
+let mrSelNone = PetTracker.selectPet(candidates: [mrRouteMain], lastWID: nil)
+check("T-mr7 无主通道候选→source=none", mrSelNone.source == .none && mrSelNone.selected == nil, mrSelNone.reason)
+var mrNoneRoutedNone = false
+if case .none = PetSourceRouter.resolve(primary: mrSelNone, containerCandidate: nil) {
+    mrNoneRoutedNone = true
+}
+var mrNoneRoutedContainer = false
+if case .container(let c) = PetSourceRouter.resolve(
+    primary: mrSelNone, containerCandidate: mrRouteContainer) {
+    mrNoneRoutedContainer = c.wid == mrRouteContainer.wid
+}
+check("T-mr8 无主通道:无容器→none隐藏;有容器→container(观察在途保持hidden等待回调)",
+      mrNoneRoutedNone && mrNoneRoutedContainer, "")
+
+// C8.2 guards：路由层不得解析 reason/hitFlags 字符串；生产 tick 必须消费同一 resolver。
+let mrPlanSource = try! String(
+    contentsOf: cpRepoRoot.appendingPathComponent("Sources/PetDock/FollowTickPlan.swift"),
+    encoding: .utf8)
+check("T-mr9 路由层不解析 reason/hitFlags 字符串(absence guard)",
+      !mrPlanSource.contains("hitFlags") && !mrPlanSource.contains("reason"), "")
+check("T-mr10 生产 tick 消费 PetSourceRouter 单一来源(旧顺序与 lastWID 直写移除)",
+      cpMainSource.contains("PetSourceRouter.resolve(primary: sel, containerCandidate: containerCandidate)")
+        && !cpMainSource.contains("if pet == nil, let container = containerCandidate")
+        && !cpMainSource.contains("lastWID = sel.selected?.wid"), "")
+
+print("\n[menu routing] \(pass - mrPass) passed, \(fail - mrBase) failed")
+
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")
 exit(fail == 0 ? 0 : 1)

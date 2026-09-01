@@ -43,10 +43,31 @@
 - 没有可见窗口时返回 nil，面板隐藏。
 - 多个等价候选由 layer → area 的排序确定唯一选择；诊断输出候选判定和选中理由供人工核对。
 
+### R6：来源路由（strong Mascot → 容器 → 仅无容器时 generic 回退）
+
+宿主把宠物绘制在大型透明容器窗内（无独立 Mascot 窗口）时，宠物来源由
+`FollowTickPlan.swift` 的 `PetSourceRouter.resolve` 对**同一候选快照**一次性解析，
+`AppDelegate.tick` 与测试消费同一结果，优先级为：
+
+1. **strong primary**：`selectPet` 的类型化来源 `source == .strongMascot`（title 含
+   Mascot，或滞回沿用的窗口本身就是 Mascot）永远优先，继续走 `FollowLayoutPass`
+   气泡 / 控件 / Composition Surface 链路。
+2. **container**：存在 `ContainerPetSelector` 容器候选时使用容器通道，宠物矩形来自
+   `ContainerPetProbe` 已接受的内存 alpha bbox 观察；观察尚未接受时保持 hidden，
+   等待既有 observation callback 唤醒，不允许其他候选临时接管。
+3. **generic legacy**：仅当**不存在**容器候选时，才允许 `genericWindow`（高 layer /
+   尺寸回退 / 非 Mascot 滞回）小窗口回退，保留旧宿主无 Mascot title 的兼容路径。
+4. **none**：以上均无 → 隐藏底座。
+
+右键菜单、子菜单等与宠物无关的临时窗口只会命中 generic 几何回退：容器候选在场时它们
+既不能成为宠物矩形，也不能写入 `lastWID` 滞回（`lastWID` 只跟随 primary 路由，容器
+通道保持 nil），菜单关闭后不残留错误锚点或滞回。路由不解析 `reason` / `hitFlags` 字符串。
+
 ## 可记录性与隐私
 
-`PetTracker.selectPet` 返回 `SelectionResult { selected, reason, hitFlags, allCandidates }`：
+`PetTracker.selectPet` 返回 `SelectionResult { selected, source, reason, hitFlags, allCandidates }`：
 
+- `source` 是类型化来源可信度（`strongMascot` / `genericWindow` / `none`），供来源路由消费；
 - `reason` 是人类可读的选择理由；
 - `hitFlags` 记录规则标签，例如 `layer>0`、`petShaped`、hysteresis 命中；
 - `allCandidates` 仅包含窗口元数据和规则判定，不保存截图、颜色、文字内容或凭证。
@@ -55,7 +76,7 @@
 
 ## 可重复验证
 
-`selectPet(candidates:lastWID:)` 是纯函数，`tests/main.swift` 用构造的 `WinCandidate` 数组编译真实 `PetTracker` 与 `Geometry` 源码验证：主窗口与宠物并存时选宠物、仅主窗口时返回 nil、Mascot 优先于高 layer 辅助窗、合理尺寸回退、滞回（含沿用前宠物特征再校验）与辅助控件排除。测试不需要屏幕录制权限；测试项总数随套件演进，以源码为准。
+`selectPet(candidates:lastWID:)` 是纯函数，`tests/main.swift` 用构造的 `WinCandidate` 数组编译真实 `PetTracker` 与 `Geometry` 源码验证：主窗口与宠物并存时选宠物、仅主窗口时返回 nil、Mascot 优先于高 layer 辅助窗、合理尺寸回退、滞回（含沿用前宠物特征再校验）与辅助控件排除。来源路由另有 `PetSourceRouter` 纯函数合同（strong 优先 / 容器在场压制 generic / 无容器保留 generic / none 隐藏），以及由真实 `FollowTickScheduler` tick 闭包驱动的菜单开合生产链回归，断言实际 `DockPanel.frame` 与可见性。测试不需要屏幕录制权限；测试项总数随套件演进，以源码为准。
 
 真实多显示器、TCC 屏幕录制授权、宠物隐藏 / 重现和 Accessibility 交互属于候选验收中的真机项目，见 [`../verification/dev-candidate.md`](../verification/dev-candidate.md)。
 
