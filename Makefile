@@ -1,5 +1,10 @@
 PYTHON := $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; else printf '%s' python3; fi)
-BINARY := .build/release/PetDock
+# Release scratch 必须位于不含用户名的中性路径：对象文件绝对路径会进入 Swift
+# reflection metadata（strip 不移除），再配合 -file-prefix-map 抹掉源码根路径。
+PD_RELEASE_SCRATCH := $(TMPDIR)petdock-release-$(notdir $(CURDIR))
+# 源码根路径映射经 -Xswiftc 转发给 swiftc；收敛在变量里，recipe 行保持直接的构建命令。
+PD_SOURCE_PREFIX_MAP := -Xswiftc -file-prefix-map -Xswiftc "$(CURDIR)=."
+BINARY := $(PD_RELEASE_SCRATCH)/release/PetDock
 APP    := build/PetDock.app
 IDENT  := io.github.bluesmilery.codexpetdock
 STABLE_SIGN_IDENTITY ?= PetDock Local Development
@@ -7,12 +12,17 @@ STABLE_SIGN_IDENTITY ?= PetDock Local Development
 .PHONY: build app run diagnose clean clean-logs docs-check test-docs test test-ui test-data test-shell test-privacy
 
 build:
-	swift build -c release
+	swift build -c release --scratch-path "$(PD_RELEASE_SCRATCH)" $(PD_SOURCE_PREFIX_MAP)
 
 app: build
 	@rm -rf $(APP)
 	@mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	@cp $(BINARY) $(APP)/Contents/MacOS/PetDock
+	@if LC_ALL=C grep -aq '/Users/' $(APP)/Contents/MacOS/PetDock; then \
+		rm -rf $(APP); \
+		echo "错误: 发布二进制内嵌 /Users/ 绝对路径（Swift reflection metadata 泄漏用户名与构建路径，strip 不会移除）。构建已终止。排查: 确认 release 构建使用中性 --scratch-path（当前 '$(PD_RELEASE_SCRATCH)'）且 -file-prefix-map 已生效。" >&2; \
+		exit 1; \
+	fi
 	@cp build-resources/Info.plist $(APP)/Contents/Info.plist
 	@cp build-resources/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	@printf 'APPL????' > $(APP)/Contents/PkgInfo

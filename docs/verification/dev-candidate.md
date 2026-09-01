@@ -81,7 +81,7 @@ runtime 聚合诊断默认关闭：不提供启动参数时不创建诊断文件
 
 ## 开发候选产物归档
 
-`make app` 会删除并重新组装当前 worktree 的 `build/PetDock.app`，并自动优先用本机稳定自签证书签名（默认 `PetDock Local Development`，可用 `STABLE_SIGN_IDENTITY` 覆盖）；证书未命中或签名失败时构建终止并向 stderr 输出明确错误（不回落 ad-hoc，避免 TCC 屏幕录制授权随构建静默失效），本次已组装的 staging bundle 会被清理。该路径是可变的 staging，不是交给用户测试的开发候选。候选归档是最终 QA 的最后阶段：必须从同一 worktree 的精确清洁 Git 状态开始，先捕获完整与 7 位提交 SHA，再运行门禁和 `make app`，复核 SHA 与清洁状态未变后，才把候选归档到**主工作树**的 `build/candidates/`，即使构建发生在 linked worktree 内：
+`make app` 会删除并重新组装当前 worktree 的 `build/PetDock.app`，并自动优先用本机稳定自签证书签名（默认 `PetDock Local Development`，可用 `STABLE_SIGN_IDENTITY` 覆盖）；证书未命中或签名失败时构建终止并向 stderr 输出明确错误（不回落 ad-hoc，避免 TCC 屏幕录制授权随构建静默失效），本次已组装的 staging bundle 会被清理。release 编译使用不含用户名的中性 scratch 目录（`$TMPDIR` 下）并启用 `-file-prefix-map`；签名前若最终二进制仍含 `/Users/` 绝对路径字符串（Swift reflection metadata 泄漏），`make app` 同样立即失败并清理本次 staging。该路径是可变的 staging，不是交给用户测试的开发候选。候选归档是最终 QA 的最后阶段：必须从同一 worktree 的精确清洁 Git 状态开始，先捕获完整与 7 位提交 SHA，再运行门禁和 `make app`，复核 SHA 与清洁状态未变后，才把候选归档到**主工作树**的 `build/candidates/`，即使构建发生在 linked worktree 内：
 
 ```text
 <primary>/build/candidates/YYYY-MM-DD-HHmmss-<label>-<worktree>-<shortSHA>/PetDock.app
