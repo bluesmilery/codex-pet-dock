@@ -485,6 +485,21 @@ enum PetSourceRoute {
         case .none: return "none"
         }
     }
+
+    /// --diagnose 最终通道文本（与运行时同优先级的脱敏来源枚举标签；不含 wid/PID/title/坐标）。
+    /// containerObservation 只区分容器观察已接受/在途，不改变路由本身。
+    func diagnoseChannel(source: PrimarySelectionSource, containerObservation: Bool) -> String {
+        switch self {
+        case .primary:
+            return source == .strongMascot ? "primary(strong Mascot)" : "primary(generic 几何回退)"
+        case .container where containerObservation:
+            return "container(合成宠物矩形已生成，坐标不记录)"
+        case .container:
+            return "container(捕获在途/未通过验证，生产保持 hidden 等待回调)"
+        case .none:
+            return "none"
+        }
+    }
 }
 
 /// 单一宠物来源解析器：候选快照 → 本 tick 唯一宠物来源。

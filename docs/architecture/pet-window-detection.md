@@ -62,6 +62,9 @@
 右键菜单、子菜单等与宠物无关的临时窗口只会命中 generic 几何回退：容器候选在场时它们
 既不能成为宠物矩形，也不能写入 `lastWID` 滞回（`lastWID` 只跟随 primary 路由，容器
 通道保持 nil），菜单关闭后不残留错误锚点或滞回。路由不解析 `reason` / `hitFlags` 字符串。
+`--diagnose` 的最终选择通道与运行时同路由：`runDiagnoseAndExit` 消费同一
+`PetSourceRouter.resolve` 与 `PetSourceRoute.diagnoseChannel`（脱敏来源枚举文本），
+容器候选在场 + generic 临时窗时报告 container（含观察在途语义）而非 primary。
 
 ## 可记录性与隐私
 

@@ -7545,6 +7545,40 @@ check("T-mr10 生产 tick 消费 PetSourceRouter 单一来源(旧顺序与 lastW
         && !cpMainSource.contains("if pet == nil, let container = containerCandidate")
         && !cpMainSource.contains("lastWID = sel.selected?.wid"), "")
 
+// C8.3 diagnose 同概念消费者一致性（准入项 2）：--diagnose 与运行时共用 PetSourceRouter
+// 与生产标签函数 PetSourceRoute.diagnoseChannel；container+generic(菜单) 场景不得误报
+// primary，也不得在测试里复制第二套优先级。
+let mrDiagRoute = PetSourceRouter.resolve(primary: mrSelGeneric, containerCandidate: mrRouteContainer)
+let mrDiagPending = mrDiagRoute.diagnoseChannel(
+    source: mrSelGeneric.source, containerObservation: false)
+let mrDiagAccepted = mrDiagRoute.diagnoseChannel(
+    source: mrSelGeneric.source, containerObservation: true)
+check("T-mr11 diagnose:容器+generic菜单→container 标签(在途/已接受),不报 primary",
+      mrDiagPending == "container(捕获在途/未通过验证，生产保持 hidden 等待回调)"
+        && mrDiagAccepted == "container(合成宠物矩形已生成，坐标不记录)"
+        && !mrDiagPending.hasPrefix("primary") && !mrDiagAccepted.hasPrefix("primary"),
+      "pending=\(mrDiagPending) accepted=\(mrDiagAccepted)")
+check("T-mr12 diagnose 标签:strong Mascot→primary(strong);无容器 generic→primary(generic);none→none",
+      PetSourceRouter.resolve(primary: mrSelStrong, containerCandidate: mrRouteContainer)
+            .diagnoseChannel(source: .strongMascot, containerObservation: false)
+            == "primary(strong Mascot)"
+        && PetSourceRouter.resolve(primary: mrSelGeneric, containerCandidate: nil)
+            .diagnoseChannel(source: .genericWindow, containerObservation: false)
+            == "primary(generic 几何回退)"
+        && PetSourceRouter.resolve(primary: mrSelNone, containerCandidate: nil)
+            .diagnoseChannel(source: .none, containerObservation: false)
+            == "none", "")
+let mrResolveWiringCount = cpMainSource.components(
+    separatedBy: "PetSourceRouter.resolve(primary: sel").count - 1
+check("T-mr13 runDiagnoseAndExit 消费同一 router+标签函数(旧顺序/primary 直报移除)",
+      mrResolveWiringCount == 2
+        && cpMainSource.contains(
+            "diagnoseChannel(source: sel.source, containerObservation: containerObservation)")
+        && !cpMainSource.contains(
+            "if sel.selected == nil, let container = ContainerPetSelector.selectContainer")
+        && !cpMainSource.contains("channel = \"primary\""),
+      "resolveCount=\(mrResolveWiringCount)")
+
 print("\n[menu routing] \(pass - mrPass) passed, \(fail - mrBase) failed")
 
 print("\n=== 总计 \(pass) passed, \(fail) failed ===")

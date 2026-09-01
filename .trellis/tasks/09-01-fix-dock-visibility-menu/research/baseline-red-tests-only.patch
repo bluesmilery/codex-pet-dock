@@ -1,0 +1,213 @@
+diff --git a/tests/main.swift b/tests/main.swift
+index c31b036..6932902 100644
+--- a/tests/main.swift
++++ b/tests/main.swift
+@@ -7267,5 +7267,208 @@ check("T-cp86b primary channel forwards window-origin changes and resets its ori
+ 
+ print("\n[container pet channel] \(pass - cpPass) passed, \(fail - cpBase) failed")
+ 
++// ============================================================
++// C8 菜单误跟随路由（09-01 fix-dock-visibility-menu）— baseline-only regression
++// 症状：宿主新结构（无独立 Mascot，宠物在容器内）+ 右键菜单等临时小窗出现时，
++// 旧顺序「primary(含 generic 几何回退) → 容器」会把底座迁到菜单下方。
++// 生产链回归：候选快照 → PetTracker.selectPet → ContainerPetSelector/ContainerPetProbe →
++// Follower.decide → DockPanel.placeBelow/placeDock → 实际 DockPanel.frame/可见性，
++// 全部由真实 FollowTickScheduler 的 tick 闭包驱动（fake timer 手动点火，镜像基线
++// AppDelegate.tick 的来源顺序：selectPet（含 generic 回退）优先，仅 pet==nil 才容器）。
++// 预期基线结果：T-mr0b/T-mr0c FAIL（菜单迁移与关闭回跳）；其余测试保持绿。
++// ============================================================
++let mrPass = pass, mrBase = fail
++
++/// 测试专用唤醒中继：ContainerPetProbe 的 @Sendable 观察回调 → 真实 scheduler.requestWake。
++/// （生产由 AppDelegate 持有两者并 weak-self 接线；测试无法捕获 var scheduler，用锁盒子等价。）
++final class MrSchedulerWakeRelay: @unchecked Sendable {
++    private let box = OSAllocatedUnfairLock(initialState: Optional<FollowTickScheduler>.none)
++    func attach(_ scheduler: FollowTickScheduler) { box.withLock { $0 = scheduler } }
++    func wake() { box.withLock { $0?.requestWake() } }
++}
++
++do {
++    let clock = OSAllocatedUnfairLock(initialState: TimeInterval(130_000))
++    let mrContainer = cpContainer(540)
++    // 右键菜单形临时窗：layer 25、220x260 —— isReasonablePet 成立（旧 generic 回退会选中）。
++    let mrMenu = mkw(541, layer: 25, CGRect(x: 650, y: 350, width: 220, height: 260))
++    let candidatesBox = OSAllocatedUnfairLock(initialState: [mrContainer])
++    // 容器内宠物 bbox：窗口本地 (40,80,80,160) → 全局 cpRectA (140,180,80,160)。
++    let mrWindowBBox = CGRect(x: 40, y: 80, width: 80, height: 160)
++    let dock = DockPanel()
++    let dockPlanProbe = BubbleVisibilityProbe(
++        monotonicNow: { clock.withLock { $0 } }, canCapture: { true },
++        capturer: { _ in .unavailable })
++    var stationaryAnchor: CGRect?
++    var lastMaterialChangeAt: TimeInterval?
++    var lastWID: CGWindowID?
++    var lastPrimaryWindowOrigin: CGPoint?
++    var lastPlacementWindowOrigin: CGPoint?
++    var wasPetVisible = false
++    let selectedWIDs = OSAllocatedUnfairLock(initialState: [CGWindowID?]())
++    let tickCount = OSAllocatedUnfairLock(initialState: 0)
++    let timers = OSAllocatedUnfairLock(initialState: [TestFollowTickTimer]())
++    var probe: ContainerPetProbe!
++    var scheduler: FollowTickScheduler!
++    let wakeRelay = MrSchedulerWakeRelay()
++    probe = ContainerPetProbe(
++        monotonicNow: { clock.withLock { $0 } },
++        canCapture: { true },
++        capturer: { _, request in
++            let region: CGRect
++            switch request.round {
++            case .fullWindow: region = CGRect(origin: .zero, size: cpBounds.size)
++            case .region(let value): region = value
++            }
++            return .stats(cpStats(for: mrWindowBBox, in: region, outputSize: request.outputSize))
++        },
++        onObservationChanged: { wakeRelay.wake() })
++    scheduler = FollowTickScheduler(
++        runTick: {
++            // —— 基线 tick 镜像（AppDelegate.tick：枚举→识别→容器回退→决策→放置）——
++            let wins = candidatesBox.withLock { $0 }
++            let sel = PetTracker.selectPet(candidates: wins, lastWID: lastWID)
++            selectedWIDs.withLock { $0.append(sel.selected?.wid) }
++            tickCount.withLock { $0 += 1 }
++            var pet = sel.selected?.bounds
++            var viaContainerChannel = false
++            let containerCandidate = ContainerPetSelector.selectContainer(candidates: wins)
++            if pet == nil, let container = containerCandidate {
++                if case .bounds(let rect) = probe.locate(container: container) {
++                    pet = rect
++                    viaContainerChannel = true
++                }
++            }
++            let d = Follower.decide(pet: pet, stationaryAnchor: stationaryAnchor,
++                                    lastMaterialChangeAt: lastMaterialChangeAt,
++                                    now: clock.withLock { $0 })
++            let plan = FollowTickPlanner.decide(input: FollowTickInput(
++                petVisible: d.showDock, wasPetVisible: wasPetVisible, dockVisible: true))
++            wasPetVisible = d.showDock
++            if d.showDock {
++                stationaryAnchor = d.stationaryAnchor
++                lastWID = sel.selected?.wid
++                if plan.showUI {
++                    if let mascot = sel.selected {
++                        let primaryWindowOriginChanged = lastPrimaryWindowOrigin.map {
++                            $0 != mascot.bounds.origin
++                        } ?? false
++                        let shown = FollowLayoutPass.placeDock(
++                            mascot: mascot,
++                            candidates: wins,
++                            bubbleProbe: dockPlanProbe,
++                            frameSink: { petRect, obstacles in
++                                dock.placeBelow(
++                                    petQuartzRect: petRect,
++                                    avoiding: obstacles,
++                                    visibleScreen: nil,
++                                    movementChanged: d.shouldSetFrame,
++                                    windowOriginChanged: primaryWindowOriginChanged,
++                                    monotonicNow: clock.withLock { $0 })
++                            })
++                        if shown {
++                            lastPrimaryWindowOrigin = mascot.bounds.origin
++                            dock.showIfNeeded()
++                        } else {
++                            dock.hideIfNeeded()
++                        }
++                    } else if viaContainerChannel, let rect = pet, let container = containerCandidate {
++                        let windowOriginChanged = lastPlacementWindowOrigin.map {
++                            $0 != container.bounds.origin
++                        } ?? true
++                        let shown = dock.placeBelow(
++                            petQuartzRect: rect,
++                            avoiding: [],
++                            visibleScreen: nil,
++                            movementChanged: d.shouldSetFrame,
++                            windowOriginChanged: windowOriginChanged,
++                            monotonicNow: clock.withLock { $0 })
++                        if shown {
++                            lastPlacementWindowOrigin = container.bounds.origin
++                            dock.showIfNeeded()
++                        } else {
++                            dock.hideIfNeeded()
++                        }
++                    }
++                }
++            } else {
++                dock.hideIfNeeded()
++                stationaryAnchor = nil
++                lastWID = nil
++                lastPrimaryWindowOrigin = nil
++                if FollowTickPlanner.containerProbeReset(
++                    containerCandidatePresent: containerCandidate != nil) {
++                    probe.reset()
++                }
++            }
++            lastMaterialChangeAt = d.lastMaterialChangeAt
++            return d.state
++        },
++        makeDisplayLink: { _, _ in nil },
++        canUseDisplayLink: { false },
++        maximumFramesPerSecond: { 60 },
++        monotonicNow: { clock.withLock { $0 } },
++        makeTimer: { interval, repeats, callback in
++            let timer = TestFollowTickTimer(interval: interval, repeats: repeats, callback: callback)
++            timers.withLock { $0.append(timer) }
++            return timer
++        })
++    wakeRelay.attach(scheduler)
++
++    // 期望 frame（容器通道：无障碍、无屏 → placeBelow 简单分支 + AppKit 换算）。
++    func mrExpectedDockFrame(pet: CGRect) -> NSRect {
++        Geometry.appKitRectFromQuartz(CGRect(
++            x: pet.minX + (pet.width - 200) / 2,
++            y: pet.maxY + 2, width: 200, height: 48))
++    }
++    let mrPetFrame = mrExpectedDockFrame(pet: cpRectA)
++    let mrMenuFrame = mrExpectedDockFrame(pet: mrMenu.bounds)
++
++    // Phase A 无菜单：tick1 捕获在途 → hidden；观察回调 wake → tick2 容器 rect → 底座显示在宠物下方。
++    scheduler.start()
++    scheduler.requestWake()
++    _ = waitPumpingMain { tickCount.withLock { $0 } >= 1 }
++    _ = waitPumpingMain { !probe.lock.withLock { $0.inFlight } }
++    _ = waitPumpingMain { tickCount.withLock { $0 } >= 2 }
++    let mrFrameA = dock.frame
++    check("T-mr0a 无菜单:容器观察→wake→tick2 底座显示在真实宠物下方",
++          tickCount.withLock { $0 } >= 2 && dock.isVisible
++            && dockFrameNear(mrFrameA, mrPetFrame)
++            && selectedWIDs.withLock { $0 }.prefix(2) == [nil, nil]
++            && probe.hasObservation(),
++          "ticks=\(tickCount.withLock { $0 }) frame=\(mrFrameA) expected=\(mrPetFrame)")
++
++    // Phase B 菜单打开：临时 generic 候选出现，容器与已接受宠物 rect 不变。
++    candidatesBox.withLock { $0 = [mrContainer, mrMenu] }
++    clock.withLock { $0 += 0.02 }
++    timers.withLock { $0.last! }.fire()
++    _ = waitPumpingMain { tickCount.withLock { $0 } >= 3 }
++    let mrFrameB = dock.frame
++    check("T-mr0b 菜单打开:实际frame继续锚真实宠物下方(不迁移到菜单下方)",
++          dock.isVisible && dockFrameNear(mrFrameB, mrPetFrame)
++            && !dockFrameNear(mrFrameB, mrMenuFrame)
++            && dockFrameNear(mrFrameB, mrFrameA),
++          "frame=\(mrFrameB) petExpected=\(mrPetFrame) menuExpected=\(mrMenuFrame) "
++            + "selected=\(selectedWIDs.withLock { $0 })")
++
++    // Phase C 菜单关闭：无残留错误锚点/滞回；frame 不跳变，容器 cache 保持。
++    candidatesBox.withLock { $0 = [mrContainer] }
++    clock.withLock { $0 += 0.02 }
++    timers.withLock { $0.last! }.fire()
++    _ = waitPumpingMain { tickCount.withLock { $0 } >= 4 }
++    let mrFrameC = dock.frame
++    check("T-mr0c 菜单关闭:无残留滞回/跳变,底座仍锚真实宠物",
++          dock.isVisible && dockFrameNear(mrFrameC, mrPetFrame)
++            && dockFrameNear(mrFrameC, mrFrameB)
++            && lastWID == nil && probe.hasObservation()
++            && selectedWIDs.withLock { $0 }.last! == nil,
++          "frame=\(mrFrameC) expected=\(mrPetFrame) lastWID=\(String(describing: lastWID)) "
++            + "selected=\(selectedWIDs.withLock { $0 })")
++    scheduler.stop()
++    dock.hideIfNeeded()
++}
++
++print("\n[menu routing] \(pass - mrPass) passed, \(fail - mrBase) failed")
++
+ print("\n=== 总计 \(pass) passed, \(fail) failed ===")
+ exit(fail == 0 ? 0 : 1)

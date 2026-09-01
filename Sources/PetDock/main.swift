@@ -40,8 +40,13 @@ func runDiagnoseAndExit() -> Never {
     for (i, w) in containerMatches.enumerated() {
         out += "[\(i)] \(DiagnosticFormatter.candidateSummary(w))\n"
     }
+    // 单一来源路由（与生产 AppDelegate.tick 消费同一 PetSourceRouter）：strong Mascot →
+    // 容器 → 仅无容器时 generic。只有 container route 才做一次性探测；generic 临时窗
+    // （右键菜单）在场时不得误报 primary，也不得跳过容器探测。
+    let containerCandidate = ContainerPetSelector.selectContainer(candidates: union)
+    let route = PetSourceRouter.resolve(primary: sel, containerCandidate: containerCandidate)
     var containerObservation = false
-    if sel.selected == nil, let container = ContainerPetSelector.selectContainer(candidates: union) {
+    if case .container(let container) = route {
         // 一次性诊断探测：不接 scheduler；用单调时钟计时轮询等待单飞后台捕获（上限 ~3s；
         // 权限缺失时 locate 直接 .unavailable，无需等待）。后台捕获不依赖主 runloop，
         // 轮询用线程让步即可；本文件禁墙钟 API（T-sch4f source guard）。
@@ -57,17 +62,7 @@ func runDiagnoseAndExit() -> Never {
             containerObservation = true
         }
     }
-    let channel: String
-    if sel.selected != nil {
-        channel = "primary"
-    } else if containerObservation {
-        channel = "container(合成宠物矩形已生成，坐标不记录)"
-    } else if !containerMatches.isEmpty {
-        channel = "none(容器候选命中但捕获验证未通过/不可用)"
-    } else {
-        channel = "none"
-    }
-    out += "最终选择通道: \(channel)\n"
+    out += "最终选择通道: \(route.diagnoseChannel(source: sel.source, containerObservation: containerObservation))\n"
 
     out += "\n=== 屏幕统计（AppKit）===\n"
     out += "screenCount=\(NSScreen.screens.count)\n"
