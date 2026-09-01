@@ -459,3 +459,24 @@ Container-channel pet tracking for the post-update Codex host: 1Hz region-tracke
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: Release v0.5.0 wrap-up: pet-window-adaptation shipped
+
+**Date**: 2026-09-01
+**Task**: Release v0.5.0 wrap-up: pet-window-adaptation shipped
+**Branch**: `main`
+
+### Summary
+
+v0.5.0 released (pet-window adaptation for the post-update Codex host): version history renumbered per user decision (0.6.0 bump dropped, v0.4.0 published as prerelease), privacy history rewrite completed (33 leaking commits scrubbed, 261 commits rescan-clean), feature parked, candidate archived, worktrees and temp branches cleaned
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `<pre-rewrite-id>` | (see git log) |
+
+### Status
+
+[OK] **Completed**

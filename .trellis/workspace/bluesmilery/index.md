@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 18
-- **Last Active**: 2026-08-31
+- **Total Sessions**: 19
+- **Last Active**: 2026-09-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~461 | Active |
+| `journal-1.md` | ~482 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 19 | 2026-09-01 | Release v0.5.0 wrap-up: pet-window-adaptation shipped | `<pre-rewrite-id>` | `main` |
 | 18 | 2026-08-31 | Release v0.6.0: pet-window-adaptation | `<pre-rewrite-id>` | `codex/pet-window-adaptation` |
 | 17 | 2026-08-28 | Merge CS live-layer anchor into local dev for release | `4061f0311a8eda7a2917c6f96015f6f08265830d` | `dev` |
 | 16 | 2026-08-27 | Park CS live-layer anchor on feature/cs-live-layer-anchor | `85d83529fbc76ff1da4f2dfa9f690a1c4b3a709c` | `feature/cs-live-layer-anchor` |
